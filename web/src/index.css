@@ -192,21 +192,24 @@ body {
   font-size: 13px;
 }
 
-:focus-visible {
+/* Fields with the input look (Input.tsx) and the filter editor's content show
+   their accent border and ring instead. :where keeps this rule at one
+   pseudo-class of specificity. */
+:focus-visible:not(:where(.input-look, .cm-content)) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-/* Dialogs, popovers (the filter completion list too) and the palette: the only shadow;
-   dark adds a 1px top highlight. */
+/* Dialogs, popovers (the filter's completion and lint tooltips too) and the
+   palette: the only shadow; dark adds a 1px top highlight. */
 .elevated,
-.cm-tooltip-autocomplete {
+.cm-tooltip {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .elevated,
-  :root:not([data-theme='light']) .cm-tooltip-autocomplete {
+  :root:not([data-theme='light']) .cm-tooltip {
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.05),
       0 8px 24px rgb(0 0 0 / 0.12);
@@ -214,7 +217,7 @@ body {
 }
 
 :root[data-theme='dark'] .elevated,
-:root[data-theme='dark'] .cm-tooltip-autocomplete {
+:root[data-theme='dark'] .cm-tooltip {
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.05),
     0 8px 24px rgb(0 0 0 / 0.12);

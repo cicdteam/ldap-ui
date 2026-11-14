@@ -112,7 +112,7 @@ export function ProfileForm({
             onChange={(e) =>
               set({ environment: e.target.value as Environment, readOnly: undefined })
             }
-            className={`h-8 w-full px-2 ${inputLook}`}
+            className={`h-[var(--ctl)] w-full px-2 ${inputLook}`}
           >
             <option value="dev">dev</option>
             <option value="stage">stage</option>

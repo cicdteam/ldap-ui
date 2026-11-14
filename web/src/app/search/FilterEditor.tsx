@@ -18,7 +18,7 @@ export interface FilterEditorHandle {
 }
 
 // Coloring only; validation comes from lib/filter's parser through the linter.
-const filterLanguage = StreamLanguage.define<{ inValue: boolean }>({
+export const filterLanguage = StreamLanguage.define<{ inValue: boolean }>({
   startState: () => ({ inValue: false }),
   token(stream, state) {
     if (state.inValue) {
@@ -53,13 +53,14 @@ const filterLanguage = StreamLanguage.define<{ inValue: boolean }>({
   },
 })
 
-const highlight = HighlightStyle.define([
+export const highlight = HighlightStyle.define([
   { tag: tags.keyword, color: 'var(--accent-text)', fontWeight: '600' },
   { tag: tags.propertyName, color: 'var(--accent-text)' },
   { tag: tags.operator, color: 'var(--muted)' },
   { tag: tags.string, color: 'var(--fg)' },
   { tag: tags.escape, color: 'var(--danger)' },
-  { tag: tags.atom, color: 'var(--danger)' },
+  // The value wildcard: syntax, not an error.
+  { tag: tags.atom, color: 'var(--accent-text)', fontWeight: '600' },
   { tag: tags.paren, color: 'var(--muted)' },
 ])
 
@@ -80,13 +81,16 @@ const theme = EditorView.theme({
   '.cm-content': { fontFamily: 'var(--mono)', padding: '5px 0', caretColor: 'var(--fg)' },
   '.cm-scroller': { maxHeight: '12rem', overflow: 'auto' },
   '.cm-placeholder': { color: 'var(--muted)' },
+  // Popovers like the others: --bg, 10px corners, 6px items; the shadow is .elevated's, in index.css.
   '.cm-tooltip': {
-    background: 'var(--panel)',
+    background: 'var(--bg)',
     border: '1px solid var(--border)',
+    borderRadius: '10px',
     color: 'var(--fg)',
   },
-  // A popover like the others: 10px corners, 6px items; the shadow comes from .elevated in index.css.
-  '.cm-tooltip-autocomplete': { borderRadius: '10px', padding: '4px' },
+  '.cm-tooltip-autocomplete': { padding: '4px' },
+  // Keeps the diagnostic's square left border inside the rounded corners.
+  '.cm-tooltip-lint': { padding: '4px' },
   '.cm-tooltip-autocomplete ul li': { borderRadius: '6px' },
   '.cm-tooltip-autocomplete ul li[aria-selected]': {
     background: 'var(--selected)',
