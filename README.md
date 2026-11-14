@@ -4,7 +4,9 @@ A local web UI for browsing OpenLDAP and Active Directory.
 
 ## Run with Docker
 
-Build the image with `make image` (it is tagged `ldapui:dev`), then:
+Release images for amd64 and arm64 are published as
+`ghcr.io/cicdteam/ldap-ui:<version>` and `:latest`. Or build one locally with
+`make image` (it is tagged `ldapui:dev`). Then:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
