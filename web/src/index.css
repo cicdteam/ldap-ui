@@ -185,7 +185,6 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
-  font-feature-settings: 'cv11', 'ss01';
   font-size: 13px;
 }
 
