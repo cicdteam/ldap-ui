@@ -186,7 +186,7 @@ export function Workspace() {
     return (
       <main className="mx-auto mt-[15vh] max-w-lg space-y-3 px-4">
         {errorKind(info.error) === 'session' ? <Spinner /> : <ErrorBanner error={info.error} />}
-        <Link to="/" className="text-accent">
+        <Link to="/" className="text-accent-text">
           Back to connections
         </Link>
       </main>

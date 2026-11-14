@@ -90,7 +90,7 @@ export function ValueView({
       <button
         type="button"
         onClick={() => ws.select(value.text.replace(OPTIONAL_UID, ''))}
-        className="text-left font-mono text-xs break-all text-accent hover:underline"
+        className="text-left font-mono text-xs break-all text-accent-text hover:underline"
       >
         {value.text}
       </button>

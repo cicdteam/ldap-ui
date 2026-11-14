@@ -44,7 +44,7 @@ function DNButton({ dn, onSelect }: { dn: string; onSelect: (dn: string) => void
       title={dn}
       className="min-w-0 truncate text-left hover:underline"
     >
-      <span className="text-accent">{first ? rdnDisplay(first) : dn}</span>
+      <span className="text-accent-text">{first ? rdnDisplay(first) : dn}</span>
       <span className="ml-1 font-mono text-[11px] text-muted">{parentDN(dn)}</span>
     </button>
   )
