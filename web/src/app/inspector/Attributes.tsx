@@ -220,7 +220,7 @@ function Section({
   if (attrs.length === 0) return null
   return (
     <details open={open} className="border-b border-border">
-      <summary className="cursor-pointer bg-panel px-2 py-1 text-[11px] font-semibold tracking-wide text-muted">
+      <summary className="cursor-pointer bg-panel px-2 py-1 text-[11px] font-semibold tracking-[.04em] text-muted uppercase">
         {title} <span className="font-normal">({attrs.length})</span>
       </summary>
       {attrs.map((a) => (

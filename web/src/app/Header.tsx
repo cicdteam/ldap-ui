@@ -83,7 +83,7 @@ export function Header({ extra }: { extra?: ReactNode }) {
   const disconnect = useDisconnect()
   const shown = ws.dn || ws.info.baseDN
   return (
-    <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
+    <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-chrome px-2">
       <Link
         to="/"
         title="All connections"

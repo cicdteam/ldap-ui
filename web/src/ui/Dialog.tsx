@@ -31,7 +31,7 @@ export function Dialog({
             el.focus()
           }}
           className={cn(
-            'fixed top-[10vh] left-1/2 max-h-[80vh] -translate-x-1/2 overflow-auto rounded-lg border border-border bg-bg p-4 text-fg shadow-xl',
+            'fixed top-[10vh] left-1/2 max-h-[80vh] -translate-x-1/2 elevated overflow-auto rounded-[10px] border border-border bg-bg p-4 text-fg',
             wide ? 'w-[min(92vw,44rem)]' : 'w-[min(92vw,28rem)]',
           )}
         >

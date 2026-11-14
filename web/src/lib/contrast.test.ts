@@ -50,10 +50,17 @@ it('repeats the dark values for the system dark scheme', () => {
   expect(vars(":root:not([data-theme='light'])")).toEqual(themes.dark)
 })
 
-it('colors accent text with text-accent-text, never text-accent', () => {
+// Accent as text fails 4.5:1 on dark; both the class and a style object's color are caught.
+it('colors accent text with accent-text, never the accent', () => {
   const src = new URL('..', import.meta.url)
   const offenders = readdirSync(src, { recursive: true, encoding: 'utf8' })
     .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
-    .filter((f) => /\btext-accent(?![-\w])/.test(readFileSync(new URL(f, src), 'utf8')))
+    .filter((f) => {
+      const code = readFileSync(new URL(f, src), 'utf8')
+      return (
+        /\btext-accent(?![-\w])/.test(code) ||
+        /(?<![\w-])color['"]?\s*:\s*['"`]?var\(--accent\)/.test(code)
+      )
+    })
   expect(offenders).toEqual([])
 })

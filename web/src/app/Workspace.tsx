@@ -218,7 +218,7 @@ export function Workspace() {
             <button
               type="button"
               onClick={() => setPalette(true)}
-              className="flex h-7 items-center gap-2 rounded-md border border-border px-2 text-xs text-muted hover:bg-hover hover:text-fg"
+              className="flex h-7 items-center gap-2 rounded-md border border-border-strong bg-panel px-2 text-xs text-muted hover:bg-hover hover:text-fg"
             >
               <Search className="h-3.5 w-3.5" /> Search or jump <Kbd>{keyLabel('Mod+K')}</Kbd>
             </button>

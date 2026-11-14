@@ -4,18 +4,33 @@ import type { Profile } from '../lib/types'
 import { cn } from './cn'
 
 const tones: Record<Tone, string> = {
-  neutral: 'border-border text-muted',
-  danger: 'border-danger text-danger',
-  warn: 'border-warn text-warn',
-  ok: 'border-ok text-ok',
-  accent: 'border-accent text-accent-text',
+  neutral: 'border-border bg-panel text-muted',
+  danger: 'border-danger/40 bg-danger/10 text-danger',
+  warn: 'border-warn/40 bg-warn/10 text-warn',
+  ok: 'border-ok/40 bg-ok/10 text-ok',
+  accent: 'border-accent/40 bg-accent/10 text-accent-text',
 }
 
-export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {
+const shapes = {
+  pill: 'rounded-full px-2 text-[11px] font-semibold tracking-wide',
+  chip: 'rounded px-1.5 font-mono text-[10.5px]',
+}
+
+/** A label: pill by default; chip for value-like tokens (UAC flags). */
+export function Badge({
+  tone = 'neutral',
+  shape = 'pill',
+  children,
+}: {
+  tone?: Tone
+  shape?: keyof typeof shapes
+  children: ReactNode
+}) {
   return (
     <span
       className={cn(
-        'inline-flex h-5 items-center rounded border px-1.5 text-[11px] font-semibold tracking-wide whitespace-nowrap',
+        'inline-flex h-5 items-center border whitespace-nowrap',
+        shapes[shape],
         tones[tone],
       )}
     >

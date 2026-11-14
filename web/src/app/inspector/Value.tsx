@@ -102,7 +102,7 @@ export function ValueView({
           .split(' ')
           .filter(Boolean)
           .map((f) => (
-            <Badge key={f} tone={DANGER_FLAGS.has(f) ? 'danger' : 'neutral'}>
+            <Badge key={f} shape="chip" tone={DANGER_FLAGS.has(f) ? 'danger' : 'neutral'}>
               {f}
             </Badge>
           ))}

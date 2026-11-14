@@ -247,7 +247,7 @@ export function Tree() {
                 }}
                 className={cn(
                   'absolute top-0 left-0 flex w-full cursor-default items-center gap-1 pr-2 whitespace-nowrap hover:bg-hover',
-                  selected && 'bg-selected',
+                  selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
                   v.index === focusIndex &&
                     '-outline-offset-1 outline-accent group-focus-visible:outline-1',
                   r.type === 'more' && 'text-accent-text',

@@ -54,12 +54,12 @@ const filterLanguage = StreamLanguage.define<{ inValue: boolean }>({
 })
 
 const highlight = HighlightStyle.define([
-  { tag: tags.keyword, color: 'var(--accent)', fontWeight: '600' },
-  { tag: tags.propertyName, fontWeight: '600' },
-  { tag: tags.operator, color: 'var(--warn)' },
-  { tag: tags.string, color: 'var(--ok)' },
+  { tag: tags.keyword, color: 'var(--accent-text)', fontWeight: '600' },
+  { tag: tags.propertyName, color: 'var(--accent-text)' },
+  { tag: tags.operator, color: 'var(--muted)' },
+  { tag: tags.string, color: 'var(--fg)' },
   { tag: tags.escape, color: 'var(--danger)' },
-  { tag: tags.atom, color: 'var(--danger)', fontWeight: '600' },
+  { tag: tags.atom, color: 'var(--danger)' },
   { tag: tags.paren, color: 'var(--muted)' },
 ])
 

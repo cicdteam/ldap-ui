@@ -187,7 +187,7 @@ export function CommandPalette({
       label="Command palette"
       shouldFilter={false}
       overlayClassName="fixed inset-0 bg-black/40"
-      contentClassName="fixed top-[12vh] left-1/2 w-[min(92vw,40rem)] -translate-x-1/2 overflow-hidden rounded-lg border border-border bg-bg text-fg shadow-xl"
+      contentClassName="fixed top-[12vh] left-1/2 w-[min(92vw,40rem)] -translate-x-1/2 elevated overflow-hidden rounded-[10px] border border-border bg-bg text-fg"
     >
       <Command.Input
         value={q}
