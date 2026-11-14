@@ -35,6 +35,9 @@ const pairs: [string, string, number][] = [
   ...['--muted', '--accent-text', '--danger', '--warn', '--ok'].flatMap((fg) =>
     ['--bg', '--panel', '--chrome'].map((bg): [string, string, number] => [fg, bg, 4.5]),
   ),
+  // Muted text sits on hovered and selected rows too (results parent DN, tree prefix, palette).
+  ['--muted', '--hover', 4.5],
+  ['--muted', '--selected', 4.5],
   ['--accent-fg', '--accent', 4.5],
   ['--danger-fg', '--danger', 4.5],
 ]
