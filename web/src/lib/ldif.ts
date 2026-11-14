@@ -5,7 +5,10 @@ import type { Entry } from './types'
 /* eslint-disable no-control-regex -- the RFC defines SAFE-CHAR by byte range, control characters included */
 const SAFE_INIT = /^[\x01-\x09\x0B\x0C\x0E-\x1F\x21-\x39\x3B\x3D-\x7F]/
 const SAFE = /^[\x01-\x09\x0B\x0C\x0E-\x7F]*$/
+const NON_ASCII = /[^\x00-\x7F]/
 /* eslint-enable no-control-regex */
+/** Characters a reader cannot see or that reorder text: controls, format (bidi, zero-width, BOM), line and paragraph separators. */
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
 export function isSafe(s: string): boolean {
   return s === '' || (SAFE_INIT.test(s) && SAFE.test(s) && !s.endsWith(' '))
@@ -50,24 +53,41 @@ export function entriesToLDIF(entries: Entry[]): string {
   return 'version: 1\n\n' + entries.map(entryToLDIF).join('\n')
 }
 
-/** A line of LDIF as shown, or a binary value shown as a summary. */
-export type PreviewPart = { text: string } | { attr: string; base64: string }
+/** The Copy LDIF tooltip: the preview decodes text, the copy is strict LDIF. */
+export const COPY_LDIF_HINT = 'Copy as LDIF (RFC 2849: non-ASCII values as base64)'
 
-const utf8 = new TextDecoder('utf-8', { fatal: true })
+/**
+ * A line of LDIF as shown, a binary value shown as a summary, or a non-ASCII
+ * text value shown decoded (the LDIF itself keeps it as base64).
+ */
+export type PreviewPart =
+  { text: string } | { attr: string; base64: string } | { attr: string; utf8: string }
 
-function isText(b64: string): boolean {
+// ignoreBOM keeps a leading U+FEFF in the text, so readable() can refuse it instead of hiding it.
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+/** The UTF-8 text in b64, or undefined for bytes that are not UTF-8 (a photo, a certificate). */
+function decodeText(b64: string): string | undefined {
   try {
-    utf8.decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
-    return true
+    return utf8.decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
   } catch {
-    return false
+    return undefined
   }
 }
 
 /**
+ * Text that reads the same decoded: non-ASCII, one line, nothing invisible or reordering, and
+ * none of the edge cases (leading whitespace, ':' or '<', trailing whitespace) that base64 keeps visible.
+ */
+function readable(s: string): boolean {
+  return NON_ASCII.test(s) && !HIDDEN.test(s) && !/^[\s:<]/.test(s) && !/\s$/.test(s)
+}
+
+/**
  * Splits LDIF for display: a base64 value that is not UTF-8 text (a photo, a
- * certificate) becomes one part instead of a wall of folded lines. Copy and
- * download keep using the full LDIF.
+ * certificate) becomes one part instead of a wall of folded lines, and one that
+ * is readable non-ASCII text (names in Cyrillic, umlauts) is shown decoded.
+ * Copy and download keep using the full RFC 2849 LDIF.
  */
 export function ldifPreview(ldif: string): PreviewPart[] {
   const lines = ldif.split('\n')
@@ -84,7 +104,9 @@ export function ldifPreview(ldif: string): PreviewPart[] {
         .map((l) => l.slice(1))
         .join('')
     const m = /^([^:\s]+):: (.*)$/.exec(logical)
-    if (m && !isText(m[2])) out.push({ attr: m[1], base64: m[2] })
+    const text = m ? decodeText(m[2]) : undefined
+    if (m && text === undefined) out.push({ attr: m[1], base64: m[2] })
+    else if (m && text !== undefined && readable(text)) out.push({ attr: m[1], utf8: text })
     else out.push(...physical.map((text) => ({ text })))
     i = j
   }

@@ -5,7 +5,24 @@ A local web UI for browsing OpenLDAP and Active Directory.
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
-`ghcr.io/cicdteam/ldap-ui:<version>` (for example `1.0.0`) and `:latest`:
+`ghcr.io/cicdteam/ldap-ui:<version>` (for example `1.0.0`) and `:latest`.
+
+The quickest start:
+
+```sh
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cicdteam/ldap-ui:latest
+```
+
+The container listens beyond loopback, so ldapui prints a login link with a
+random token at startup; open it, then add your directories with
+**New connection**. Set `LDAPUI_AUTH_TOKEN` to choose the token (at least 16
+characters from `A-Z a-z 0-9 . _ ~ -`). Without a volume, the connections you
+add are lost when the container is removed.
+
+Connections come from two places, and you can use either or both: the ones
+you create in the UI (kept in `/data`, passwords never stored) and the fixed
+ones in a [`connections.yaml`](#connectionsyaml) you mount. A fuller run that
+keeps UI connections across restarts and loads a `connections.yaml`:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
@@ -17,12 +34,6 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 To run your own build instead, `make image` builds `ldapui:dev`; use that name
 in place of the published one.
-
-The `ldapui-data` volume keeps profiles created in the UI across restarts.
-
-The container listens beyond loopback, so ldapui prints a login link with a
-random token at startup. Set `LDAPUI_AUTH_TOKEN` to choose the token (at least
-16 characters from `A-Z a-z 0-9 . _ ~ -`).
 
 The UI's hashed assets are served gzipped and cached for a year, so no ingress compression or caching setup is needed.
 
@@ -61,7 +72,11 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   decoded AD values (SIDs, GUIDs, dates, `userAccountControl` flags), clickable
   DNs, photos, a Download button on binary values (on any profile), and a
   raw-values switch; direct and nested membership with the "via" group; the
-  entry as LDIF. The Members list appears for groups that use `member` or
+  entry as LDIF (non-ASCII text such as Cyrillic names is shown decoded, marked
+  `utf-8`, here and in the Review and Actions dialogs; values with edge spaces,
+  line breaks, control or invisible characters stay base64; Copy LDIF and
+  downloads keep base64, as RFC 2849 requires).
+  The Members list appears for groups that use `member` or
   `uniqueMember` (not for a posixGroup's `memberUid`); Member of also lists
   the posixGroups whose `memberUid` holds the entry's `uid`. Values of
   password and secret attributes never leave the server (their names and a
@@ -69,6 +84,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   values and grow by 1000 on request; the attribute filter also narrows the
   values it matches. Member of searches `member`, `uniqueMember` and
   `memberUid`; an equality index on each keeps it fast.
+- **Status bar** (bottom): the server address, whether the connection is
+  encrypted (TLS, StartTLS, not encrypted, certificate not verified), the
+  server type and the number of staged changes.
 - Every view has a URL (`/c/<profile>/entry?dn=...`,
   `/c/<profile>/search?filter=...`), so links and reloads work.
 

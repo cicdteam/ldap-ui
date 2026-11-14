@@ -54,24 +54,29 @@ const filterLanguage = StreamLanguage.define<{ inValue: boolean }>({
 })
 
 const highlight = HighlightStyle.define([
-  { tag: tags.keyword, color: 'var(--accent)', fontWeight: '600' },
-  { tag: tags.propertyName, fontWeight: '600' },
-  { tag: tags.operator, color: 'var(--warn)' },
-  { tag: tags.string, color: 'var(--ok)' },
+  { tag: tags.keyword, color: 'var(--accent-text)', fontWeight: '600' },
+  { tag: tags.propertyName, color: 'var(--accent-text)' },
+  { tag: tags.operator, color: 'var(--muted)' },
+  { tag: tags.string, color: 'var(--fg)' },
   { tag: tags.escape, color: 'var(--danger)' },
-  { tag: tags.atom, color: 'var(--danger)', fontWeight: '600' },
+  { tag: tags.atom, color: 'var(--danger)' },
   { tag: tags.paren, color: 'var(--muted)' },
 ])
 
 const theme = EditorView.theme({
   '&': {
     fontSize: '12.5px',
-    border: '1px solid var(--border)',
+    border: '1px solid var(--border-strong)',
     borderRadius: '6px',
     background: 'var(--bg)',
     color: 'var(--fg)',
   },
-  '&.cm-focused': { outline: 'none', borderColor: 'var(--accent)' },
+  // The look of Input: an accent border and a 3px ring of the accent at 30%.
+  '&.cm-focused': {
+    outline: 'none',
+    borderColor: 'var(--accent)',
+    boxShadow: '0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent)',
+  },
   '.cm-content': { fontFamily: 'var(--mono)', padding: '5px 0', caretColor: 'var(--fg)' },
   '.cm-scroller': { maxHeight: '12rem', overflow: 'auto' },
   '.cm-placeholder': { color: 'var(--muted)' },
@@ -80,6 +85,9 @@ const theme = EditorView.theme({
     border: '1px solid var(--border)',
     color: 'var(--fg)',
   },
+  // A popover like the others: 10px corners, 6px items; the shadow comes from .elevated in index.css.
+  '.cm-tooltip-autocomplete': { borderRadius: '10px', padding: '4px' },
+  '.cm-tooltip-autocomplete ul li': { borderRadius: '6px' },
   '.cm-tooltip-autocomplete ul li[aria-selected]': {
     background: 'var(--selected)',
     color: 'var(--fg)',

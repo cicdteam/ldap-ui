@@ -2,7 +2,7 @@ import { Plus, X } from 'lucide-react'
 import type { CmpOp, Filter, Group } from '../../lib/filter'
 import { Button } from '../../ui/Button'
 import { cn } from '../../ui/cn'
-import { Input } from '../../ui/Input'
+import { Input, inputLook } from '../../ui/Input'
 
 type Cmp = Extract<Filter, { type: 'cmp' }>
 type OpChoice = CmpOp | 'present'
@@ -40,7 +40,7 @@ function CmpRow({ node, onChange }: { node: Cmp; onChange: (n: Cmp) => void }) {
           if (next === 'present') onChange({ ...node, op: '=', value: '*' })
           else onChange({ ...node, op: next, value: present ? '' : node.value })
         }}
-        className="h-8 rounded-md border border-border bg-bg px-1 text-xs"
+        className={`h-8 px-1 text-xs ${inputLook}`}
       >
         {OPS.map((o) => (
           <option key={o.value} value={o.value}>

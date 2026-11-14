@@ -46,7 +46,7 @@ const icons: Record<EntryKind, typeof User> = {
 }
 
 function RowIcon({ row }: { row: TreeRow }) {
-  if (row.type === 'more') return <List className="h-3.5 w-3.5 text-accent" />
+  if (row.type === 'more') return <List className="h-3.5 w-3.5 text-accent-text" />
   if (row.type === 'error') return <AlertTriangle className="h-3.5 w-3.5 text-danger" />
   if (row.type === 'loading') return null
   const Icon = icons[row.kind]
@@ -247,10 +247,10 @@ export function Tree() {
                 }}
                 className={cn(
                   'absolute top-0 left-0 flex w-full cursor-default items-center gap-1 pr-2 whitespace-nowrap hover:bg-hover',
-                  selected && 'bg-selected',
+                  selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
                   v.index === focusIndex &&
                     '-outline-offset-1 outline-accent group-focus-visible:outline-1',
-                  r.type === 'more' && 'text-accent',
+                  r.type === 'more' && 'text-accent-text',
                   r.type === 'error' && 'text-danger',
                   r.type === 'loading' && 'text-muted',
                 )}

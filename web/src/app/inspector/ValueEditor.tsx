@@ -3,13 +3,12 @@ import { normDN } from '../../lib/dn'
 import { localInputToTime, timeToLocalInput, type EditorKind } from '../../lib/edit'
 import { isModKey } from '../../lib/shortcuts'
 import { cn } from '../../ui/cn'
-import { Input } from '../../ui/Input'
+import { Input, inputLook } from '../../ui/Input'
 import { useWorkspace } from '../context'
 import { useDebounced, useFind } from '../queries'
 
 // The look of Input in mono, for the elements Input does not render.
-const field =
-  'h-7 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none focus:border-accent'
+const field = `h-7 min-w-0 flex-1 px-2 font-mono text-xs ${inputLook}`
 
 /**
  * Edits one value as raw text. onCommit gets the new text on blur or Enter

@@ -33,6 +33,7 @@ import { CommandPalette } from './palette/CommandPalette'
 import { searchKey } from './queries'
 import { ReviewDialog } from './review/ReviewDialog'
 import { SearchPanel } from './search/SearchPanel'
+import { StatusBar } from './StatusBar'
 import { Tree } from './tree/Tree'
 
 /** Remounts the workspace per connection so no state leaks between profiles. */
@@ -186,7 +187,7 @@ export function Workspace() {
     return (
       <main className="mx-auto mt-[15vh] max-w-lg space-y-3 px-4">
         {errorKind(info.error) === 'session' ? <Spinner /> : <ErrorBanner error={info.error} />}
-        <Link to="/" className="text-accent">
+        <Link to="/" className="text-accent-text">
           Back to connections
         </Link>
       </main>
@@ -218,7 +219,7 @@ export function Workspace() {
             <button
               type="button"
               onClick={() => setPalette(true)}
-              className="flex h-7 items-center gap-2 rounded-md border border-border px-2 text-xs text-muted hover:bg-hover hover:text-fg"
+              className="flex h-7 items-center gap-2 rounded-md border border-border-strong bg-panel px-2 text-xs text-muted hover:bg-hover hover:text-fg"
             >
               <Search className="h-3.5 w-3.5" /> Search or jump <Kbd>{keyLabel('Mod+K')}</Kbd>
             </button>
@@ -254,6 +255,7 @@ export function Workspace() {
             <Inspector />
           </Panel>
         </Group>
+        <StatusBar />
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
       <ReviewDialog open={review} onOpenChange={setReview} />

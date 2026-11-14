@@ -29,7 +29,7 @@ const kindIcon: Record<EntryKind, typeof User> = {
   other: FileText,
 }
 const item =
-  'flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-sm aria-selected:bg-selected data-[disabled=true]:opacity-50'
+  'flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm aria-selected:bg-selected data-[disabled=true]:opacity-50'
 const group =
   'px-1 py-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted'
 
@@ -186,8 +186,8 @@ export function CommandPalette({
       }}
       label="Command palette"
       shouldFilter={false}
-      overlayClassName="fixed inset-0 bg-black/40"
-      contentClassName="fixed top-[12vh] left-1/2 w-[min(92vw,40rem)] -translate-x-1/2 overflow-hidden rounded-lg border border-border bg-bg text-fg shadow-xl"
+      overlayClassName="fixed inset-0 z-40 bg-black/40"
+      contentClassName="fixed top-[12vh] z-40 left-1/2 w-[min(92vw,40rem)] -translate-x-1/2 elevated overflow-hidden rounded-[10px] border border-border bg-bg text-fg"
     >
       <Command.Input
         value={q}

@@ -18,6 +18,28 @@ test('demo people show photos, a certificate and values with language options', 
   await expect(attrRow(page, 'jpegPhoto').locator('img')).toBeVisible()
 })
 
+test('the LDIF tab shows non-ASCII values decoded; Copy LDIF keeps them base64', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await openEntry(page, 'demo', user('001'))
+  await page.getByRole('tab', { name: 'LDIF' }).click()
+  const panel = page.getByRole('tabpanel', { name: 'LDIF' })
+  await expect(panel).toContainText('description;lang-ru: Пользователь 001')
+  await expect(panel).toContainText('utf-8')
+  const encoded = Buffer.from('Пользователь 001').toString('base64')
+  await expect(panel).not.toContainText(encoded)
+  await page.getByRole('button', { name: 'Copy LDIF', exact: true }).click()
+  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  expect(copied).toContain(`description;lang-ru:: ${encoded}`)
+  // A text selection copies the decoded values without the utf-8 mark.
+  await panel.locator('pre').selectText()
+  const selected = await page.evaluate(() => getSelection()?.toString() ?? '')
+  expect(selected).toContain('description;lang-ru: Пользователь 001')
+  expect(selected).not.toContain('utf-8')
+})
+
 // deploy/demo-ldif/ad-demo.ldif, which global setup loads into the e2e Samba.
 test('AD demo: nested groups, a group above 1500 members, decoded account flags', async ({
   page,

@@ -5,7 +5,7 @@ import type { Environment, Profile, ProfileInput } from '../../lib/types'
 import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { Dialog } from '../../ui/Dialog'
-import { Input } from '../../ui/Input'
+import { Input, inputLook } from '../../ui/Input'
 
 const empty: ProfileInput = {
   name: '',
@@ -112,7 +112,7 @@ export function ProfileForm({
             onChange={(e) =>
               set({ environment: e.target.value as Environment, readOnly: undefined })
             }
-            className="h-8 w-full rounded-md border border-border bg-bg px-2"
+            className={`h-8 w-full px-2 ${inputLook}`}
           >
             <option value="dev">dev</option>
             <option value="stage">stage</option>
@@ -126,7 +126,7 @@ export function ProfileForm({
               type="color"
               value={form.color || '#888888'}
               onChange={(e) => set({ color: e.target.value })}
-              className="h-8 w-12 rounded border border-border bg-bg"
+              className={`h-8 w-12 ${inputLook}`}
             />
             {form.color && (
               <Button size="sm" variant="ghost" onClick={() => set({ color: '' })}>
@@ -168,7 +168,7 @@ export function ProfileForm({
             rows={4}
             value={form.caPEM ?? ''}
             onChange={(e) => set({ caPEM: e.target.value })}
-            className="w-full rounded-md border border-border bg-bg p-2 font-mono text-[11px]"
+            className={`w-full p-2 font-mono text-[11px] ${inputLook}`}
             placeholder="-----BEGIN CERTIFICATE-----"
           />
         </label>

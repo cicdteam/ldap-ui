@@ -317,7 +317,7 @@ function Listing({ search }: { search: SearchState }) {
                 style={{ ...grid, height: v.size, transform: `translateY(${v.start}px)` }}
                 className={cn(
                   'absolute top-0 left-0 grid w-full cursor-default items-center border-b border-border/50 hover:bg-hover',
-                  selected && 'bg-selected outline outline-1 -outline-offset-1 outline-accent',
+                  selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
                 )}
               >
                 <div role="gridcell" className="truncate px-2" title={e.dn}>

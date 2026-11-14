@@ -20,7 +20,7 @@ export function Dialog({
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
       <D.Portal>
-        <D.Overlay className="fixed inset-0 bg-black/40" />
+        <D.Overlay className="fixed inset-0 z-40 bg-black/40" />
         <D.Content
           // The trap holds focus only on what it focused itself (React's autoFocus comes too early
           // and loses focus to a closing menu's trigger), so it focuses [data-autofocus] here.
@@ -31,7 +31,7 @@ export function Dialog({
             el.focus()
           }}
           className={cn(
-            'fixed top-[10vh] left-1/2 max-h-[80vh] -translate-x-1/2 overflow-auto rounded-lg border border-border bg-bg p-4 text-fg shadow-xl',
+            'fixed top-[10vh] z-40 left-1/2 max-h-[80vh] -translate-x-1/2 elevated overflow-auto rounded-[10px] border border-border bg-bg p-4 text-fg',
             wide ? 'w-[min(92vw,44rem)]' : 'w-[min(92vw,28rem)]',
           )}
         >

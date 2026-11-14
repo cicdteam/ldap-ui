@@ -44,7 +44,7 @@ function DNButton({ dn, onSelect }: { dn: string; onSelect: (dn: string) => void
       title={dn}
       className="min-w-0 truncate text-left hover:underline"
     >
-      <span className="text-accent">{first ? rdnDisplay(first) : dn}</span>
+      <span className="text-accent-text">{first ? rdnDisplay(first) : dn}</span>
       <span className="ml-1 font-mono text-[11px] text-muted">{parentDN(dn)}</span>
     </button>
   )
@@ -179,7 +179,7 @@ function RefList({
 
   return (
     <section aria-label={title} className="flex min-h-0 flex-1 flex-col border-b border-border">
-      <div className="flex h-8 shrink-0 items-center gap-2 bg-panel px-2 text-[11px] font-semibold tracking-wide text-muted">
+      <div className="flex h-8 shrink-0 items-center gap-2 bg-panel px-2 text-[11px] font-semibold tracking-[.04em] text-muted uppercase">
         {title.toUpperCase()} {query.data && <span className="font-normal">({all.length})</span>}
         {query.isFetching && <Spinner className="h-3 w-3" />}
         {/* Kept while q is set, so a filter typed on a long list can still be cleared after Direct/Nested shrinks it. */}
