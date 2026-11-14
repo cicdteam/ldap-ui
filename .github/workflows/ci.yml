@@ -71,6 +71,8 @@ jobs:
             runner: ubuntu-26.04
           - arch: arm64
             runner: ubuntu-26.04-arm
+    # A stable name: branch protection requires these checks by name.
+    name: image-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
