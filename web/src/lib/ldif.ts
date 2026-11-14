@@ -6,8 +6,9 @@ import type { Entry } from './types'
 const SAFE_INIT = /^[\x01-\x09\x0B\x0C\x0E-\x1F\x21-\x39\x3B\x3D-\x7F]/
 const SAFE = /^[\x01-\x09\x0B\x0C\x0E-\x7F]*$/
 const NON_ASCII = /[^\x00-\x7F]/
-const CONTROL = /[\x00-\x1F\x7F]/
 /* eslint-enable no-control-regex */
+/** Characters a reader cannot see or that reorder text: controls, format (bidi, zero-width, BOM), line and paragraph separators. */
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
 export function isSafe(s: string): boolean {
   return s === '' || (SAFE_INIT.test(s) && SAFE.test(s) && !s.endsWith(' '))
@@ -62,7 +63,8 @@ export const COPY_LDIF_HINT = 'Copy as LDIF (RFC 2849: non-ASCII values as base6
 export type PreviewPart =
   { text: string } | { attr: string; base64: string } | { attr: string; utf8: string }
 
-const utf8 = new TextDecoder('utf-8', { fatal: true })
+// ignoreBOM keeps a leading U+FEFF in the text, so readable() can refuse it instead of hiding it.
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 /** The UTF-8 text in b64, or undefined for bytes that are not UTF-8 (a photo, a certificate). */
 function decodeText(b64: string): string | undefined {
@@ -74,11 +76,11 @@ function decodeText(b64: string): string | undefined {
 }
 
 /**
- * Text that reads the same decoded: non-ASCII, one line, no control characters and none of the
- * edge cases (leading space, ':' or '<', trailing space) that base64 exists to keep visible.
+ * Text that reads the same decoded: non-ASCII, one line, nothing invisible or reordering, and
+ * none of the edge cases (leading whitespace, ':' or '<', trailing whitespace) that base64 keeps visible.
  */
 function readable(s: string): boolean {
-  return NON_ASCII.test(s) && !CONTROL.test(s) && !/^[ :<]/.test(s) && !s.endsWith(' ')
+  return NON_ASCII.test(s) && !HIDDEN.test(s) && !/^[\s:<]/.test(s) && !/\s$/.test(s)
 }
 
 /**

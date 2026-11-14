@@ -14,11 +14,7 @@ export function LdifView({ ldif, className }: { ldif: string; className?: string
           return (
             <span key={i} className="block">
               {p.attr}: {p.utf8}
-              <span
-                aria-hidden
-                title="Shown decoded; Copy LDIF and downloads keep it as base64 (RFC 2849)"
-                className="ml-2 text-[10px] text-muted select-none"
-              >
+              <span aria-hidden className="ml-2 text-[10px] text-muted select-none">
                 utf-8
               </span>
             </span>

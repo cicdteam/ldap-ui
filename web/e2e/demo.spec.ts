@@ -33,7 +33,11 @@ test('the LDIF tab shows non-ASCII values decoded; Copy LDIF keeps them base64',
   await page.getByRole('button', { name: 'Copy LDIF', exact: true }).click()
   const copied = await page.evaluate(() => navigator.clipboard.readText())
   expect(copied).toContain(`description;lang-ru:: ${encoded}`)
-  expect(copied).not.toContain('utf-8')
+  // A text selection copies the decoded values without the utf-8 mark.
+  await panel.locator('pre').selectText()
+  const selected = await page.evaluate(() => getSelection()?.toString() ?? '')
+  expect(selected).toContain('description;lang-ru: Пользователь 001')
+  expect(selected).not.toContain('utf-8')
 })
 
 // deploy/demo-ldif/ad-demo.ldif, which global setup loads into the e2e Samba.

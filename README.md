@@ -62,7 +62,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   DNs, photos, a Download button on binary values (on any profile), and a
   raw-values switch; direct and nested membership with the "via" group; the
   entry as LDIF (non-ASCII text such as Cyrillic names is shown decoded, marked
-  `utf-8`; Copy LDIF and downloads keep it as base64, as RFC 2849 requires).
+  `utf-8`, here and in the Review and Actions dialogs; values with edge spaces,
+  line breaks, control or invisible characters stay base64; Copy LDIF and
+  downloads keep base64, as RFC 2849 requires).
   The Members list appears for groups that use `member` or
   `uniqueMember` (not for a posixGroup's `memberUid`); Member of also lists
   the posixGroups whose `memberUid` holds the entry's `uid`. Values of

@@ -81,6 +81,11 @@ describe('ldifPreview', () => {
       { attr: 'description', utf8: 'Привет, мир, это длинное описание пользователя' },
     ])
   })
+  it('decodes a value with a no-break space inside it', () => {
+    expect(ldifPreview(`cn:: ${base64UTF8('Иван\u00A0Петров')}`)).toEqual([
+      { attr: 'cn', utf8: 'Иван\u00A0Петров' },
+    ])
+  })
   it.each([
     ['a line break', 'Строка\nвторая'],
     ['a control character', 'Знак\tтаб'],
@@ -88,7 +93,13 @@ describe('ldifPreview', () => {
     ['a trailing space', 'Андрей '],
     ['a leading colon', ':Андрей'],
     ['a leading <', '<Андрей'],
-    ['ASCII only', ' a'],
+    ['ASCII only', 'plain'],
+    ['a C1 next-line character', 'Андрей\u0085x'],
+    ['a line separator', 'Андрей\u2028x'],
+    ['a right-to-left override', 'Андрей\u202Ex'],
+    ['a zero-width space', 'admin\u200Bй'],
+    ['a trailing no-break space', 'Андрей\u00A0'],
+    ['a leading byte order mark', '\uFEFFАндрей'],
   ])('keeps base64 for text with %s', (_, value) => {
     const line = `description:: ${base64UTF8(value)}`
     expect(ldifPreview(line)).toEqual([{ text: line }])
