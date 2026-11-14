@@ -23,5 +23,5 @@ test('bundled fonts load from the page origin', async ({ page }) => {
   await connect(page, 'demo')
   await expect.poll(() => usable(page)).toEqual(FONTS)
   const origin = new URL(page.url()).origin
-  expect(urls.filter((u) => !u.startsWith(origin))).toEqual([])
+  expect(urls.filter((u) => new URL(u).origin !== origin)).toEqual([])
 })

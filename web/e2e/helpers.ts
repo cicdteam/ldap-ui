@@ -17,6 +17,9 @@ export async function openEntry(page: Page, profile: string, dn: string): Promis
   await expect(page.locator('[data-attr]').first()).toBeVisible()
 }
 
+/** Role options matching name exactly: getByRole('button', exact('Edit')). */
+export const exact = (name: string) => ({ name, exact: true })
+
 export const attrRow = (page: Page, name: string) => page.locator(`[data-attr="${name}"]`)
 
 /** Values of an attribute row as shown (one per copy button). */

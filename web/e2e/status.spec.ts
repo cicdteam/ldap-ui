@@ -10,7 +10,7 @@ test('status bar: address, transport, server type and staged changes', async ({ 
   await expect(status).toContainText('ldap://127.0.0.1:1390')
   await expect(status).toContainText('not encrypted')
   await expect(status).toContainText('no staged changes')
-  await expect(status).not.toContainText('Active Directory')
+  await expect(status.getByText('LDAP', { exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
   const desc = attrRow(page, 'description').locator('input').first()
@@ -30,7 +30,7 @@ test('status bar on Active Directory over ldaps', async ({ page }) => {
   await connect(page, 'ad')
   const status = bar(page)
   await expect(status).toContainText('ldaps://127.0.0.1:1637')
-  await expect(status).toContainText('TLS')
+  await expect(status.getByText('TLS', { exact: true })).toBeVisible()
   await expect(status).toContainText('Active Directory')
   await expect(status).not.toContainText('certificate not verified')
 })
