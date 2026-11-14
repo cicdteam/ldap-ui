@@ -5,16 +5,18 @@ A local web UI for browsing OpenLDAP and Active Directory.
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
-`ghcr.io/cicdteam/ldap-ui:<version>` and `:latest`. Or build one locally with
-`make image` (it is tagged `ldapui:dev`). Then:
+`ghcr.io/cicdteam/ldap-ui:<version>` (for example `1.0.0`) and `:latest`:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
   -v ldapui-data:/data \
   -v "$PWD/connections.yaml:/etc/ldapui/connections.yaml:ro" \
   -e LDAPUI_CONFIG=/etc/ldapui/connections.yaml \
-  ldapui:dev
+  ghcr.io/cicdteam/ldap-ui:latest
 ```
+
+To run your own build instead, `make image` builds `ldapui:dev`; use that name
+in place of the published one.
 
 The `ldapui-data` volume keeps profiles created in the UI across restarts.
 
