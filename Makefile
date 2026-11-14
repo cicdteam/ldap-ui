@@ -1,0 +1,85 @@
+MODULE := $(shell go list -m)
+GO_SRC := cmd internal web/embed.go deploy/demo-ldif/photos
+
+# Minimum tool versions. Local installs must meet or exceed these; older or
+# missing tools fall back to Docker at exactly these versions.
+GOFUMPT_MIN := 0.7.0
+GOIMPORTS_VERSION := 0.52.0
+GOLANGCI_LINT_MIN := 2.12.2
+GOVULNCHECK_MIN := 1.3.0
+GO_IMAGE := golang:1.26
+IMAGE ?= ldapui:dev
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
+
+export GOFUMPT_MIN GOIMPORTS_VERSION GOLANGCI_LINT_MIN GOVULNCHECK_MIN GO_IMAGE
+
+.PHONY: help fmt vet lint vuln test test-integration build image image-multiarch check web web-check e2e demo-start demo-stop
+
+.DEFAULT_GOAL := help
+
+DEMO_PORT ?= 8080
+DEMO_COMPOSE := VERSION=$(VERSION) DEMO_PORT=$(DEMO_PORT) docker compose -f deploy/docker-compose.yml
+# 127.0.0.1, not localhost: the port is published on IPv4 only, and localhost
+# may resolve to ::1 first, where another program can hold the same port.
+DEMO_URL := http://127.0.0.1:$(DEMO_PORT)/?token=demo-token-not-secret
+
+help: ## Show the targets and what they do
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+fmt: ## Format Go code (gofumpt, goimports)
+	scripts/tool.sh gofumpt -l -w $(GO_SRC)
+	scripts/tool.sh goimports -local $(MODULE) -w $(GO_SRC)
+
+vet: ## Run go vet, with and without the integration tag
+	go vet ./...
+	go vet -tags integration ./...
+
+lint: ## Run golangci-lint
+	scripts/tool.sh golangci-lint run --timeout 5m
+
+vuln: ## Check Go dependencies with govulncheck
+	scripts/tool.sh govulncheck ./...
+
+test: ## Run Go unit tests with the race detector
+	go test -race ./...
+
+test-integration: ## Run Go integration tests against OpenLDAP and Samba AD in Docker
+	go test -race -tags integration -count=1 ./...
+
+web: ## Build the web UI
+	cd web && npm ci --ignore-scripts && npm run build
+
+web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit
+	cd web && npm ci --ignore-scripts && npm run check && npm audit --audit-level=high
+
+e2e: ## Run the Playwright e2e tests against OpenLDAP and Samba AD in Docker
+	cd web && npm ci --ignore-scripts && npm run e2e
+
+build: web ## Build bin/ldapui with the embedded UI
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/ldapui ./cmd/ldapui
+
+image: ## Build the Docker image (IMAGE=ldapui:dev by default)
+	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t $(IMAGE) .
+
+PLATFORMS ?= linux/amd64 linux/arm64
+
+image-multiarch: ## Build and check the image for amd64 and arm64 (IMAGE-amd64, IMAGE-arm64)
+	@set -e; for p in $(PLATFORMS); do \
+	  a=$${p#linux/}; \
+	  docker buildx build --platform $$p --load --build-arg VERSION=$(VERSION) \
+	    -f deploy/Dockerfile -t $(IMAGE)-$$a . ; \
+	  deploy/image-check.sh $(IMAGE)-$$a $$p $(VERSION); \
+	done
+
+check: fmt vet lint vuln test web-check ## Run every check: fmt vet lint vuln test web-check
+
+demo-start: ## Start the demo: OpenLDAP and Samba AD with sample data, and ldapui (DEMO_PORT=8080)
+	$(DEMO_COMPOSE) up -d --build --wait
+	@echo
+	@echo "ldapui demo: $(DEMO_URL)"
+	@echo "Profiles: demo (dev, editable), demo-prod (prod, read-only), demo-ad (Samba AD, editable). Stop with: make demo-stop"
+
+demo-stop: ## Stop the demo (the directories reset on the next start)
+	$(DEMO_COMPOSE) rm -fsv
+	$(DEMO_COMPOSE) down

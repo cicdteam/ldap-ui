@@ -1,0 +1,14 @@
+version: "2"
+run:
+  build-tags:
+    - integration
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - unconvert
+  exclusions:
+    presets:
+      - std-error-handling

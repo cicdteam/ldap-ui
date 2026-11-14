@@ -1,0 +1,46 @@
+# OpenLDAP and Samba AD for the Playwright e2e run (make e2e). The data is
+# recreated on every run: global setup runs `down -v` then `up --wait`, then
+# seeds Samba.
+name: ldapui-e2e
+services:
+  openldap:
+    image: bitnamilegacy/openldap:2.6.6
+    ports:
+      - "127.0.0.1:1390:1389"
+    environment:
+      LDAP_ADMIN_USERNAME: admin
+      LDAP_ADMIN_PASSWORD: adminpassword
+      LDAP_ROOT: dc=example,dc=org
+      LDAP_CUSTOM_LDIF_DIR: /ldifs
+    volumes:
+      - ../demo-ldif/demo.ldif:/ldifs/00-demo.ldif:ro
+      - ../../web/e2e/.tmp/e2e.ldif:/ldifs/10-e2e.ldif:ro
+    healthcheck:
+      # The image loads the LDIFs into a temporary slapd, stops it, then execs
+      # the final slapd as PID 1: only that one counts as ready.
+      test: ["CMD-SHELL", "grep -qx slapd /proc/1/comm && ldapsearch -x -H ldap://localhost:1389 -b cn=huge,ou=groups,dc=example,dc=org -s base dn >/dev/null"]
+      interval: 1s
+      timeout: 5s
+      retries: 90
+  samba:
+    image: smblds/smblds@sha256:af3586e5b73b159556af30b77bb73207cb60253e4281b698c58d6a846a3061f8
+    ports:
+      - "127.0.0.1:1637:636"
+    environment:
+      REALM: CORP.EXAMPLE.TEST
+      DOMAIN: CORP
+      ADMINPASS: Adm1nPassw0rd! # test only
+    volumes:
+      - ../ad-test/tls:/certs:ro
+      - ../ad-test/10-tls.sh:/entrypoint.d/10-tls.sh:ro
+      - ../demo-ldif/ad-demo.ldif:/seed/ad-demo.ldif:ro
+      - ../../web/e2e/ad-seed.ldif:/seed/ad-seed.ldif:ro
+    healthcheck:
+      # The image's own check passes while Samba is still provisioning: wait
+      # for an Administrator bind over LDAPS. The image's ldapwhoami wrapper
+      # binds as Administrator (-x -y /root/.ldappass) to ldaps://localhost
+      # (/root/.ldaprc, which also skips the certificate check).
+      test: ["CMD-SHELL", "ldapwhoami >/dev/null 2>&1"]
+      interval: 1s
+      timeout: 5s
+      retries: 90

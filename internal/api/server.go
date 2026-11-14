@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Andrei Taranik
+
+// Package api serves the ldapui HTTP API and the embedded web UI.
+package api
+
+import (
+	"context"
+	"io"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/cicdteam/ldap-ui/internal/ldapx"
+	"github.com/cicdteam/ldap-ui/internal/profile"
+	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldap-ui/internal/session"
+)
+
+// Directory is an open LDAP connection. *ldapx.Conn implements it.
+type Directory interface {
+	io.Closer
+	Info() ldapx.Info
+	Schema(ctx context.Context) (*schema.Schema, error)
+	ReloadSchema(ctx context.Context) (*schema.Schema, error)
+	Search(ctx context.Context, r ldapx.SearchRequest) (ldapx.Page, error)
+	Entry(ctx context.Context, dn string) (ldapx.Entry, error)
+	MemberOf(ctx context.Context, dn string, nested bool) (ldapx.Membership, error)
+	Members(ctx context.Context, dn string, nested bool) (ldapx.Membership, error)
+	// Modify applies changes to one entry atomically. It is never retried.
+	Modify(ctx context.Context, dn string, changes []ldapx.Change) error
+	// Add creates an entry. It is never retried.
+	Add(ctx context.Context, dn string, attrs []ldapx.TextAttribute) error
+	// Delete removes a leaf entry. It is never retried.
+	Delete(ctx context.Context, dn string) error
+	// Rename moves dn to newRDN under newParent ("" keeps the parent);
+	// deleteOld drops the old RDN value. It is never retried.
+	Rename(ctx context.Context, dn, newRDN, newParent string, deleteOld bool) error
+	// SetPassword sets dn's password, by method "server" (Password Modify)
+	// or "ssha"; Active Directory ignores method. It is never retried.
+	SetPassword(ctx context.Context, dn, password, method string) error
+}
+
+// Dialer opens a Directory for a profile. It must return a nil interface,
+// not a typed nil, on error.
+type Dialer func(ctx context.Context, p profile.Profile, password string) (Directory, error)
+
+// Options configures the handler returned by New.
+type Options struct {
+	Catalog  *profile.Catalog
+	Dial     Dialer
+	Sessions *session.Manager[Directory]
+	// AllowedHosts are Host header values accepted besides localhost.
+	AllowedHosts []string
+	// AuthToken, when set, is required on every request except probes.
+	AuthToken string
+	// BasePath serves everything under a prefix such as "/ldap".
+	BasePath string
+	// SecureCookies is set when the UI is served over HTTPS, e.g. behind a
+	// TLS-terminating ingress.
+	SecureCookies bool
+	// UI is the built web UI; nil serves a "not built" page.
+	UI     fs.FS
+	Logger *slog.Logger // nil discards logs
+}
+
+// New returns the root HTTP handler.
+func New(opts Options) http.Handler {
+	base := strings.TrimRight(opts.BasePath, "/")
+	if base != "" && !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	cookies := cookieOptions{Path: base + "/", Secure: opts.SecureCookies}
+	s := &server{catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger}
+
+	app := http.NewServeMux()
+	app.HandleFunc("GET /api/profiles", s.listProfiles)
+	app.HandleFunc("POST /api/profiles", s.saveProfile)
+	app.HandleFunc("POST /api/connect", s.connect)
+	app.HandleFunc("POST /api/disconnect", s.disconnect)
+	app.HandleFunc("GET /api/c/{conn}/info", s.info)
+	app.HandleFunc("GET /api/c/{conn}/schema", s.schema)
+	app.HandleFunc("POST /api/c/{conn}/search", s.search)
+	app.HandleFunc("GET /api/c/{conn}/entry", s.entry)
+	app.HandleFunc("GET /api/c/{conn}/memberof", s.memberOf)
+	app.HandleFunc("GET /api/c/{conn}/members", s.members)
+	app.HandleFunc("POST /api/c/{conn}/changes/apply", s.apply)
+	app.HandleFunc("POST /api/c/{conn}/entries/add", s.addEntry)
+	app.HandleFunc("POST /api/c/{conn}/entries/delete", s.deleteEntry)
+	app.HandleFunc("POST /api/c/{conn}/entries/rename", s.renameEntry)
+	app.HandleFunc("POST /api/c/{conn}/entries/password", s.setPassword)
+	app.Handle("/", spaHandler(opts.UI, base))
+
+	var h http.Handler = app
+	h = requireJSON(h)
+	h = http.NewCrossOriginProtection().Handler(h)
+	h = requireToken(opts.AuthToken, cookies, h)
+	h = hostCheck(opts.AllowedHosts, h)
+
+	root := http.NewServeMux()
+	root.HandleFunc("GET /healthz", health)
+	root.HandleFunc("GET /readyz", health)
+	root.Handle("/", h)
+	return withBasePath(base, root)
+}
+
+// health answers liveness and readiness probes. Probes bypass the host and
+// token checks because kubelets call them by pod IP. The process has no
+// dependency that can be unready, so both probes share it.
+func health(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ok\n"))
+}

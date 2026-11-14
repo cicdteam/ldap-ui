@@ -1,0 +1,109 @@
+@import 'tailwindcss';
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-panel: var(--panel);
+  --color-border: var(--border);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+}
+
+:root {
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --row: 28px;
+  /* Vertical padding of inspector rows; compact density tightens it. */
+  --pad: 4px;
+  /* Height of inputs, selects and buttons, and the gap around a form. */
+  --ctl: 32px;
+  --gap: 8px;
+  --bg: #ffffff;
+  --fg: #1b1d22;
+  --muted: #5f6672;
+  --panel: #f6f7f9;
+  --border: #e2e5ea;
+  --hover: #eef0f4;
+  --selected: #dfe8fb;
+  --accent: #2f5bd3;
+  --accent-fg: #ffffff;
+  --danger: #c62828;
+  --warn: #a15c00;
+  --ok: #1e7a3c;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #15171b;
+    --fg: #e6e8ec;
+    --muted: #9aa1ad;
+    --panel: #1c1f24;
+    --border: #2c3038;
+    --hover: #23272e;
+    --selected: #253458;
+    --accent: #7aa2ff;
+    --accent-fg: #0d1220;
+    --danger: #ff6b6b;
+    --warn: #f0b35a;
+    --ok: #5ccf86;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #15171b;
+  --fg: #e6e8ec;
+  --muted: #9aa1ad;
+  --panel: #1c1f24;
+  --border: #2c3038;
+  --hover: #23272e;
+  --selected: #253458;
+  --accent: #7aa2ff;
+  --accent-fg: #0d1220;
+  --danger: #ff6b6b;
+  --warn: #f0b35a;
+  --ok: #5ccf86;
+  color-scheme: dark;
+}
+
+:root[data-density='compact'] {
+  --row: 22px;
+  --pad: 1px;
+  --ctl: 26px;
+  --gap: 4px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The app fills the window and every panel scrolls on its own: macOS's
+   rubber-band bounce must not drag the whole page. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

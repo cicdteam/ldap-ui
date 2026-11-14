@@ -1,0 +1,8 @@
+# Build output
+/bin/
+/web/dist/*
+!/web/dist/.keep
+/web/node_modules/
+/web/e2e/.tmp/
+/web/test-results/
+/web/playwright-report/

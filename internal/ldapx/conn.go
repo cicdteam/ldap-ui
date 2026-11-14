@@ -1,0 +1,399 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Andrei Taranik
+
+package ldapx
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-ldap/ldap/v3"
+
+	"github.com/cicdteam/ldap-ui/internal/ad"
+	"github.com/cicdteam/ldap-ui/internal/profile"
+	"github.com/cicdteam/ldap-ui/internal/schema"
+)
+
+const (
+	// maxCursors bounds the paged listings one Conn keeps open, each on its
+	// own server connection.
+	maxCursors = 8
+	// cursorIdle is how long an unused cursor survives.
+	cursorIdle = 5 * time.Minute
+)
+
+// ErrCursorExpired reports a paging cursor that is unknown, idle for too
+// long, evicted by newer listings or rejected by the server. The client
+// should restart the listing from the first page.
+var ErrCursorExpired = errors.New("cursor expired, restart the listing")
+
+// rfc3062OID names the Password Modify extended operation (RFC 3062)
+// in a root DSE's supportedExtension.
+const rfc3062OID = "1.3.6.1.4.1.4203.1.11.1"
+
+// Info summarizes the server's root DSE.
+type Info struct {
+	// BaseDN is where browsing starts: the profile's base DN, else the
+	// server's default naming context, else its first naming context.
+	BaseDN               string   `json:"baseDN"`
+	NamingContexts       []string `json:"namingContexts"`
+	DefaultNamingContext string   `json:"defaultNamingContext,omitempty"`
+	SubschemaSubentry    string   `json:"subschemaSubentry,omitempty"`
+	Vendor               string   `json:"vendor,omitempty"`
+	ActiveDirectory      bool     `json:"activeDirectory"`
+	Paging               bool     `json:"paging"`
+	// PasswordModify is set when the root DSE lists the Password Modify
+	// extended operation, which hashes a new password by the server's policy.
+	PasswordModify bool `json:"passwordModify"`
+	// Encrypted is set for ldaps:// and StartTLS connections.
+	Encrypted bool `json:"encrypted"`
+}
+
+// UntrustedCertError reports a server certificate that failed verification.
+// Certificates holds the chain the server presented (leaf first) so the
+// user can inspect it and choose to trust the CA.
+type UntrustedCertError struct {
+	Certificates []*x509.Certificate
+	Err          error
+}
+
+func (e *UntrustedCertError) Error() string { return "untrusted server certificate: " + e.Err.Error() }
+
+func (e *UntrustedCertError) Unwrap() error { return e.Err }
+
+// cursor is a paged listing in progress. Servers such as OpenLDAP keep one
+// paged-results state per connection, so each cursor owns its connection.
+type cursor struct {
+	lc     *ldap.Conn
+	cookie []byte
+	used   time.Time
+}
+
+// Conn is an authenticated LDAP connection. It is safe for concurrent use.
+// Read operations share one server connection and redial once if it was
+// lost; each open paging cursor holds a connection of its own.
+type Conn struct {
+	prof     profile.Profile
+	password string
+	info     Info
+
+	mu      sync.Mutex
+	lc      *ldap.Conn // shared; nil until the next read dials one
+	closed  bool
+	cursors map[string]*cursor
+	schema  *schema.Schema
+}
+
+// Dial connects to the profile's server, binds (anonymously when the
+// profile has no bind DN) and reads the root DSE.
+func Dial(ctx context.Context, p profile.Profile, password string) (*Conn, error) {
+	c := &Conn{prof: p, password: password}
+	lc, err := c.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.lc = lc
+	if err := c.loadInfo(ctx); err != nil {
+		_ = lc.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// Close closes all server connections and forgets the password. Later
+// operations fail with net.ErrClosed.
+func (c *Conn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.password = ""
+	lc, cursors := c.lc, c.cursors
+	c.lc, c.cursors = nil, nil
+	c.mu.Unlock()
+	for _, cur := range cursors {
+		_ = cur.lc.Close()
+	}
+	if lc == nil {
+		return nil
+	}
+	return lc.Close()
+}
+
+// Info returns what the server announced at connect time.
+func (c *Conn) Info() Info { return c.info }
+
+func (c *Conn) dial(ctx context.Context) (*ldap.Conn, error) {
+	cfg, err := c.prof.TLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	lc, err := connect(ctx, c.prof, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if c.prof.BindDN != "" {
+		if err := lc.Bind(c.prof.BindDN, c.password); err != nil {
+			_ = lc.Close()
+			return nil, networkError(err)
+		}
+	}
+	return lc, nil
+}
+
+// connect opens the transport and upgrades it with StartTLS when the
+// profile asks for it. A certificate that fails verification yields an
+// UntrustedCertError. The certificate is verified in VerifyConnection
+// rather than by crypto/tls because go-ldap flattens StartTLS handshake
+// errors to text, losing both the error type and the chain.
+func connect(ctx context.Context, p profile.Profile, cfg *tls.Config) (*ldap.Conn, error) {
+	var untrusted *UntrustedCertError
+	if !cfg.InsecureSkipVerify {
+		roots, name := cfg.RootCAs, cfg.ServerName
+		cfg = cfg.Clone()
+		cfg.InsecureSkipVerify = true //nolint:gosec // VerifyConnection below does the full verification
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			err := verifyChain(cs.PeerCertificates, roots, name)
+			if err != nil {
+				untrusted = &UntrustedCertError{Certificates: cs.PeerCertificates, Err: err}
+			}
+			return err
+		}
+	}
+	fail := func(err error) error {
+		if untrusted != nil {
+			return untrusted
+		}
+		return networkError(err)
+	}
+	d := &net.Dialer{Timeout: p.ConnectTimeout}
+	if deadline, ok := ctx.Deadline(); ok {
+		d.Deadline = deadline
+	}
+	lc, err := ldap.DialURL(p.URL, ldap.DialWithDialer(d), ldap.DialWithTLSConfig(cfg))
+	if err != nil {
+		return nil, fail(err)
+	}
+	lc.SetTimeout(p.SearchTimeout)
+	if p.StartTLS {
+		if err := lc.StartTLS(cfg); err != nil {
+			_ = lc.Close()
+			return nil, fail(err)
+		}
+	}
+	return lc, nil
+}
+
+// networkError turns an error go-ldap reports as plain text, such as
+// "unable to read LDAP response packet: EOF" after the server hung up, into
+// an ErrorNetwork *ldap.Error so that callers can tell a lost connection
+// from a local failure. Errors with a meaning of their own pass unchanged.
+func networkError(err error) error {
+	var le *ldap.Error
+	var untrusted *UntrustedCertError
+	if err == nil || errors.As(err, &le) || errors.As(err, &untrusted) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, ErrCursorExpired) || errors.Is(err, ErrInvalidRequest) {
+		return err
+	}
+	return ldap.NewError(ldap.ErrorNetwork, err)
+}
+
+// verifyChain checks the server's certificates (leaf first) against roots
+// and name the way crypto/tls does. Nil roots means the system pool.
+func verifyChain(certs []*x509.Certificate, roots *x509.CertPool, name string) error {
+	if len(certs) == 0 {
+		return errors.New("server sent no certificate")
+	}
+	opts := x509.VerifyOptions{Roots: roots, DNSName: name, Intermediates: x509.NewCertPool()}
+	for _, cert := range certs[1:] {
+		opts.Intermediates.AddCert(cert)
+	}
+	_, err := certs[0].Verify(opts)
+	return err
+}
+
+// isEncrypted reports whether p's connection runs over TLS: ldaps:// or
+// StartTLS.
+func isEncrypted(p profile.Profile) bool {
+	return p.StartTLS || strings.HasPrefix(strings.ToLower(p.URL), "ldaps://")
+}
+
+func (c *Conn) loadInfo(ctx context.Context) error {
+	res, err := searchOnce(ctx, c.lc, &ldap.SearchRequest{
+		Scope:  ldap.ScopeBaseObject,
+		Filter: "(objectClass=*)",
+		Attributes: []string{
+			"namingContexts", "defaultNamingContext", "subschemaSubentry",
+			"supportedControl", "supportedCapabilities", "supportedExtension", "vendorName",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("read root DSE: %w", err)
+	}
+	if len(res.entries) == 0 {
+		return errors.New("read root DSE: server returned nothing")
+	}
+	e := res.entries[0]
+	c.info = Info{
+		NamingContexts:       e.GetAttributeValues("namingContexts"),
+		DefaultNamingContext: e.GetAttributeValue("defaultNamingContext"),
+		SubschemaSubentry:    e.GetAttributeValue("subschemaSubentry"),
+		Vendor:               e.GetAttributeValue("vendorName"),
+		ActiveDirectory:      ad.IsActiveDirectory(e.GetAttributeValues("supportedCapabilities")),
+		Paging:               slices.Contains(e.GetAttributeValues("supportedControl"), ldap.ControlTypePaging),
+		PasswordModify:       slices.Contains(e.GetAttributeValues("supportedExtension"), rfc3062OID),
+		Encrypted:            isEncrypted(c.prof),
+	}
+	switch {
+	case c.prof.BaseDN != "":
+		c.info.BaseDN = c.prof.BaseDN
+	case c.info.DefaultNamingContext != "":
+		c.info.BaseDN = c.info.DefaultNamingContext
+	case len(c.info.NamingContexts) > 0:
+		c.info.BaseDN = c.info.NamingContexts[0]
+	}
+	return nil
+}
+
+// current returns the shared connection, dialing a new one when there is
+// none or it was lost.
+func (c *Conn) current(ctx context.Context) (*ldap.Conn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentLocked(ctx)
+}
+
+// currentLocked is current for callers holding mu.
+// ponytail: dials while holding mu, so a slow dial stalls other callers for
+// up to the connect timeout; dial outside the lock if that ever matters.
+func (c *Conn) currentLocked(ctx context.Context) (*ldap.Conn, error) {
+	if c.closed {
+		return nil, net.ErrClosed
+	}
+	if c.lc == nil || c.lc.IsClosing() {
+		lc, err := c.dial(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.lc = lc
+	}
+	return c.lc, nil
+}
+
+// take removes the shared connection from its slot so that nobody else
+// starts a paged search on it; the next shared read dials a new one. The
+// caller hands it back with release or keeps it with pin.
+func (c *Conn) take(ctx context.Context) (*ldap.Conn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	lc, err := c.currentLocked(ctx)
+	c.lc = nil
+	return lc, err
+}
+
+// release makes lc the shared connection again, or closes it when another
+// one took its place meanwhile.
+func (c *Conn) release(lc *ldap.Conn) {
+	c.mu.Lock()
+	if !c.closed && !lc.IsClosing() && (c.lc == nil || c.lc.IsClosing()) {
+		c.lc, lc = lc, nil
+	}
+	c.mu.Unlock()
+	if lc != nil {
+		_ = lc.Close()
+	}
+}
+
+// read runs fn on the shared connection, and once more on a new one if the
+// connection was lost. Only use it for operations that are safe to repeat;
+// writes must never go through read.
+func (c *Conn) read(ctx context.Context, fn func(*ldap.Conn) error) error {
+	_, err := retry(ctx, c.current, fn)
+	return err
+}
+
+// retry runs fn on a connection from get and, if that connection was lost
+// meanwhile, once more on a new one. It returns the connection fn last ran
+// on. A connection is only lost when go-ldap shut it down: its request
+// timeout leaves the connection open and must not trigger a rerun.
+func retry(ctx context.Context, get func(context.Context) (*ldap.Conn, error), fn func(*ldap.Conn) error) (*ldap.Conn, error) {
+	lc, err := get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = fn(lc); err == nil || ctx.Err() != nil || !lc.IsClosing() {
+		return lc, err
+	}
+	if lc, err = get(ctx); err != nil {
+		return nil, err
+	}
+	return lc, fn(lc)
+}
+
+// pin keeps lc for the next page of a listing and returns the cursor ID.
+// Beyond maxCursors the least recently used cursor is closed.
+func (c *Conn) pin(lc *ldap.Conn, cookie []byte) (string, error) {
+	id := rand.Text()
+	now := time.Now()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		_ = lc.Close()
+		return "", net.ErrClosed
+	}
+	var evicted *ldap.Conn
+	if len(c.cursors) >= maxCursors {
+		oldest := ""
+		for k, cur := range c.cursors {
+			if oldest == "" || cur.used.Before(c.cursors[oldest].used) {
+				oldest = k
+			}
+		}
+		evicted = c.cursors[oldest].lc
+		delete(c.cursors, oldest)
+	}
+	if c.cursors == nil {
+		c.cursors = make(map[string]*cursor)
+	}
+	c.cursors[id] = &cursor{lc: lc, cookie: cookie, used: now}
+	c.mu.Unlock()
+	if evicted != nil {
+		_ = evicted.Close()
+	}
+	return id, nil
+}
+
+// unpin removes the cursor id and returns it, or nil when it does not
+// exist. Each page gets a new cursor ID, so a cursor works only once.
+func (c *Conn) unpin(id string) *cursor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur := c.cursors[id]
+	delete(c.cursors, id)
+	return cur
+}
+
+// expireCursors closes the cursors unused for longer than cursorIdle.
+func (c *Conn) expireCursors() {
+	now := time.Now()
+	var stale []*ldap.Conn
+	c.mu.Lock()
+	for id, cur := range c.cursors {
+		if now.Sub(cur.used) > cursorIdle {
+			stale = append(stale, cur.lc)
+			delete(c.cursors, id)
+		}
+	}
+	c.mu.Unlock()
+	for _, lc := range stale {
+		_ = lc.Close()
+	}
+}

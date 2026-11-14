@@ -1,0 +1,99 @@
+# Demo: ldapui next to an OpenLDAP and a Samba AD with sample users. Start it
+# with `make demo-start`, then open
+# http://127.0.0.1:8080/?token=demo-token-not-secret.
+name: ldapui-demo
+services:
+  openldap:
+    image: bitnamilegacy/openldap:2.6.6
+    ports:
+      - "127.0.0.1:1389:1389" # for local UI development, see README
+    environment:
+      LDAP_ADMIN_USERNAME: admin
+      LDAP_ADMIN_PASSWORD: adminpassword
+      LDAP_ROOT: dc=example,dc=org
+      LDAP_CUSTOM_LDIF_DIR: /ldifs
+    volumes:
+      # The file, not the directory: the image loads every .ldif in /ldifs.
+      - ./demo-ldif/demo.ldif:/ldifs/demo.ldif:ro
+    healthcheck:
+      # The image loads the LDIF into a temporary slapd, stops it, then execs
+      # the final slapd as PID 1: only that one counts as ready.
+      test: ["CMD-SHELL", "grep -qx slapd /proc/1/comm && ldapsearch -x -H ldap://localhost:1389 -b ou=people,dc=example,dc=org -s base dn >/dev/null"]
+      interval: 1s
+      timeout: 5s
+      retries: 90
+
+  samba:
+    image: smblds/smblds@sha256:af3586e5b73b159556af30b77bb73207cb60253e4281b698c58d6a846a3061f8
+    # No host port: ldapui and samba-seed reach LDAPS (CA in
+    # deploy/ad-test/tls/ca.pem) on the compose network.
+    environment:
+      REALM: CORP.EXAMPLE.TEST
+      DOMAIN: CORP
+      ADMINPASS: Adm1nPassw0rd! # demo only
+    volumes:
+      - ./ad-test/tls:/certs:ro
+      - ./ad-test/10-tls.sh:/entrypoint.d/10-tls.sh:ro
+    healthcheck:
+      # The image's own check passes while Samba is still provisioning: wait
+      # for an Administrator bind over LDAPS. The image's ldapwhoami wrapper
+      # binds as Administrator (-x -y /root/.ldappass) to ldaps://localhost
+      # (/root/.ldaprc, which also skips the certificate check).
+      test: ["CMD-SHELL", "ldapwhoami >/dev/null 2>&1"]
+      interval: 1s
+      timeout: 5s
+      retries: 90
+
+  # Loads the AD demo directory once Samba is up; ldapui waits for it. The bind
+  # is probed for up to 60 s, then ldapadd runs once, unless the file's last
+  # entry is already there (make demo-start while the demo runs re-runs this
+  # against the same Samba). /usr/bin, not the image's wrappers, which read
+  # the Administrator password from /root/.ldappass.
+  samba-seed:
+    image: smblds/smblds@sha256:af3586e5b73b159556af30b77bb73207cb60253e4281b698c58d6a846a3061f8
+    depends_on:
+      samba:
+        condition: service_healthy
+    environment:
+      LDAPTLS_CACERT: /certs/ca.pem
+      DN: CN=Administrator,CN=Users,DC=corp,DC=example,DC=test
+      PW: Adm1nPassw0rd! # demo only
+    volumes:
+      - ./ad-test/tls:/certs:ro
+      - ./demo-ldif/ad-demo.ldif:/seed/ad-demo.ldif:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        for i in $$(seq 60); do
+          /usr/bin/ldapwhoami -x -H ldaps://samba -D "$$DN" -w "$$PW" >/dev/null 2>&1 && break
+          sleep 1
+        done
+        /usr/bin/ldapsearch -x -H ldaps://samba -D "$$DN" -w "$$PW" -s base -b "CN=All Bulk,OU=Groups,OU=Demo,DC=corp,DC=example,DC=test" dn >/dev/null 2>&1 && exit 0
+        exec /usr/bin/ldapadd -x -H ldaps://samba -D "$$DN" -w "$$PW" -f /seed/ad-demo.ldif >/dev/null
+
+  ldapui:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    depends_on:
+      openldap:
+        condition: service_healthy
+      samba-seed:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-8080}:8080"
+    environment:
+      LDAPUI_CONFIG: /etc/ldapui/connections.yaml
+      LDAPUI_AUTH_TOKEN: demo-token-not-secret # demo only; omit to get a random token in the log
+      DEMO_LDAP_PASSWORD: adminpassword
+      AD_LDAP_PASSWORD: Adm1nPassw0rd! # demo only
+    volumes:
+      - ./connections.demo.yaml:/etc/ldapui/connections.yaml:ro
+      - ./ad-test/tls/ca.pem:/etc/ldapui/ad-ca.pem:ro
+      - ldapui-data:/data
+
+volumes:
+  ldapui-data: {}

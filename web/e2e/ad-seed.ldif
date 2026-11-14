@@ -1,0 +1,21 @@
+dn: OU=ldapui,DC=corp,DC=example,DC=test
+objectClass: organizationalUnit
+ou: ldapui
+
+dn: CN=alice,OU=ldapui,DC=corp,DC=example,DC=test
+objectClass: user
+sAMAccountName: alice
+
+dn: CN=bob,OU=ldapui,DC=corp,DC=example,DC=test
+objectClass: user
+sAMAccountName: bob
+
+dn: CN=inner,OU=ldapui,DC=corp,DC=example,DC=test
+objectClass: group
+sAMAccountName: inner
+member: CN=alice,OU=ldapui,DC=corp,DC=example,DC=test
+
+dn: CN=outer,OU=ldapui,DC=corp,DC=example,DC=test
+objectClass: group
+sAMAccountName: outer
+member: CN=inner,OU=ldapui,DC=corp,DC=example,DC=test

@@ -1,0 +1,55 @@
+{
+  "name": "ldapui-web",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && touch dist/.keep",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "fmt": "prettier --write .",
+    "check": "tsc --noEmit && eslint . && prettier --check . && vitest run",
+    "e2e": "playwright test"
+  },
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=26.13.0"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
+    "@lezer/highlight": "^1.2.5",
+    "@radix-ui/react-dialog": "^1.3.1",
+    "@radix-ui/react-popover": "^1.3.1",
+    "@radix-ui/react-tabs": "^1.2.1",
+    "@tanstack/react-query": "^5.107.1",
+    "@tanstack/react-virtual": "^3.14.26",
+    "cmdk": "^1.1.1",
+    "lucide-react": "^1.72.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-resizable-panels": "^4.21.0",
+    "react-router": "^8.5.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.64.1",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "~6.0",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
