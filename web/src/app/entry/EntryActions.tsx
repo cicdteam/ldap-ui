@@ -59,7 +59,7 @@ export function EntryActions({ dn, password }: { dn: string; password: boolean }
             if (picked.current) e.preventDefault()
             picked.current = false
           }}
-          className="elevated w-72 rounded-[10px] border border-border bg-bg p-1"
+          className="elevated z-50 w-72 rounded-[10px] border border-border bg-bg p-1"
         >
           {visibleActions(password).map((a) => {
             const why = a.clean ? hint : ''

@@ -301,7 +301,7 @@ export function QueryBar() {
           <Popover.Portal>
             <Popover.Content
               align="end"
-              className="max-h-80 w-96 elevated overflow-auto rounded-[10px] border border-border bg-bg p-1"
+              className="z-50 max-h-80 w-96 elevated overflow-auto rounded-[10px] border border-border bg-bg p-1"
             >
               {history.map((s, i) => (
                 <Popover.Close asChild key={i}>
@@ -327,7 +327,7 @@ export function QueryBar() {
           <Popover.Portal>
             <Popover.Content
               align="end"
-              className="max-h-96 w-96 elevated overflow-auto rounded-[10px] border border-border bg-bg p-1"
+              className="z-50 max-h-96 w-96 elevated overflow-auto rounded-[10px] border border-border bg-bg p-1"
             >
               <form
                 className="flex gap-1 p-1"
