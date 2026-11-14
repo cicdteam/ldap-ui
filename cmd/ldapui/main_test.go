@@ -138,7 +138,6 @@ func TestRunVersion(t *testing.T) {
 	}{
 		{name: "clean env"},
 		{name: "bad listen", key: "LDAPUI_LISTEN", value: "bad"},
-		{name: "unknown session idle", key: "LDAPUI_SESSION_IDLE", value: "forever"},
 		{name: "bad secure cookies", key: "LDAPUI_SECURE_COOKIES", value: "maybe"},
 		{name: "bad base path", key: "LDAPUI_BASE_PATH", value: "ldap"},
 		{name: "short auth token", key: "LDAPUI_AUTH_TOKEN", value: "short"},

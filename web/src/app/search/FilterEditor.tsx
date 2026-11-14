@@ -72,9 +72,11 @@ const theme = EditorView.theme({
     background: 'var(--bg)',
     color: 'var(--fg)',
   },
-  // The look of Input: an accent border and a 3px ring of the accent at 30%.
+  // The look of Input: an accent border and a 3px ring of the accent at 30%. The transparent
+  // outline shows only in forced-colors mode, which drops the ring (Tailwind's outline-hidden).
   '&.cm-focused': {
-    outline: 'none',
+    outline: '2px solid transparent',
+    outlineOffset: '2px',
     borderColor: 'var(--accent)',
     boxShadow: '0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent)',
   },
