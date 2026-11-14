@@ -69,6 +69,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   values and grow by 1000 on request; the attribute filter also narrows the
   values it matches. Member of searches `member`, `uniqueMember` and
   `memberUid`; an equality index on each keeps it fast.
+- **Status bar** (bottom): the server address, whether the connection is
+  encrypted (TLS, StartTLS, not encrypted, certificate not verified), the
+  server type and the number of staged changes.
 - Every view has a URL (`/c/<profile>/entry?dn=...`,
   `/c/<profile>/search?filter=...`), so links and reloads work.
 

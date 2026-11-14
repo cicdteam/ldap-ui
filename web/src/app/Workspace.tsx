@@ -33,6 +33,7 @@ import { CommandPalette } from './palette/CommandPalette'
 import { searchKey } from './queries'
 import { ReviewDialog } from './review/ReviewDialog'
 import { SearchPanel } from './search/SearchPanel'
+import { StatusBar } from './StatusBar'
 import { Tree } from './tree/Tree'
 
 /** Remounts the workspace per connection so no state leaks between profiles. */
@@ -254,6 +255,7 @@ export function Workspace() {
             <Inspector />
           </Panel>
         </Group>
+        <StatusBar />
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />
       <ReviewDialog open={review} onOpenChange={setReview} />
