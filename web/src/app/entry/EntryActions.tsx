@@ -1,6 +1,6 @@
 import * as Popover from '@radix-ui/react-popover'
 import { ChevronDown } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { stagedHint, stagedUnder } from '../../lib/entryOps'
 import { isEditableTarget, isKey, keyLabel } from '../../lib/shortcuts'
 import { Button } from '../../ui/Button'
@@ -21,6 +21,8 @@ export function EntryActions({ dn, password }: { dn: string; password: boolean }
   const ws = useWorkspace()
   const hint = stagedHint(stagedUnder(useBatch(ws.conn), dn))
   const [open, setOpen] = useState(false)
+  // A picked item opens a dialog; focus going back to the trigger would take it from the dialog.
+  const picked = useRef(false)
   const id = useId()
 
   // As E: not while typing, not in the tree's or the results' own keys, not in a dialog.
@@ -53,6 +55,10 @@ export function EntryActions({ dn, password }: { dn: string; password: boolean }
         <Popover.Content
           align="end"
           aria-label="Entry actions"
+          onCloseAutoFocus={(e) => {
+            if (picked.current) e.preventDefault()
+            picked.current = false
+          }}
           className="w-72 rounded-md border border-border bg-bg p-1 shadow-lg"
         >
           {visibleActions(password).map((a) => {
@@ -67,6 +73,7 @@ export function EntryActions({ dn, password }: { dn: string; password: boolean }
                 disabled={!!why}
                 className={menuItem}
                 onClick={() => {
+                  picked.current = true
                   setOpen(false)
                   openEntryAction(a.kind)
                 }}
