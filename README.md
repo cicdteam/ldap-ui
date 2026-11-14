@@ -5,7 +5,24 @@ A local web UI for browsing OpenLDAP and Active Directory.
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
-`ghcr.io/cicdteam/ldap-ui:<version>` (for example `1.0.0`) and `:latest`:
+`ghcr.io/cicdteam/ldap-ui:<version>` (for example `1.0.0`) and `:latest`.
+
+The quickest start:
+
+```sh
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cicdteam/ldap-ui:latest
+```
+
+The container listens beyond loopback, so ldapui prints a login link with a
+random token at startup; open it, then add your directories with
+**New connection**. Set `LDAPUI_AUTH_TOKEN` to choose the token (at least 16
+characters from `A-Z a-z 0-9 . _ ~ -`). Without a volume, the connections you
+add are lost when the container is removed.
+
+Connections come from two places, and you can use either or both: the ones
+you create in the UI (kept in `/data`, passwords never stored) and the fixed
+ones in a [`connections.yaml`](#connectionsyaml) you mount. A fuller run that
+keeps UI connections across restarts and loads a `connections.yaml`:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
@@ -17,12 +34,6 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 To run your own build instead, `make image` builds `ldapui:dev`; use that name
 in place of the published one.
-
-The `ldapui-data` volume keeps profiles created in the UI across restarts.
-
-The container listens beyond loopback, so ldapui prints a login link with a
-random token at startup. Set `LDAPUI_AUTH_TOKEN` to choose the token (at least
-16 characters from `A-Z a-z 0-9 . _ ~ -`).
 
 The UI's hashed assets are served gzipped and cached for a year, so no ingress compression or caching setup is needed.
 
