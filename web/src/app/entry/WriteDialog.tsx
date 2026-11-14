@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { CopyButton } from '../../ui/CopyButton'
+import { COPY_LDIF_HINT } from '../../lib/ldif'
 import { LdifView } from '../../ui/LdifView'
 import { Dialog } from '../../ui/Dialog'
 import { Input } from '../../ui/Input'
@@ -69,7 +70,7 @@ export function WriteDialog({
                 ldif={ldif}
                 className="min-w-0 flex-1 overflow-x-auto rounded bg-panel p-2 font-mono text-xs"
               />
-              <CopyButton text={ldif} label="Copy LDIF" />
+              <CopyButton text={ldif} label="Copy LDIF" title={COPY_LDIF_HINT} />
             </div>
           </details>
         )}

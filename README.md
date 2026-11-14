@@ -61,7 +61,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   decoded AD values (SIDs, GUIDs, dates, `userAccountControl` flags), clickable
   DNs, photos, a Download button on binary values (on any profile), and a
   raw-values switch; direct and nested membership with the "via" group; the
-  entry as LDIF. The Members list appears for groups that use `member` or
+  entry as LDIF (non-ASCII text such as Cyrillic names is shown decoded, marked
+  `utf-8`; Copy LDIF and downloads keep it as base64, as RFC 2849 requires).
+  The Members list appears for groups that use `member` or
   `uniqueMember` (not for a posixGroup's `memberUid`); Member of also lists
   the posixGroups whose `memberUid` holds the entry's `uid`. Values of
   password and secret attributes never leave the server (their names and a

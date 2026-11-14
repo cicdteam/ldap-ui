@@ -5,7 +5,7 @@ import { isApiError } from '../../lib/api'
 import { fileSafe } from '../../lib/binary'
 import { parentDN, rdnDisplay, splitDN } from '../../lib/dn'
 import { canSetPassword } from '../../lib/entryOps'
-import { entryToLDIF } from '../../lib/ldif'
+import { COPY_LDIF_HINT, entryToLDIF } from '../../lib/ldif'
 import { setPrefs, usePrefs } from '../../lib/prefs'
 import { isEditableTarget, keyLabel } from '../../lib/shortcuts'
 import { Badge } from '../../ui/Badge'
@@ -192,7 +192,7 @@ function EntryView({
           </Tabs.Content>
           <Tabs.Content value="ldif" className="min-h-0 flex-1 overflow-auto">
             <div className="flex justify-end gap-1 p-1">
-              <CopyButton text={ldif} label="Copy LDIF" />
+              <CopyButton text={ldif} label="Copy LDIF" title={COPY_LDIF_HINT} />
               <Button
                 size="icon"
                 variant="ghost"

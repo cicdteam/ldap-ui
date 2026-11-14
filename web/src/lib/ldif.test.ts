@@ -73,9 +73,25 @@ describe('ldifPreview', () => {
       { text: 'cn: a' },
     ])
   })
-  it('shows base64 that is text, such as non-ASCII values, as it is', () => {
-    const ru = fold(`description:: ${base64UTF8('Привет, мир')}`)
-    expect(ldifPreview(ru)).toEqual(ru.split('\n').map((text) => ({ text })))
+  it('decodes non-ASCII text values, folded or not, the dn too', () => {
+    const ru = fold(`description:: ${base64UTF8('Привет, мир, это длинное описание пользователя')}`)
+    const dn = `dn:: ${base64UTF8('cn=Jürgen Müller,dc=x')}`
+    expect(ldifPreview(`${dn}\n${ru}\n`)).toEqual([
+      { attr: 'dn', utf8: 'cn=Jürgen Müller,dc=x' },
+      { attr: 'description', utf8: 'Привет, мир, это длинное описание пользователя' },
+    ])
+  })
+  it.each([
+    ['a line break', 'Строка\nвторая'],
+    ['a control character', 'Знак\tтаб'],
+    ['a leading space', ' Андрей'],
+    ['a trailing space', 'Андрей '],
+    ['a leading colon', ':Андрей'],
+    ['a leading <', '<Андрей'],
+    ['ASCII only', ' a'],
+  ])('keeps base64 for text with %s', (_, value) => {
+    const line = `description:: ${base64UTF8(value)}`
+    expect(ldifPreview(line)).toEqual([{ text: line }])
   })
   it('keeps a blank line between blocks', () => {
     expect(ldifPreview('a: 1\n\nb: 2\n')).toEqual([

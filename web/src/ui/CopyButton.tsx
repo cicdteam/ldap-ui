@@ -2,7 +2,16 @@ import { Check, Copy } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from './Button'
 
-export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+/** title, when given, explains what is copied; the label stays the accessible name. */
+export function CopyButton({
+  text,
+  label = 'Copy',
+  title = label,
+}: {
+  text: string
+  label?: string
+  title?: string
+}) {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
@@ -14,7 +23,7 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
       size="icon"
       variant="ghost"
       aria-label={label}
-      title={label}
+      title={title}
       onClick={() => {
         void navigator.clipboard?.writeText(text).then(() => setCopied(true))
       }}

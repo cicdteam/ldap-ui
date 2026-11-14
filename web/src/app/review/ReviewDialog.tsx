@@ -9,6 +9,7 @@ import { Banner, ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { cn } from '../../ui/cn'
 import { CopyButton } from '../../ui/CopyButton'
+import { COPY_LDIF_HINT } from '../../lib/ldif'
 import { LdifView } from '../../ui/LdifView'
 import { Dialog } from '../../ui/Dialog'
 import { Input } from '../../ui/Input'
@@ -146,7 +147,7 @@ function EntryBlock({ conn, ec, applying }: { conn: string; ec: EntryChanges; ap
     >
       <div className="flex items-center gap-1">
         <span className="min-w-0 flex-1 font-mono text-xs break-all">{ec.dn}</span>
-        <CopyButton text={ldif} label={`Copy LDIF for ${ec.dn}`} />
+        <CopyButton text={ldif} label={`Copy LDIF for ${ec.dn}`} title={COPY_LDIF_HINT} />
         <Button
           size="sm"
           variant="ghost"
