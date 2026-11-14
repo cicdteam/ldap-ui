@@ -59,7 +59,8 @@ func main() {
 }
 
 // parseFlags reads flags with environment fallbacks. Usage and flag errors
-// go to usage.
+// go to usage. With --version nothing else is validated, so it works
+// whatever the environment holds.
 func parseFlags(args []string, getenv func(string) string, usage io.Writer) (config, error) {
 	env := func(name, def string) string {
 		if v := getenv(name); v != "" {
@@ -68,12 +69,11 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 		return def
 	}
 	secure := false
+	var secureErr error
 	if v := getenv("LDAPUI_SECURE_COOKIES"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return config{}, fmt.Errorf("LDAPUI_SECURE_COOKIES %q: want true or false", v)
+		if secure, secureErr = strconv.ParseBool(v); secureErr != nil {
+			secureErr = fmt.Errorf("LDAPUI_SECURE_COOKIES %q: want true or false", v)
 		}
-		secure = b
 	}
 	var c config
 	var hosts string
@@ -91,6 +91,12 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
+	}
+	if c.showVersion {
+		return c, nil
+	}
+	if secureErr != nil {
+		return config{}, secureErr
 	}
 	if c.authToken == "" {
 		c.authToken = getenv("LDAPUI_AUTH_TOKEN")

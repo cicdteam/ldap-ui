@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -109,22 +110,53 @@ func TestParseFlagsSessionIdle(t *testing.T) {
 	}
 }
 
+// clearEnv blanks every LDAPUI_* variable for the rest of t, so a test of
+// run does not read the developer's environment; empty counts as unset.
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "LDAPUI_") {
+			t.Setenv(k, "")
+		}
+	}
+}
+
 // TestRunHelp checks that -h succeeds after printing usage, as it would
 // with flag.ExitOnError, instead of failing with flag.ErrHelp.
 func TestRunHelp(t *testing.T) {
+	clearEnv(t)
 	if err := run([]string{"-h"}); err != nil {
 		t.Errorf("run(-h) = %v, want nil", err)
 	}
 }
 
-// TestRunVersion checks that --version prints the version and stops.
+// TestRunVersion checks that --version prints the version and stops, even
+// when the LDAPUI_* environment would fail validation.
 func TestRunVersion(t *testing.T) {
-	var out bytes.Buffer
-	if err := runTo([]string{"--version"}, &out); err != nil {
-		t.Fatalf("run(--version) = %v, want nil", err)
+	tests := []struct {
+		name, key, value string
+	}{
+		{name: "clean env"},
+		{name: "bad listen", key: "LDAPUI_LISTEN", value: "bad"},
+		{name: "unknown session idle", key: "LDAPUI_SESSION_IDLE", value: "forever"},
+		{name: "bad secure cookies", key: "LDAPUI_SECURE_COOKIES", value: "maybe"},
+		{name: "bad base path", key: "LDAPUI_BASE_PATH", value: "ldap"},
+		{name: "short auth token", key: "LDAPUI_AUTH_TOKEN", value: "short"},
 	}
-	if got, want := out.String(), "ldapui dev\n"; got != want {
-		t.Errorf("run(--version) printed %q, want %q", got, want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clearEnv(t)
+			if tc.key != "" {
+				t.Setenv(tc.key, tc.value)
+			}
+			var out bytes.Buffer
+			if err := runTo([]string{"--version"}, &out); err != nil {
+				t.Fatalf("run(--version) with %s=%q = %v, want nil", tc.key, tc.value, err)
+			}
+			if got, want := out.String(), "ldapui dev\n"; got != want {
+				t.Errorf("run(--version) with %s=%q printed %q, want %q", tc.key, tc.value, got, want)
+			}
+		})
 	}
 }
 

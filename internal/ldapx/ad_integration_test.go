@@ -41,8 +41,9 @@ func adUserDN(i int) string { return fmt.Sprintf("CN=u%04d,%s", i, adOU) }
 func adGroupDN(name string) string { return "CN=" + name + "," + adOU }
 
 // startSamba starts Samba AD with the test CA's certificate and seeds it.
-// It returns the container for termination even when it fails later.
-func startSamba(ctx context.Context) (testcontainers.Container, error) {
+// It returns the container for termination even when it fails later, and an
+// error carries the tail of the container log.
+func startSamba(ctx context.Context) (_ testcontainers.Container, err error) {
 	cert := func(name string) testcontainers.ContainerFile {
 		return testcontainers.ContainerFile{
 			HostFilePath: "../../deploy/ad-test/tls/" + name, ContainerFilePath: "/certs/" + name, FileMode: 0o644,
@@ -61,6 +62,9 @@ func startSamba(ctx context.Context) (testcontainers.Container, error) {
 		},
 		Started: true,
 	})
+	if ctr != nil {
+		defer func() { err = withLogTail(ctx, ctr, err) }()
+	}
 	if err != nil {
 		return ctr, fmt.Errorf("start samba: %w", err)
 	}
@@ -87,7 +91,8 @@ func startSamba(ctx context.Context) (testcontainers.Container, error) {
 }
 
 // waitForBind dials Samba until the Administrator bind works: the "samba
-// version" log line can precede the LDAP listener.
+// version" log line can precede the LDAP listener. Invalid credentials fail
+// at once, as waiting does not fix them.
 func waitForBind(ctx context.Context) (*Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -95,6 +100,9 @@ func waitForBind(ctx context.Context) (*Conn, error) {
 		c, err := Dial(ctx, adProfile(adLDAPS, false), adAdminPass)
 		if err == nil {
 			return c, nil
+		}
+		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+			return nil, fmt.Errorf("bind to samba: %w", err)
 		}
 		select {
 		case <-ctx.Done():
