@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { CERT, E2E_OU, e2eDN, PHOTO } from './fixture'
-import { attrRow, blur, openEntry } from './helpers'
+import { attrRow, blur, exact, openEntry } from './helpers'
 
-const exact = (name: string) => ({ name, exact: true })
 const PHOTO_B64 = readFileSync(PHOTO).toString('base64')
 const PHOTO_SUMMARY = `jpegPhoto:: (binary, ${readFileSync(PHOTO).length} bytes)`
 

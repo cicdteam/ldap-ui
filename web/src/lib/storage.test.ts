@@ -21,7 +21,9 @@ describe('load/save', () => {
   })
 
   it('falls back when storage is missing, throws or holds junk', () => {
-    expect(load('k', 'fb')).toBe('fb') // no localStorage global in node
+    // Stubbed missing: Node 26's own localStorage warns when read without --localstorage-file.
+    vi.stubGlobal('localStorage', undefined)
+    expect(load('k', 'fb')).toBe('fb')
     expect(() => save('k', 1)).not.toThrow()
     vi.stubGlobal('localStorage', {
       getItem: () => {

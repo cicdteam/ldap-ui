@@ -27,8 +27,9 @@ const MaxValue = 1 << 20
 // value is a delete of the old value plus an add of the new one, so the
 // server rejects the request when someone else changed it meanwhile.
 type Change struct {
-	// Op is "add" or "delete"; Modify itself also makes "replace" (see
-	// replaceBinaryChanges).
+	// Op is "add", "delete" or "replace". The UI sends only add and delete
+	// (changes/apply refuses any other op); replace comes from Modify itself,
+	// when it rewrites binary changes with replaceBinaryChanges.
 	Op     string   `json:"op"`
 	Attr   string   `json:"attr"`
 	Values []string `json:"values"`

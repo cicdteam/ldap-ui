@@ -10,6 +10,16 @@ export interface ConnectionStatus {
   changes: string
 }
 
+/** "1 change", "2 changes": n and the noun for it. */
+export function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/** The status bar's staged changes. */
+export function changeCount(n: number): string {
+  return n === 0 ? 'no staged changes' : plural(n, 'change', 'changes')
+}
+
 /** changes: the staged count the Review badge shows. profile: undefined until the list loads. */
 export function connectionStatus(
   info: Pick<Info, 'encrypted' | 'insecureSkipVerify' | 'activeDirectory' | 'vendor'>,
@@ -25,8 +35,7 @@ export function connectionStatus(
   return {
     address: profile?.url,
     transport,
-    server: info.activeDirectory ? 'Active Directory' : info.vendor || 'LDAP',
-    changes:
-      changes === 0 ? 'no staged changes' : `${changes} ${changes === 1 ? 'change' : 'changes'}`,
+    server: info.activeDirectory ? 'Active Directory' : info.vendor?.trim() || 'LDAP',
+    changes: changeCount(changes),
   }
 }

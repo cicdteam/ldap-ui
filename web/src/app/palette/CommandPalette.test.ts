@@ -12,6 +12,10 @@ import {
 } from '../events'
 import { addToGroup, batchActions, entryActions, filterActions } from './CommandPalette'
 
+// prefs.ts reads localStorage on import, and Node 26's own localStorage warns when read without
+// --localstorage-file: the import sees no storage instead, like a browser with storage blocked.
+vi.hoisted(() => vi.stubGlobal('localStorage', undefined))
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })

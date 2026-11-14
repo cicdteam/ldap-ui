@@ -1,9 +1,12 @@
 import type { ComponentProps } from 'react'
 import { cn } from './cn'
 
-/** The input look (surface, border, focus ring) for the selects and textareas Input does not render. */
+/**
+ * The input look (surface, border, focus ring) for the selects and textareas Input does not render.
+ * input-look exempts it from the global :focus-visible outline in index.css: the ring is its focus.
+ */
 export const inputLook =
-  'rounded-md border border-border-strong bg-bg text-fg outline-none placeholder:text-muted focus:border-accent focus:ring-3 focus:ring-accent/30'
+  'input-look rounded-md border border-border-strong bg-bg text-fg focus:outline-hidden placeholder:text-muted focus:border-accent focus:ring-3 focus:ring-accent/30'
 
 export function Input({ className, mono, ...rest }: ComponentProps<'input'> & { mono?: boolean }) {
   return (

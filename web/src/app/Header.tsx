@@ -9,6 +9,7 @@ import type { Entry } from '../lib/types'
 import { Badge, ColorDot, ProfileBadges } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { keyLabel } from '../lib/shortcuts'
+import { plural } from '../lib/status'
 import { CopyButton } from '../ui/CopyButton'
 import { PrefsToggles } from '../ui/PrefsToggles'
 import { useBatch } from './batch'
@@ -28,7 +29,7 @@ export function useDisconnect(): () => Promise<void> {
     const batch = batches.get(ws.conn)
     if (batch.length) {
       const n = touchedAttributes(batch)
-      const what = `${n} unapplied ${n === 1 ? 'change' : 'changes'}`
+      const what = plural(n, 'unapplied change', 'unapplied changes')
       if (!window.confirm(`Discard ${what} and disconnect?`)) return
     }
     // Undo history goes too: after a reconnect, Mod+Z must not bring back discarded work.
@@ -62,7 +63,7 @@ function ReviewBadge() {
   )
   if (!batch.length) return null
   const n = touchedAttributes(batch)
-  const label = `${n} ${n === 1 ? 'change' : 'changes'}`
+  const label = plural(n, 'change', 'changes')
   return (
     <Button
       size="sm"

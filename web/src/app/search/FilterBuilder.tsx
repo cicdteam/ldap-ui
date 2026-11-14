@@ -40,7 +40,7 @@ function CmpRow({ node, onChange }: { node: Cmp; onChange: (n: Cmp) => void }) {
           if (next === 'present') onChange({ ...node, op: '=', value: '*' })
           else onChange({ ...node, op: next, value: present ? '' : node.value })
         }}
-        className={`h-8 px-1 text-xs ${inputLook}`}
+        className={`h-[var(--ctl)] px-1 text-xs ${inputLook}`}
       >
         {OPS.map((o) => (
           <option key={o.value} value={o.value}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { connectionStatus, type StatusTone } from './status'
+import { changeCount, connectionStatus, plural, type StatusTone } from './status'
 
 const info = { encrypted: false, insecureSkipVerify: false, activeDirectory: false }
 const ldaps = { url: 'ldaps://samba:636', startTLS: false }
@@ -20,6 +20,10 @@ describe('connectionStatus transport', () => {
     )
     expect(got.transport).toEqual({ text, tone })
   })
+  it('encrypted, profile missing', () => {
+    const got = connectionStatus({ ...info, encrypted: true }, undefined, 0)
+    expect(got.transport).toEqual({ text: 'TLS', tone: 'ok' })
+  })
 })
 
 describe('connectionStatus server', () => {
@@ -28,6 +32,7 @@ describe('connectionStatus server', () => {
     ['AD with a vendor', true, 'Samba Team', 'Active Directory'],
     ['vendor', false, 'OpenLDAP', 'OpenLDAP'],
     ['blank vendor', false, '', 'LDAP'],
+    ['whitespace vendor', false, '  ', 'LDAP'],
     ['no vendor', false, undefined, 'LDAP'],
   ])('%s', (_, activeDirectory, vendor, want) => {
     expect(connectionStatus({ ...info, activeDirectory, vendor }, ldaps, 0).server).toBe(want)
@@ -41,6 +46,26 @@ describe('connectionStatus changes', () => {
     [5, '5 changes'],
   ])('%i', (n, want) => {
     expect(connectionStatus(info, ldaps, n).changes).toBe(want)
+  })
+})
+
+describe('changeCount', () => {
+  it.each([
+    [0, 'no staged changes'],
+    [1, '1 change'],
+    [2, '2 changes'],
+  ])('%i', (n, want) => {
+    expect(changeCount(n)).toBe(want)
+  })
+})
+
+describe('plural', () => {
+  it.each([
+    [0, '0 unapplied changes'],
+    [1, '1 unapplied change'],
+    [3, '3 unapplied changes'],
+  ])('%i', (n, want) => {
+    expect(plural(n, 'unapplied change', 'unapplied changes')).toBe(want)
   })
 })
 

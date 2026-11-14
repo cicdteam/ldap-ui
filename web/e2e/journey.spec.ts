@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eGroup, PHOTO } from './fixture'
 import { TMP } from './global-setup'
-import { attrRow, blur, canBind, openEntry } from './helpers'
+import { attrRow, blur, canBind, exact, openEntry } from './helpers'
 
 // The 3b, 3c and 3d success scenarios in one pass over the same entries, in an OU of their own; then
 // the server log has every write and none of the values written.
@@ -26,7 +26,6 @@ const PW_SERVER = 'Modify secret 2pt6'
 const PHOTO_B64 = readFileSync(PHOTO).toString('base64')
 const PHOTO_BYTES = readFileSync(PHOTO).length
 
-const exact = (name: string) => ({ name, exact: true })
 const at = (dn: string) => new RegExp(`dn=${encodeURIComponent(dn)}(&|$)`)
 const groupRow = (page: Page, dn: string) =>
   page.getByRole('region', exact('Member of')).locator(`[data-ref="${dn}"]`)

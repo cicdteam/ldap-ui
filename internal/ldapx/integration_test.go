@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"log"
 	"math/big"
 	"os"
@@ -55,14 +56,24 @@ func TestMain(m *testing.M) { os.Exit(runWithServers(m)) }
 // and terminates both.
 func runWithServers(m *testing.M) int {
 	tclog.SetDefault(tclog.NewNoopLogger())
-	ctx := context.Background()
+	// A failed start cancels the other one: the run fails either way.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var (
 		wg              sync.WaitGroup
 		openLDAP, samba testcontainers.Container
 		ldapErr, adErr  error
 	)
-	wg.Go(func() { openLDAP, ldapErr = startOpenLDAP(ctx) })
-	wg.Go(func() { samba, adErr = startSamba(ctx) })
+	wg.Go(func() {
+		if openLDAP, ldapErr = startOpenLDAP(ctx); ldapErr != nil {
+			cancel()
+		}
+	})
+	wg.Go(func() {
+		if samba, adErr = startSamba(ctx); adErr != nil {
+			cancel()
+		}
+	})
 	wg.Wait()
 	defer func() { _ = testcontainers.TerminateContainer(openLDAP) }()
 	defer func() { _ = testcontainers.TerminateContainer(samba) }()
@@ -74,9 +85,13 @@ func runWithServers(m *testing.M) int {
 }
 
 // startOpenLDAP starts OpenLDAP and seeds it with seedLDIF. It returns the
-// container for termination even when it fails later.
-func startOpenLDAP(ctx context.Context) (testcontainers.Container, error) {
+// container for termination even when it fails later, and an error carries
+// the tail of the container log.
+func startOpenLDAP(ctx context.Context) (_ testcontainers.Container, err error) {
 	ctr, err := openldap.Run(ctx, openLDAPImage)
+	if ctr != nil {
+		defer func() { err = withLogTail(ctx, ctr, err) }()
+	}
 	if err != nil {
 		return ctr, fmt.Errorf("start openldap: %w", err)
 	}
@@ -87,6 +102,26 @@ func startOpenLDAP(ctx context.Context) (testcontainers.Container, error) {
 		return ctr, fmt.Errorf("seed openldap: %w", err)
 	}
 	return ctr, nil
+}
+
+// withLogTail adds the last 50 lines of ctr's log to err, the error of a
+// failed start, so that a CI log shows what the server said. The log is
+// read even when ctx is done, as it is after a cancelled start.
+func withLogTail(ctx context.Context, ctr testcontainers.Container, err error) error {
+	if err == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	rc, logErr := ctr.Logs(ctx)
+	if logErr != nil {
+		return fmt.Errorf("%w (container log: %w)", err, logErr)
+	}
+	defer rc.Close()
+	b, _ := io.ReadAll(rc) // ponytail: a log cut short by a read error still helps
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	lines = lines[max(0, len(lines)-50):]
+	return fmt.Errorf("%w\ncontainer log, last %d lines:\n%s", err, len(lines), strings.Join(lines, "\n"))
 }
 
 func userDN(i int) string { return fmt.Sprintf("uid=user%05d,%s", i, testPeople) }
