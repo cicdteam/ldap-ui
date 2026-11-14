@@ -158,7 +158,9 @@ function EntryView({
         {classes.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {classes.map((c) => (
-              <Badge key={c.text}>{c.text}</Badge>
+              <Badge key={c.text} shape="chip">
+                {c.text}
+              </Badge>
             ))}
           </div>
         )}

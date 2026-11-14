@@ -16,7 +16,7 @@ const shapes = {
   chip: 'rounded px-1.5 font-mono text-[10.5px]',
 }
 
-/** A label: pill by default; chip for value-like tokens (UAC flags). */
+/** A label: pill by default; chip for value-like tokens (objectClasses, UAC flags). */
 export function Badge({
   tone = 'neutral',
   shape = 'pill',

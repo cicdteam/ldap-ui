@@ -24,7 +24,7 @@ import {
 import type { ApiErrorBody, Attribute, Entry } from '../../lib/types'
 import { Banner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
-import { Input } from '../../ui/Input'
+import { Input, inputLook } from '../../ui/Input'
 import { useBatch, useBatchError } from '../batch'
 import { useWorkspace } from '../context'
 import { AddAttribute } from './AddAttribute'
@@ -162,7 +162,7 @@ function AttributeRow({
               onChange={(e) => {
                 if (e.target.value) stage({ kind: 'add', attr: attr.name, value: e.target.value })
               }}
-              className="h-7 rounded-md border border-border bg-bg px-2 text-xs text-fg outline-none focus:border-accent"
+              className={`h-7 px-2 text-xs ${inputLook}`}
             >
               <option value="">+ class</option>
               {auxiliaryCandidates(classes, schema).map((c) => (

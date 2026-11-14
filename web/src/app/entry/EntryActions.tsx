@@ -10,7 +10,7 @@ import { useWorkspace } from '../context'
 import { openEntryAction, visibleActions } from './actions'
 
 const menuItem =
-  'block w-full rounded px-2 py-1 text-left text-sm hover:bg-hover disabled:pointer-events-none disabled:opacity-60'
+  'block w-full rounded-md px-2 py-1 text-left text-sm hover:bg-hover disabled:pointer-events-none disabled:opacity-60'
 
 /**
  * The inspector's Actions menu and its keys (N, C, R or F2, P, Delete or Mod+Backspace). Set

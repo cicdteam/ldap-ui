@@ -14,14 +14,13 @@ import {
 } from '../../lib/entryOps'
 import { attributeHelp, attrKey } from '../../lib/schema'
 import { Button } from '../../ui/Button'
-import { Input } from '../../ui/Input'
+import { Input, inputLook } from '../../ui/Input'
 import { useWorkspace } from '../context'
 import { ValueEditor } from '../inspector/ValueEditor'
 import { UploadFile, ValueView } from '../inspector/Value'
 import { Field } from './WriteDialog'
 
-const select =
-  'h-7 rounded-md border border-border bg-bg px-2 text-xs text-fg outline-none focus:border-accent'
+const select = `h-7 px-2 text-xs ${inputLook}`
 
 /** The fields of a new entry: parent, classes, RDN and attribute rows. */
 export function EntryFields({

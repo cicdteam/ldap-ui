@@ -197,20 +197,24 @@ body {
   outline-offset: -2px;
 }
 
-/* Dialogs, popovers and the palette: the only shadow; dark adds a 1px top highlight. */
-.elevated {
+/* Dialogs, popovers (the filter completion list too) and the palette: the only shadow;
+   dark adds a 1px top highlight. */
+.elevated,
+.cm-tooltip-autocomplete {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .elevated {
+  :root:not([data-theme='light']) .elevated,
+  :root:not([data-theme='light']) .cm-tooltip-autocomplete {
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.05),
       0 8px 24px rgb(0 0 0 / 0.12);
   }
 }
 
-:root[data-theme='dark'] .elevated {
+:root[data-theme='dark'] .elevated,
+:root[data-theme='dark'] .cm-tooltip-autocomplete {
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.05),
     0 8px 24px rgb(0 0 0 / 0.12);

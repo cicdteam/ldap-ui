@@ -8,7 +8,7 @@ import type { Scope } from '../../lib/types'
 import { keyLabel } from '../../lib/shortcuts'
 import { Button } from '../../ui/Button'
 import { cn } from '../../ui/cn'
-import { Input } from '../../ui/Input'
+import { Input, inputLook } from '../../ui/Input'
 import { useWorkspace } from '../context'
 import { FOCUS_FILTER, FORMAT_FILTER, RUN_SEARCH } from '../events'
 import { searchKey } from '../queries'
@@ -61,7 +61,7 @@ export const isSaved = (x: unknown): x is SavedSearch =>
 
 export const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
-const menuItem = 'block w-full rounded px-2 py-1 text-left hover:bg-hover'
+const menuItem = 'block w-full rounded-md px-2 py-1 text-left hover:bg-hover'
 
 function SearchLine({ s }: { s: SearchState }) {
   return (
@@ -270,7 +270,7 @@ export function QueryBar() {
           <select
             value={draft.scope}
             onChange={(e) => setDraft((d) => ({ ...d, scope: e.target.value as Scope }))}
-            className="h-[var(--ctl)] rounded-md border border-border bg-bg px-1 text-xs"
+            className={`h-[var(--ctl)] px-1 text-xs ${inputLook}`}
           >
             <option value="base">Base entry</option>
             <option value="one">One level</option>

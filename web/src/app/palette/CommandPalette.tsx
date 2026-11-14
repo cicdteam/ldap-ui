@@ -29,7 +29,7 @@ const kindIcon: Record<EntryKind, typeof User> = {
   other: FileText,
 }
 const item =
-  'flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-sm aria-selected:bg-selected data-[disabled=true]:opacity-50'
+  'flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm aria-selected:bg-selected data-[disabled=true]:opacity-50'
 const group =
   'px-1 py-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted'
 
