@@ -19,6 +19,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,6 +246,65 @@ func TestConnectStartTLSStallTimesOut(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("connect(stalled StartTLS) still blocked after 3s")
+	}
+}
+
+// TestConnectTimeoutErrors pins how connect reports a server that stops
+// answering. An ldaps handshake out of time is a context.DeadlineExceeded,
+// the API's timeout, as tls.DialWithDialer reported it. go-ldap turns any
+// StartTLS failure into ErrorNetwork text, and a StartTLS request timeout
+// was ErrorNetwork before connect had a deadline.
+func TestConnectTimeoutErrors(t *testing.T) {
+	silent := func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
+	stallHandshake := func(n int32, conn net.Conn) {
+		id, err := readRequest(conn)
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		silent(n, conn)
+	}
+	tests := []struct {
+		name        string
+		scheme      string
+		startTLS    bool
+		serve       func(int32, net.Conn)
+		wantTimeout bool // errors.Is(err, context.DeadlineExceeded)
+	}{
+		{name: "ldaps handshake", scheme: "ldaps", serve: silent, wantTimeout: true},
+		{name: "StartTLS response", scheme: "ldap", startTLS: true, serve: silent},
+		{name: "StartTLS handshake", scheme: "ldap", startTLS: true, serve: stallHandshake},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, _ := fakeServer(t, tc.serve)
+			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
+			p.StartTLS = tc.startTLS
+			p.ConnectTimeout = 200 * time.Millisecond
+			p.SearchTimeout = 10 * time.Second // the connect deadline must fire first
+			cfg, err := p.TLSConfig()
+			if err != nil {
+				t.Fatalf("TLSConfig() error = %v", err)
+			}
+			// A socket deadline and a context timer that expire together can
+			// fire in either order; enough attempts catch the losing order.
+			errs := make([]error, 20)
+			var wg sync.WaitGroup
+			for i := range errs {
+				wg.Go(func() {
+					lc, err := connect(context.Background(), p, cfg)
+					if err == nil {
+						_ = lc.Close()
+					}
+					errs[i] = err
+				})
+			}
+			wg.Wait()
+			for _, err := range errs {
+				if !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) || errors.Is(err, context.DeadlineExceeded) != tc.wantTimeout {
+					t.Fatalf("connect(stalled %s) error = %v, want ErrorNetwork with context.DeadlineExceeded %v", tc.name, err, tc.wantTimeout)
+				}
+			}
+		})
 	}
 }
 

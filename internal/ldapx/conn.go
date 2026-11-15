@@ -228,21 +228,25 @@ func connect(ctx context.Context, p profile.Profile, cfg *tls.Config) (*ldap.Con
 	if err != nil {
 		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
 	}
-	deadline, _ := ctx.Deadline()
-	if err := raw.SetDeadline(deadline); err != nil {
-		_ = raw.Close()
-		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
-	}
 	dc := &deadlineConn{Conn: raw}
 	var conn net.Conn = dc
 	isTLS := u.Scheme == "ldaps"
 	if isTLS {
+		// ctx alone bounds the handshake, so that running out of time
+		// always yields ctx.Err(). A socket deadline at the same instant
+		// could fire first and turn a timeout into a plain network error.
 		tc := tls.Client(dc, cfg)
 		if err := tc.HandshakeContext(ctx); err != nil {
 			_ = raw.Close()
 			return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
 		}
 		conn = tc
+	}
+	// go-ldap's StartTLS takes no context, so the socket deadline bounds it.
+	deadline, _ := ctx.Deadline()
+	if err := raw.SetDeadline(deadline); err != nil {
+		_ = raw.Close()
+		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
 	}
 	lc := ldap.NewConn(conn, isTLS)
 	lc.Start()
