@@ -57,7 +57,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 - **Connections** (`/`): profiles from `connections.yaml` (marked `yaml`) and
   ones saved in the UI. Passwords are never stored: a profile with a bind DN
   but no `passwordEnv`/`passwordFile` asks for one at connect time, and so
-  does one whose configured password the server rejects or cannot read. An
+  does one whose configured password the server rejects or cannot read. A
+  `bindDNTemplate` profile asks for a username and a password (see [Per-user
+  login](#per-user-login)). An
   untrusted TLS certificate shows its chain and fingerprints; "Trust this CA"
   stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
   point `caFile` at it).
@@ -472,9 +474,14 @@ one still holds the data dir, so the new pod exits (see [Saved
 connections](#saved-connections)) and the rollout stalls. Every restart
 ends all sessions, and users connect again.
 
-- **Fixed profiles only** is the recommended mode for a shared instance:
-  put every connection in `connections.yaml` and set `LDAPUI_DATA_DIR=""`.
-  Saving in the UI then fails with 409 `saving_disabled`, and connect opens
+- **Fixed profiles with per-user login** is the recommended setup for a
+  shared instance: put every connection in `connections.yaml` with a
+  `bindDNTemplate` (see [Per-user login](#per-user-login)), set
+  `LDAPUI_DATA_DIR=""`, and keep the token or an SSO proxy in front (with
+  `--identity-header` and `identityUser`, the proxy also decides which
+  username each person may sign in as). Everyone then works as themselves,
+  and no service account password is stored in the deployment. Saving in
+  the UI fails with 409 `saving_disabled`, and connect opens
   only the profiles from that file, so nobody can make the server open
   connections to other hosts and ports it reaches, or change a shared
   profile so that the next person's password goes to a server of their
@@ -536,6 +543,17 @@ A connect to such a profile goes like this:
 4. The connection's lines in the log (`connected`, `connect failed`, every
    write and `disconnected`) carry that DN as `bindDN`.
 
+The connect dialog of such a profile has a visible Username field above the
+password, marked `autocomplete="username"` so that a password manager offers
+the accounts it saved; ldapui itself does not remember the username. With
+`identityUser` the field is filled in and read-only. Once connected, the
+workspace header shows `Signed in as` and the DN the connection bound as,
+for example `Signed in as uid=alice,ou=people,dc=example,dc=org`, or the UPN
+for a template like `{user}@corp.example`. Profiles with a fixed `bindDN`
+do not show this line. Two people signed in to the same profile from two
+browsers each have their own connection: one's disconnect or wrong password
+does not touch the other's.
+
 With `identityUser`, the username is tied to the user an authenticating
 proxy verified. With oauth2-proxy in front of ldapui, as under [Logs and
 accountability](#logs-and-accountability):
@@ -561,14 +579,14 @@ password is still the directory's: the proxy decides who may sign in, the
 directory checks the password. A request without the header, or from an
 address outside `--trusted-proxies`, cannot connect to the profile.
 
-| Code | Status | When |
-|---|---|---|
-| `username_required` | 400 | no username |
-| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity |
-| `identity_mismatch` | 403 | the username is not the one the identity maps to |
-| `invalid_username` | 400 | the username does not match the pattern above |
-| `password_required` | 400 | no password |
-| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects to this DN that are still under way; `Retry-After` gives the seconds to wait |
+| Code | Status | When | The connect dialog says |
+|---|---|---|---|
+| `username_required` | 400 | no username | Enter your username. |
+| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity | Open ldapui through its sign-in proxy to use this connection. |
+| `identity_mismatch` | 403 | the username is not the one the identity maps to | Use the username you signed in to the proxy with. |
+| `invalid_username` | 400 | the username does not match the pattern above | A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long. |
+| `password_required` | 400 | no password | this profile needs a password |
+| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects to this DN that are still under way; `Retry-After` gives the seconds to wait | Too many failed sign-ins for this account. Wait a minute and try again. |
 
 The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without

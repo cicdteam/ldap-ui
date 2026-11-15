@@ -12,6 +12,7 @@ import { CertChain } from './CertChain'
 /**
  * Connects to profile; asks for a password when the server has none or the
  * stored one failed. An empty password makes the server use the stored one.
+ * A userLogin profile always asks for a username and a password.
  */
 export function ConnectDialog({
   profile,
@@ -24,13 +25,16 @@ export function ConnectDialog({
 }) {
   const qc = useQueryClient()
   const [password, setPassword] = useState('')
-  const needsPassword = !!profile && !profile.hasPassword && !!profile.bindDN
+  const [typed, setTyped] = useState('')
+  const username = profile?.usernameLocked ? (profile.username ?? '') : typed
+  const needsPassword =
+    !!profile && (profile.userLogin || (!profile.hasPassword && !!profile.bindDN))
   // Kept across retries: a pending connect clears the error, not the field.
   // The first one wins: it comes from the stored password, later ones from typed ones.
   const [hint, setHint] = useState<string>()
   const hintId = useId()
   const connect = useMutation({
-    mutationFn: (p: Profile) => api.connect(p.name, password),
+    mutationFn: (p: Profile) => api.connect(p.name, password, p.userLogin ? username : undefined),
     onSuccess: async (_info, p) => {
       setPassword('')
       qc.removeQueries({ queryKey: ['c', p.name] })
@@ -78,17 +82,32 @@ export function ConnectDialog({
       >
         {(needsPassword || hint) && (
           <>
-            {/* Password managers key saved passwords by this username, so
-                each bind DN gets its own instead of one for every profile. */}
-            <input
-              type="text"
-              autoComplete="username"
-              value={profile.bindDN ?? ''}
-              readOnly
-              tabIndex={-1}
-              aria-hidden
-              className="sr-only"
-            />
+            {profile.userLogin ? (
+              <label className="block space-y-1">
+                <span className="text-xs text-muted">Username</span>
+                <Input
+                  autoFocus={!profile.usernameLocked}
+                  autoComplete="username"
+                  required
+                  readOnly={profile.usernameLocked}
+                  value={username}
+                  onChange={(e) => setTyped(e.target.value)}
+                  className="w-full"
+                />
+              </label>
+            ) : (
+              /* Password managers key saved passwords by this username, so
+                 each bind DN gets its own instead of one for every profile. */
+              <input
+                type="text"
+                autoComplete="username"
+                value={profile.bindDN ?? ''}
+                readOnly
+                tabIndex={-1}
+                aria-hidden
+                className="sr-only"
+              />
+            )}
             {!needsPassword && (
               <p id={hintId} className="text-xs text-warn">
                 {hint}
@@ -96,12 +115,18 @@ export function ConnectDialog({
             )}
             <label className="block space-y-1">
               <span className="text-xs text-muted">
-                Password for <span className="font-mono">{profile.bindDN}</span>
+                {profile.userLogin ? (
+                  'Password'
+                ) : (
+                  <>
+                    Password for <span className="font-mono">{profile.bindDN}</span>
+                  </>
+                )}
               </span>
               {/* autoFocus also focuses the field when an error makes it appear. */}
               <Input
                 type="password"
-                autoFocus
+                autoFocus={!profile.userLogin || profile.usernameLocked}
                 autoComplete="current-password"
                 aria-describedby={needsPassword ? undefined : hintId}
                 value={password}

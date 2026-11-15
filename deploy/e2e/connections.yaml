@@ -39,3 +39,14 @@ connections:
     passwordEnv: AD_LDAP_PASSWORD
     caFile: ../deploy/ad-test/tls/ca.pem # serve.sh runs from web/
     environment: dev
+  - name: people # each person signs in with a username (peruser.spec.ts)
+    url: ldap://127.0.0.1:1390
+    baseDN: dc=example,dc=org
+    bindDNTemplate: uid={user},ou=people,dc=example,dc=org
+    environment: dev
+  - name: ad-people
+    url: ldaps://127.0.0.1:1637
+    baseDN: DC=corp,DC=example,DC=test
+    bindDNTemplate: "{user}@corp.example.test"
+    caFile: ../deploy/ad-test/tls/ca.pem # serve.sh runs from web/
+    environment: dev

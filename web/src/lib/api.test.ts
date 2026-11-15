@@ -100,6 +100,20 @@ describe('request', () => {
     expect(JSON.parse(init.body as string)).toEqual({ profile: 'demo', password: 'pw' })
   })
 
+  it('sends the username to connect only when given', async () => {
+    const post = respond(200, {})
+    vi.stubGlobal('fetch', post)
+    await api.connect('people', 'pw', 'user001')
+    await api.connect('demo', 'pw')
+    const bodies = post.mock.calls.map(([, init]) =>
+      JSON.parse((init as RequestInit).body as string),
+    )
+    expect(bodies).toStrictEqual([
+      { profile: 'people', password: 'pw', username: 'user001' },
+      { profile: 'demo', password: 'pw' },
+    ])
+  })
+
   it('posts entry writes to their endpoints', async () => {
     const post = respond(200, { dn: 'uid=a,dc=x' })
     vi.stubGlobal('fetch', post)
@@ -206,6 +220,16 @@ describe('errorMessage', () => {
     expect(errorMessage(new Error('boom'))).toBe('boom')
     expect(errorMessage('x')).toBe('x')
   })
+
+  it.each([
+    [400, 'username_required'],
+    [400, 'invalid_username'],
+    [403, 'identity_required'],
+    [403, 'identity_mismatch'],
+    [429, 'too_many_attempts'],
+  ])('has UI text for %i %s', (status, code) => {
+    expect(errorMessage(new ApiError(status, { code, message: '' }))).not.toBe('')
+  })
 })
 
 describe('toProfileInput', () => {
@@ -220,6 +244,8 @@ describe('toProfileInput', () => {
       editable: true,
       hasPassword: false,
       connected: true,
+      userLogin: false,
+      usernameLocked: false,
       caPEM: 'pem',
     }
     expect(toProfileInput(p)).toEqual({

@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LogOut, PanelLeft, PanelRight } from 'lucide-react'
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -83,6 +83,9 @@ export function Header({ extra }: { extra?: ReactNode }) {
   const ws = useWorkspace()
   const disconnect = useDisconnect()
   const shown = ws.dn || ws.info.baseDN
+  // A fixed bind DN is the profile's, not a person's: only userLogin names who signed in.
+  const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api.profiles() })
+  const userLogin = profiles.data?.find((p) => p.name === ws.conn)?.userLogin
   return (
     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-chrome px-2">
       <Link
@@ -100,6 +103,11 @@ export function Header({ extra }: { extra?: ReactNode }) {
       <Breadcrumbs dn={shown} base={ws.info.baseDN} onSelect={ws.select} />
       <CopyButton text={shown} label="Copy DN" />
       <div className="ml-auto flex shrink-0 items-center gap-1">
+        {userLogin && ws.info.bindDN && (
+          <span className="max-w-md truncate px-1 text-xs text-muted" title={ws.info.bindDN}>
+            Signed in as <span className="font-mono">{ws.info.bindDN}</span>
+          </span>
+        )}
         <ReviewBadge />
         {extra}
         <Button
