@@ -381,7 +381,9 @@ only when the proxy replaces it on every request (ingress-nginx and nginx's
 `proxy_set_header` do) and nothing else can reach ldapui from a trusted
 address: list only the proxy's addresses, and keep other clients off the
 ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
-`--identity-header` without `--trusted-proxies` is a startup error.
+`--identity-header` without `--trusted-proxies` is a startup error, and so
+is `Authorization`, `Proxy-Authorization` or `Cookie` as the header: they
+carry credentials.
 
 ## Running for a team
 

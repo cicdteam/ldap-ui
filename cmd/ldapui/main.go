@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -164,6 +165,13 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	if c.identityHeader != "" && len(c.trustedProxies) == 0 {
 		return config{}, errors.New("--identity-header needs --trusted-proxies, the addresses of the proxy that sets it")
 	}
+	// These carry the browser's or the proxy's credentials, which must not
+	// reach the log.
+	for _, h := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
+		if strings.EqualFold(c.identityHeader, h) {
+			return config{}, fmt.Errorf("--identity-header %s: carries credentials; want the header the proxy sets to the user", c.identityHeader)
+		}
+	}
 	if c.sessionIdle <= 0 {
 		return config{}, fmt.Errorf("--session-idle %v: want a positive duration", c.sessionIdle)
 	}
@@ -171,6 +179,9 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 		return config{}, fmt.Errorf("--base-path %q: want a path like /ldap", c.basePath)
 	}
 	c.basePath = strings.TrimRight(c.basePath, "/")
+	if c.basePath != "" && path.Clean(c.basePath) != c.basePath {
+		return config{}, fmt.Errorf("--base-path %q: want a path without . or .. segments", c.basePath)
+	}
 	// The token is a secret, so the error does not echo it.
 	if c.authToken != "" && !authTokenPattern.MatchString(c.authToken) {
 		return config{}, errors.New("--auth-token: " + authTokenRule)

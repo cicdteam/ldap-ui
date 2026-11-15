@@ -50,7 +50,7 @@ func TestParseFlags(t *testing.T) {
 		t.Errorf("parseFlags(--listen) = %q, %v, want the flag to win over env", got.listen, err)
 	}
 
-	for _, bad := range []string{"ldap", "/a b", "/ldap/<x>"} {
+	for _, bad := range []string{"ldap", "/a b", "/ldap/<x>", "/.", "/..", "/a/..", "/a/./b", "/a/../"} {
 		if _, err := parseFlags([]string{"--base-path", bad}, getenv, io.Discard); err == nil {
 			t.Errorf("parseFlags(--base-path %q) error = nil, want error", bad)
 		}
@@ -193,6 +193,13 @@ func TestParseFlagsIdentity(t *testing.T) {
 	args := []string{"--identity-header", "X-Auth-Request-Email", "--trusted-proxies", "10.0.0.0/8,10.0.0.0/99"}
 	if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "10.0.0.0/99") {
 		t.Errorf("parseFlags(%q) error = %v, want an error naming 10.0.0.0/99", args, err)
+	}
+	// Headers that carry credentials would put them in the log.
+	for _, h := range []string{"Authorization", "proxy-authorization", "COOKIE"} {
+		args := []string{"--identity-header", h, "--trusted-proxies", "10.0.0.0/8"}
+		if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), h) {
+			t.Errorf("parseFlags(%q) error = %v, want an error naming %s", args, err, h)
+		}
 	}
 }
 
