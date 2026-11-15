@@ -154,8 +154,8 @@ func newHTTPServer(h http.Handler) *http.Server {
 	}
 }
 
-// loginURL is the link printed when a token was generated. Inside a
-// container the published host port may differ; the log line says so.
+// loginURL is the link printed when a token was generated. Behind a proxy or
+// inside a container the host and port may differ; the log line says so.
 func loginURL(listenAddr, basePath, token string) string {
 	_, port, _ := net.SplitHostPort(listenAddr)
 	return "http://localhost:" + port + basePath + "/?token=" + url.QueryEscape(token)
@@ -219,7 +219,7 @@ func runTo(args []string, stdout io.Writer) error {
 	}
 	logger.Info("listening", "version", version, "addr", ln.Addr().String(), "basePath", cfg.basePath, "profiles", len(fixed))
 	if generated {
-		logger.Info("no --auth-token set; open the UI with this login link (adjust the port if it is published differently)",
+		logger.Info("no --auth-token set; open the UI with this login link (adjust the host and port to how you reach it)",
 			"url", loginURL(ln.Addr().String(), cfg.basePath, cfg.authToken))
 	}
 

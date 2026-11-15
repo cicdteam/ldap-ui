@@ -213,6 +213,68 @@ func TestDialUntrustedCertificate(t *testing.T) {
 	}
 }
 
+// TestIdleTLSConnectionSurvivesConnectTimeout checks that the connect-phase
+// deadline does not outlive connect over TLS either: an ldaps:// or StartTLS
+// connection idle for longer than the connect timeout still serves a search,
+// without a redial.
+func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
+	cert, caPEM := selfSignedCert(t)
+	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	ldaps := func(_ int32, conn net.Conn) {
+		tc := tls.Server(conn, serverTLS)
+		if tc.Handshake() == nil {
+			answerSearches(tc)
+		}
+	}
+	startTLS := func(n int32, conn net.Conn) {
+		id, err := readRequest(conn)
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		ldaps(n, conn)
+	}
+	tests := []struct {
+		name     string
+		scheme   string
+		startTLS bool
+		serve    func(int32, net.Conn)
+	}{
+		{name: "ldaps", scheme: "ldaps", serve: ldaps},
+		{name: "StartTLS", scheme: "ldap", startTLS: true, serve: startTLS},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, accepts := fakeServer(t, tc.serve)
+			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
+			p.StartTLS = tc.startTLS
+			p.CAPEM = caPEM
+			p.ConnectTimeout = 300 * time.Millisecond
+			cfg, err := p.TLSConfig()
+			if err != nil {
+				t.Fatalf("TLSConfig() error = %v", err)
+			}
+			lc, err := connect(context.Background(), p, cfg)
+			if err != nil {
+				t.Fatalf("connect(%s) error = %v", p.URL, err)
+			}
+			c := &Conn{prof: p, lc: lc}
+			defer c.Close()
+			time.Sleep(time.Second)
+			if lc.IsClosing() {
+				t.Error("connection closed while idle, want it open past the connect timeout")
+			}
+			// The fake answers with no entries, which rawEntry reports as
+			// noSuchObject.
+			if _, err := c.rawEntry(context.Background(), "dc=x", nil); !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) {
+				t.Errorf("rawEntry() after idling error = %v, want noSuchObject", err)
+			}
+			if n := accepts.Load(); n != 1 {
+				t.Errorf("rawEntry() after idling opened %d connections in total, want 1", n)
+			}
+		})
+	}
+}
+
 // TestConnectStartTLSStallTimesOut checks that a server which accepts
 // StartTLS and then never answers the TLS handshake cannot hold connect
 // past the connect timeout.

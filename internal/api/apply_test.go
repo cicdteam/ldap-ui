@@ -272,8 +272,8 @@ func TestBlameManyNames(t *testing.T) {
 }
 
 // TestFoldKey checks that foldKey keys exactly what strings.EqualFold
-// matches, also where strings.ToLower would not: long s, dotted capital I,
-// Kelvin sign, final sigma, and invalid UTF-8.
+// matches, also where strings.ToLower disagrees with EqualFold: long s,
+// dotted capital I and final sigma.
 func TestFoldKey(t *testing.T) {
 	pairs := [][2]string{
 		{"cn", "CN"},
