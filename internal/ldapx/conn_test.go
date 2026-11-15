@@ -1008,3 +1008,29 @@ func TestBERPacketCap(t *testing.T) {
 		t.Errorf("ber.MaxPacketLengthBytes = %d, want %d", got, want)
 	}
 }
+
+func TestInfoBindDN(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		id, err := readRequest(conn) // the bind
+		if err != nil || writeResult(conn, id, ldap.ApplicationBindResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		id, err = readRequest(conn) // the root DSE
+		if err != nil || writeEntry(conn, id, "", attr("namingContexts", "dc=example,dc=org")) != nil ||
+			writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	const dn = "uid=user001,ou=people,dc=example,dc=org"
+	p := fakeProfile(url)
+	p.BindDN = dn
+	c, err := Dial(context.Background(), p, "secret001")
+	if err != nil {
+		t.Fatalf("Dial(%s) error = %v", dn, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if got := c.Info().BindDN; got != dn {
+		t.Errorf("Dial(%s).Info().BindDN = %q, want %q", dn, got, dn)
+	}
+}

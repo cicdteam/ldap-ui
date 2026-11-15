@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
@@ -37,16 +38,29 @@ type profileView struct {
 	Editable    bool `json:"editable"`
 	HasPassword bool `json:"hasPassword"` // the server can bind without asking
 	Connected   bool `json:"connected"`
+	// UserLogin is set for a bindDNTemplate profile, which asks for a
+	// username. Under identityUser, Username is the one the caller's
+	// trusted identity allows, and UsernameLocked says it cannot be changed.
+	UserLogin      bool   `json:"userLogin"`
+	Username       string `json:"username,omitempty"`
+	UsernameLocked bool   `json:"usernameLocked"`
 }
 
-func (s *server) view(p profile.Profile, editable bool, connected map[string]bool) profileView {
-	return profileView{
+// view is p as the UI sees it. identity is the caller's trusted identity,
+// "" without one.
+func (s *server) view(p profile.Profile, editable bool, connected map[string]bool, identity string) profileView {
+	v := profileView{
 		Profile:     p,
 		ReadOnly:    p.IsReadOnly(),
 		Editable:    editable,
 		HasPassword: p.PasswordEnv != "" || p.PasswordFile != "",
 		Connected:   connected[p.Name],
+		UserLogin:   p.UserLogin(),
 	}
+	if p.IdentityUser != "" && identity != "" {
+		v.Username, v.UsernameLocked = p.IdentityUsername(identity), true
+	}
+	return v
 }
 
 func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
@@ -55,12 +69,13 @@ func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	for _, n := range s.sessions.Names(sessionID(r)) {
 		connected[n] = true
 	}
+	identity, _ := s.identity(r)
 	views := make([]profileView, 0, len(fixed)+len(saved))
 	for _, p := range fixed {
-		views = append(views, s.view(p, false, connected))
+		views = append(views, s.view(p, false, connected, identity))
 	}
 	for _, p := range saved {
-		views = append(views, s.view(p, true, connected))
+		views = append(views, s.view(p, true, connected, identity))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -90,7 +105,7 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
 			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
 		}, s.who(r))...)
-		writeJSON(w, http.StatusOK, s.view(saved, true, nil))
+		writeJSON(w, http.StatusOK, s.view(saved, true, nil, ""))
 	}
 }
 
@@ -116,7 +131,9 @@ func newInfoView(info ldapx.Info, p profile.Profile) infoView {
 }
 
 type connectRequest struct {
-	Profile  string `json:"profile"`
+	Profile string `json:"profile"`
+	// Username is for a bindDNTemplate profile; other profiles ignore it.
+	Username string `json:"username,omitempty"`
 	Password string `json:"password"`
 }
 
@@ -131,7 +148,13 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	password := req.Password
-	if password == "" {
+	if p.UserLogin() {
+		bound, ok := s.userLogin(w, r, p, req)
+		if !ok {
+			return
+		}
+		p = bound
+	} else if password == "" {
 		configured, ok, err := p.ConfiguredPassword()
 		if err != nil {
 			// err names the env var or file; keep that in the server log.
@@ -174,6 +197,50 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 
+// userLogin checks a connect to the bindDNTemplate profile p, in this
+// order: a username (400 username_required); under identityUser, a trusted
+// identity (403 identity_required) that maps to the username, compared
+// case-insensitively (403 identity_mismatch); a username the template
+// accepts (400 invalid_username); a password (400 password_required). It
+// returns p with BindDN set to the DN to bind as, or writes the refusal and
+// returns false, so that a template profile never binds anonymously:
+// RFC 4513 treats a bind with an empty password as unauthenticated, and
+// many servers accept it.
+func (s *server) userLogin(w http.ResponseWriter, r *http.Request, p profile.Profile, req connectRequest) (profile.Profile, bool) {
+	refuse := func(status int, code, msg string) (profile.Profile, bool) {
+		writeError(w, status, apiError{Code: code, Message: msg})
+		return profile.Profile{}, false
+	}
+	if req.Username == "" {
+		return refuse(http.StatusBadRequest, "username_required", "this profile needs a username")
+	}
+	if p.IdentityUser != "" {
+		identity, ok := s.identity(r)
+		if !ok || identity == "" {
+			return refuse(http.StatusForbidden, "identity_required", "this profile needs the user verified by the authenticating proxy")
+		}
+		// Equal byte lengths keep EqualFold to ASCII: BindDNFor below takes
+		// only ASCII usernames, and every non-ASCII rune that folds to an
+		// ASCII letter (the Kelvin sign, the long s) is longer.
+		if mapped := p.IdentityUsername(identity); len(mapped) != len(req.Username) || !strings.EqualFold(mapped, req.Username) {
+			return refuse(http.StatusForbidden, "identity_mismatch", "the username must be the user the authenticating proxy verified")
+		}
+	}
+	dn, err := p.BindDNFor(req.Username)
+	if errors.Is(err, profile.ErrInvalidUsername) {
+		return refuse(http.StatusBadRequest, "invalid_username", err.Error())
+	}
+	if err != nil {
+		s.fail(w, err)
+		return profile.Profile{}, false
+	}
+	if req.Password == "" {
+		return refuse(http.StatusBadRequest, "password_required", "this profile needs a password")
+	}
+	p.BindDN = dn
+	return p, true
+}
+
 func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Profile string `json:"profile"`
@@ -181,8 +248,12 @@ func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req, maxBody) {
 		return
 	}
-	s.sessions.Drop(sessionID(r), req.Profile)
 	p, _ := s.catalog.Find(req.Profile) // for the bind DN; "" for an unknown name
+	// The connection's DN, which for a template profile the catalog lacks.
+	if d, err := s.sessions.Get(sessionID(r), req.Profile); err == nil && d.Info().BindDN != "" {
+		p.BindDN = d.Info().BindDN
+	}
+	s.sessions.Drop(sessionID(r), req.Profile)
 	s.log.Info("disconnected", s.attributed(r, p, "profile", req.Profile)...)
 	w.WriteHeader(http.StatusNoContent)
 }

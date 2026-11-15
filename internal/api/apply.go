@@ -74,6 +74,11 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request, req writeRequest,
 		s.fail(w, err)
 		return nil, profile.Profile{}, false
 	}
+	// The logs name the DN the session bound as, which for a template
+	// profile the catalog lacks.
+	if dn := d.Info().BindDN; dn != "" {
+		p.BindDN = dn
+	}
 	refuse := func(status int, e apiError) (Directory, profile.Profile, bool) {
 		writeError(w, status, e)
 		return nil, profile.Profile{}, false

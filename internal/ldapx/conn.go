@@ -58,6 +58,10 @@ type Info struct {
 	PasswordModify bool `json:"passwordModify"`
 	// Encrypted is set for ldaps:// and StartTLS connections.
 	Encrypted bool `json:"encrypted"`
+	// BindDN is the DN the connection bound as, empty for an anonymous
+	// bind. For a template profile it is the template filled in with the
+	// username.
+	BindDN string `json:"bindDN,omitempty"`
 }
 
 // UntrustedCertError reports a server certificate that failed verification.
@@ -332,6 +336,7 @@ func (c *Conn) loadInfo(ctx context.Context) error {
 		Paging:               slices.Contains(e.GetAttributeValues("supportedControl"), ldap.ControlTypePaging),
 		PasswordModify:       slices.Contains(e.GetAttributeValues("supportedExtension"), rfc3062OID),
 		Encrypted:            isEncrypted(c.prof),
+		BindDN:               c.prof.BindDN,
 	}
 	switch {
 	case c.prof.BaseDN != "":

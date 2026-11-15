@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -133,8 +134,14 @@ type testEnv struct {
 	h        http.Handler
 	dir      *directoryFake
 	dialErr  error
-	password string // password of the last dial
+	password string          // password of the last dial
+	dialed   profile.Profile // profile of the last dial
+	dials    int
 	cookies  []*http.Cookie
+	// header is added to every request; remote, when set, is its
+	// RemoteAddr instead of httptest's 192.0.2.1:1234.
+	header http.Header
+	remote string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -153,6 +160,8 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", Environment: profile.Prod, InsecureSkipVerify: true, Color: "red"},
 		{Name: "anon", URL: "ldap://anon:389"},
 		{Name: "prodrw", URL: "ldap://prodrw:389", Environment: profile.Prod, ReadOnly: &no},
+		{Name: "people", URL: "ldap://people:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"},
+		{Name: "self", URL: "ldap://self:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org", IdentityUser: "localpart"},
 	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
@@ -161,11 +170,13 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
 	opts.Sessions = session.New[Directory](time.Hour)
-	opts.Dial = func(_ context.Context, _ profile.Profile, password string) (Directory, error) {
-		env.password = password
+	opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
+		env.password, env.dialed = password, p
+		env.dials++
 		if env.dialErr != nil {
 			return nil, env.dialErr
 		}
+		env.dir.info.BindDN = p.BindDN // as ldapx.Dial reports it
 		return env.dir, nil
 	}
 	env.h = New(opts)
@@ -191,6 +202,12 @@ func (e *testEnv) doContext(ctx context.Context, t *testing.T, method, target, b
 	req.Host = "localhost:8080"
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range e.header {
+		req.Header[k] = v
+	}
+	if e.remote != "" {
+		req.RemoteAddr = e.remote
 	}
 	for _, c := range e.cookies {
 		req.AddCookie(c)
@@ -820,5 +837,171 @@ func TestConnectTooManyConnections(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, connectedNames(t, env)); diff != "" {
 		t.Errorf("connected profiles after the refused connect mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// userDN is what the test catalog's template profiles bind as for user001.
+const userDN = "uid=user001,ou=people,dc=example,dc=org"
+
+func TestConnectTemplate(t *testing.T) {
+	env := newTestEnv(t)
+	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"secret001"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("connect = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if env.dialed.BindDN != userDN || env.password != "secret001" {
+		t.Errorf("dial bindDN, password = %q, %q, want %q, the typed password", env.dialed.BindDN, env.password, userDN)
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"connect": rec,
+		"info":    env.do(t, http.MethodGet, "/api/c/people/info", ""),
+	} {
+		var got struct {
+			BindDN string `json:"bindDN"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.BindDN != userDN {
+			t.Errorf("%s = %d %s, want bindDN %q", name, rec.Code, rec.Body, userDN)
+		}
+	}
+}
+
+// TestConnectTemplateRefusals checks that a template profile never binds,
+// anonymously or as a half-filled DN, without a valid username and a
+// password.
+func TestConnectTemplateRefusals(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "no username", body: `{"profile":"people","password":"pw"}`, wantStatus: http.StatusBadRequest, wantCode: "username_required"},
+		{name: "invalid username", body: `{"profile":"people","username":"a,ou=x","password":"pw"}`, wantStatus: http.StatusBadRequest, wantCode: "invalid_username"},
+		{name: "no password", body: `{"profile":"people","username":"user001"}`, wantStatus: http.StatusBadRequest, wantCode: "password_required"},
+		{name: "empty password", body: `{"profile":"people","username":"user001","password":""}`, wantStatus: http.StatusBadRequest, wantCode: "password_required"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			rec := env.do(t, http.MethodPost, "/api/connect", tc.body)
+			if rec.Code != tc.wantStatus || errorCode(t, rec) != tc.wantCode {
+				t.Errorf("connect %s = %d %s, want %d %s", tc.body, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
+			}
+			if env.dials != 0 {
+				t.Errorf("connect %s dialed %d times as %q, want no dial", tc.body, env.dials, env.dialed.BindDN)
+			}
+			if strings.Contains(rec.Body.String(), "a,ou=x") {
+				t.Errorf("connect %s = %s, want no username in the error", tc.body, rec.Body)
+			}
+		})
+	}
+}
+
+// identityOptions trusts httptest's remote, 192.0.2.1, to set X-User.
+var identityOptions = Options{IdentityHeader: "X-User", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
+
+func TestConnectIdentityLock(t *testing.T) {
+	tests := []struct {
+		name       string
+		remote     string
+		user       string // X-User
+		username   string
+		wantStatus int
+		wantCode   string
+		wantBindDN string
+	}{
+		{name: "same user", user: "alice@corp.example", username: "alice", wantStatus: http.StatusOK, wantBindDN: "uid=alice,ou=people,dc=example,dc=org"},
+		{name: "other user", user: "alice@corp.example", username: "bob", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
+		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
+		{name: "no header", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
+		{name: "case-insensitive", user: "alice@corp.example", username: "ALICE", wantStatus: http.StatusOK, wantBindDN: "uid=ALICE,ou=people,dc=example,dc=org"},
+		// The Kelvin sign folds to k in Unicode, but is no ASCII k.
+		{name: "Kelvin sign", user: "\u212Aate@corp.example", username: "kate", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnvWith(t, identityOptions)
+			env.remote = tc.remote
+			if tc.user != "" {
+				env.header = http.Header{"X-User": {tc.user}}
+			}
+			rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"`+tc.username+`","password":"pw"}`)
+			if rec.Code != tc.wantStatus || (tc.wantCode != "" && errorCode(t, rec) != tc.wantCode) {
+				t.Fatalf("connect as %s with X-User %q = %d %s, want %d %s", tc.username, tc.user, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
+			}
+			wantDials := 0
+			if tc.wantBindDN != "" {
+				wantDials = 1
+			}
+			if env.dials != wantDials || env.dialed.BindDN != tc.wantBindDN {
+				t.Errorf("connect as %s dialed %d times as %q, want %d as %q", tc.username, env.dials, env.dialed.BindDN, wantDials, tc.wantBindDN)
+			}
+		})
+	}
+}
+
+func TestListProfilesIdentity(t *testing.T) {
+	type view struct {
+		UserLogin      bool   `json:"userLogin"`
+		Username       string `json:"username"`
+		UsernameLocked bool   `json:"usernameLocked"`
+	}
+	views := func(t *testing.T, env *testEnv) map[string]view {
+		t.Helper()
+		rec := env.do(t, http.MethodGet, "/api/profiles", "")
+		var list []struct {
+			Name string `json:"name"`
+			view
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("decode profiles %q: %v", rec.Body, err)
+		}
+		m := map[string]view{}
+		for _, v := range list {
+			if v.Name == "dev" || v.Name == "people" || v.Name == "self" {
+				m[v.Name] = v.view
+			}
+		}
+		return m
+	}
+	env := newTestEnvWith(t, identityOptions)
+	env.header = http.Header{"X-User": {"alice@corp.example"}}
+	want := map[string]view{
+		"dev":    {},
+		"people": {UserLogin: true},
+		"self":   {UserLogin: true, Username: "alice", UsernameLocked: true},
+	}
+	if diff := cmp.Diff(want, views(t, env)); diff != "" {
+		t.Errorf("profiles with X-User mismatch (-want +got):\n%s", diff)
+	}
+	env.header = nil
+	want["self"] = view{UserLogin: true}
+	if diff := cmp.Diff(want, views(t, env)); diff != "" {
+		t.Errorf("profiles without X-User mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestWriteLogsResolvedBindDN checks that a template connection's lines
+// carry the DN it bound as, not the template's empty bindDN.
+func TestWriteLogsResolvedBindDN(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	connectTo(t, env, `{"profile":"people","username":"user001","password":"secret001"}`)
+	body := `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
+	if rec := env.do(t, http.MethodPost, "/api/c/people/changes/apply", body); rec.Code != http.StatusOK {
+		t.Fatalf("apply = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"people"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
+	}
+	lines := jsonLogs(t, &logs)
+	for _, msg := range []string{"connected", "modified", "disconnected"} {
+		found := withMsg(lines, msg)
+		if len(found) != 1 || found[0]["bindDN"] != userDN {
+			t.Errorf("%q lines = %v, want one with bindDN %q", msg, found, userDN)
+		}
+	}
+	if strings.Contains(logs.String(), "secret001") {
+		t.Errorf("log contains the password:\n%s", logs.String())
 	}
 }

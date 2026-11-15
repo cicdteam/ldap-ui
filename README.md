@@ -257,7 +257,8 @@ username to the user an authenticating proxy verified (see
 a connect needs that identity, and the username must equal it, compared
 case-insensitively. `exact` takes the identity as is; `localpart` takes the
 part before the last `@` (`alice@corp.example` gives `alice`). The connect
-dialog fills in the username and does not let it be changed.
+dialog fills in the username and does not let it be changed. [Per-user
+login](#per-user-login) has the whole flow and its errors.
 
 ## Saved connections
 
@@ -298,7 +299,7 @@ writable; saving profiles will fail` with its `dir`.
 | `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
 | `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
-| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is logged; required with `--identity-header` |
+| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
 | `--version` | | prints `ldapui <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
@@ -375,7 +376,9 @@ The lines:
 | `profile saved` | `name`, `oldURL` (empty for a new profile), `url`, `readOnly`, `insecureSkipVerify` |
 | `auth failed` | `remote` only: a request refused with 401 for a missing or wrong token |
 
-`bindDN` is the profile's bind DN. Attribute values, passwords, tokens and
+`bindDN` is the DN the connection bound as: the profile's `bindDN`, or for a
+`bindDNTemplate` profile the template with the username filled in; empty for
+an anonymous bind. Attribute values, passwords, tokens and
 session IDs are never logged, and a DN that does not parse or has a secret
 attribute in an RDN is logged as `<redacted>`.
 
@@ -391,9 +394,9 @@ logs the warning `shutdown drain timed out` with `after`.
 The directory's own audit log sees only the bind DN. A profile bound as a
 shared service account (`passwordEnv` or `passwordFile`) makes every write
 that account's, and with one shared token only `session` and `remote` tell
-people apart. For per-person accountability, give each person a profile with
-their own bind DN and no configured password: they type their password at
-connect, and both the directory and ldapui log their DN.
+people apart. For per-person accountability, use [per-user
+login](#per-user-login): everyone binds as themselves with their own
+password, and both the directory and ldapui log their DN.
 
 Behind an authenticating proxy, ldapui can also log the user the proxy
 verified. For example, ingress-nginx asks oauth2-proxy (run with
@@ -412,9 +415,11 @@ under [Kubernetes](#kubernetes).
 
 The value is logged as `user`, cut to 256 bytes, on the lines that carry
 `session`, and only for requests whose client address is in
-`--trusted-proxies`. It is a log field only: it grants nothing, and the token
-still applies. Any client can send any header, so the value means something
-only when the proxy replaces it on every request (ingress-nginx and nginx's
+`--trusted-proxies`. On its own it grants nothing, and the token still
+applies; on a profile with `identityUser` it decides which username a person
+may sign in as (see [Per-user login](#per-user-login)). Any client can send
+any header, so the value means something only when the proxy replaces it on
+every request (ingress-nginx and nginx's
 `proxy_set_header` do) and nothing else can reach ldapui from a trusted
 address: list only the proxy's addresses, and keep other clients off the
 ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
@@ -466,6 +471,71 @@ ends all sessions, and users connect again.
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
 and accountability](#logs-and-accountability).
+
+### Per-user login
+
+A profile with `bindDNTemplate` (see [Signing in with your own
+username](#signing-in-with-your-own-username)) lets everyone sign in to the
+directory as themselves: one profile serves the whole team, and each person
+types their own username and password. It is the recommended mode for a
+team. The directory's access rules apply to each person rather than to a
+shared account, the directory's audit log and ldapui's logs name the person
+who made each change, and no service account password has to be stored in
+the deployment.
+
+A connect to such a profile goes like this:
+
+1. The browser sends the profile, the username and the password.
+2. ldapui checks, in this order, that there is a username; with
+   `identityUser`, that the request carries a trusted identity and that the
+   username is the one it maps to; that the username matches
+   `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; and that there is a password. Nothing
+   reaches the directory before every check has passed. An empty password
+   would be an unauthenticated bind (RFC 4513), which many servers accept as
+   anonymous, so it is refused here.
+3. ldapui binds as the template with the username filled in, for example
+   `uid=alice,ou=people,dc=example,dc=org`. A wrong password is 401
+   `invalid_credentials`, as on any profile.
+4. The connection's lines in the log (`connected`, `connect failed`, every
+   write and `disconnected`) carry that DN as `bindDN`.
+
+With `identityUser`, the username is tied to the user an authenticating
+proxy verified. With oauth2-proxy in front of ldapui, as under [Logs and
+accountability](#logs-and-accountability):
+
+```yaml
+connections:
+  - name: corp-ad
+    url: ldaps://dc1.corp.example:636
+    baseDN: dc=corp,dc=example
+    bindDNTemplate: "{user}@corp.example"
+    identityUser: localpart
+```
+
+```sh
+ldapui --config connections.yaml \
+  --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
+```
+
+Someone signed in to oauth2-proxy as `alice@corp.example` can connect to
+`corp-ad` only as `alice` (or `Alice`: the comparison ignores case, and the
+bind uses the username as typed), and the connect dialog fills that in. The
+password is still the directory's: the proxy decides who may sign in, the
+directory checks the password. A request without the header, or from an
+address outside `--trusted-proxies`, cannot connect to the profile.
+
+| Code | Status | When |
+|---|---|---|
+| `username_required` | 400 | no username |
+| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity |
+| `identity_mismatch` | 403 | the username is not the one the identity maps to |
+| `invalid_username` | 400 | the username does not match the pattern above |
+| `password_required` | 400 | no password |
+
+The password a person typed stays in the server's memory, with their
+connection, so that ldapui can reconnect after a dropped connection without
+asking again. It is forgotten at disconnect, when the session expires after
+`--session-idle` without use, or when the session reaches its maximum age.
 
 ### Behind a reverse proxy
 
