@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
@@ -211,8 +212,10 @@ func changeAttrs(changes []ldapx.Change) []string {
 // type. Empty when it cannot tell.
 func blame(names []string, diagnostic string) string {
 	var attrs []string
+	seen := make(map[string]bool)
 	for _, n := range names {
-		if !containsFold(attrs, n) {
+		if key := foldKey(n); !seen[key] {
+			seen[key] = true
 			attrs = append(attrs, n)
 		}
 	}
@@ -233,16 +236,26 @@ func blame(names []string, diagnostic string) string {
 }
 
 // mentions reports whether diagnostic names attr as a whole: not inside a
-// longer name and not followed by options.
+// longer name and not followed by options. A regexp is compiled only when
+// diagnostic holds attr in any case, so that a write of many attributes
+// costs no regexp for each.
 func mentions(diagnostic, attr string) bool {
+	if !strings.Contains(foldKey(diagnostic), foldKey(attr)) {
+		return false
+	}
 	return regexp.MustCompile(`(?i)(^|[^\w-])` + regexp.QuoteMeta(attr) + `($|[^\w;-])`).MatchString(diagnostic)
 }
 
-func containsFold(list []string, s string) bool {
-	for _, x := range list {
-		if strings.EqualFold(x, s) {
-			return true
+// foldKey is s with each rune replaced by the smallest rune it folds to, so
+// that foldKey(a) == foldKey(b) exactly when strings.EqualFold(a, b). Unlike
+// strings.ToLower, it matches the long s with s and keeps the dotted capital
+// I apart from i, as EqualFold does.
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
 		}
-	}
-	return false
+		return least
+	}, s)
 }

@@ -10,13 +10,16 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
+	"github.com/cicdteam/ldap-ui/internal/schema"
 )
 
 const (
@@ -414,5 +417,24 @@ func TestSetPasswordOnActiveDirectory(t *testing.T) {
 	const failLog = `msg="password rejected" profile=dev dn="cn=n,dc=example,dc=org" method=unicodePwd code=rejected`
 	if !strings.Contains(logs.String(), failLog) || strings.Contains(logs.String(), "secret-value") {
 		t.Errorf("log = %s, want %q and no password", logs.String(), failLog)
+	}
+}
+
+// TestValidateAddManyAttributes bounds validateAdd on an add with 50 000
+// attributes, which an 8 MiB body allows: a scan per attribute made it
+// quadratic.
+func TestValidateAddManyAttributes(t *testing.T) {
+	attrs := []ldapx.TextAttribute{{Name: "objectClass", Values: []string{"top"}}}
+	for i := range 50000 {
+		attrs = append(attrs, ldapx.TextAttribute{Name: "a" + strconv.Itoa(i), Values: []string{"v"}})
+	}
+	req := addRequest{DN: "cn=n,dc=example,dc=org", Attributes: attrs}
+	start := time.Now()
+	e, ok := validateAdd(req, schema.Parse(nil, nil, nil))
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("validateAdd(50000 attributes) took %v, want at most 5s", elapsed)
+	}
+	if !ok {
+		t.Errorf("validateAdd(50000 attributes) = %+v, want OK", e)
 	}
 }

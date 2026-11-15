@@ -161,12 +161,13 @@ func validateAdd(req addRequest, sch *schema.Schema) (apiError, bool) {
 	if len(req.Attributes) == 0 {
 		return bad("", "a new entry needs attributes")
 	}
-	var seen []string
+	seen := make(map[string]bool, len(req.Attributes))
 	for _, a := range req.Attributes {
+		key := foldKey(a.Name)
 		switch {
 		case a.Name == "":
 			return bad("", "an attribute has no name")
-		case containsFold(seen, a.Name):
+		case seen[key]:
 			return bad(a.Name, a.Name+" is listed twice")
 		case ldapx.IsSecret(a.Name, sch):
 			return bad(a.Name, a.Name+" cannot be set here")
@@ -176,9 +177,9 @@ func validateAdd(req addRequest, sch *schema.Schema) (apiError, bool) {
 		if r, ok := validateValues(a.Name, a.Values, a.Base64); !ok {
 			return r, false
 		}
-		seen = append(seen, a.Name)
+		seen[key] = true
 	}
-	if !containsFold(seen, "objectClass") {
+	if !seen[foldKey("objectClass")] {
 		return bad("", "a new entry needs an objectClass")
 	}
 	return apiError{}, true
