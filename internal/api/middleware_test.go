@@ -201,9 +201,10 @@ func TestSecurityHeaders(t *testing.T) {
 			if tc.host != "" {
 				r.Host = tc.host
 			}
-			rec := serve(env.h, r)
-			if rec.Code != tc.wantCode {
-				t.Errorf("base %q %s: GET %s = %d, want %d", base, tc.name, r.URL, rec.Code, tc.wantCode)
+			// The headers as sent with the status line, not the recorder's live map.
+			res := serve(env.h, r).Result()
+			if res.StatusCode != tc.wantCode {
+				t.Errorf("base %q %s: GET %s = %d, want %d", base, tc.name, r.URL, res.StatusCode, tc.wantCode)
 			}
 			for name, want := range map[string]string{
 				"Content-Security-Policy": wantCSP,
@@ -212,7 +213,7 @@ func TestSecurityHeaders(t *testing.T) {
 				"Referrer-Policy":         "no-referrer",
 				"Cache-Control":           tc.wantCache,
 			} {
-				if got := rec.Header().Get(name); got != want {
+				if got := res.Header.Get(name); got != want {
 					t.Errorf("base %q %s: GET %s header %s = %q, want %q", base, tc.name, r.URL, name, got, want)
 				}
 			}
