@@ -121,9 +121,9 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	fs.DurationVar(&c.sessionIdle, "session-idle", idle, "close LDAP connections after this much inactivity (env LDAPUI_SESSION_IDLE)")
 	fs.DurationVar(&c.sessionMaxAge, "session-max-age", maxAge, "close each LDAP connection this long after it was connected, however active (env LDAPUI_SESSION_MAX_AGE)")
 	fs.StringVar(&c.identityHeader, "identity-header", env("LDAPUI_IDENTITY_HEADER", ""),
-		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user (env LDAPUI_IDENTITY_HEADER)")
+		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user, and for identityUser profiles it decides which username a person may sign in as (env LDAPUI_IDENTITY_HEADER)")
 	fs.StringVar(&proxies, "trusted-proxies", env("LDAPUI_TRUSTED_PROXIES", ""),
-		"CIDRs or IPs of the proxies whose --identity-header is logged, comma-separated (env LDAPUI_TRUSTED_PROXIES)")
+		"CIDRs or IPs of the proxies whose --identity-header is trusted, comma-separated (env LDAPUI_TRUSTED_PROXIES)")
 	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure when served over HTTPS, e.g. behind a TLS ingress (env LDAPUI_SECURE_COOKIES)")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {

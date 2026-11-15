@@ -258,8 +258,12 @@ username to the user an authenticating proxy verified (see
 `--identity-header` under [Logs and accountability](#logs-and-accountability)):
 a connect needs that identity, and the username must equal it, compared
 case-insensitively. `exact` takes the identity as is; `localpart` takes the
-part before the last `@` (`alice@corp.example` gives `alice`). The connect
-dialog fills in the username and does not let it be changed. [Per-user
+part before the last `@` (`alice@corp.example` gives `alice`). `localpart`
+ignores the domain, so `alice@other.example` gives `alice` too: the proxy
+must admit only the directory's domain (oauth2-proxy `--email-domain
+corp.example`). `exact` needs a header that carries a bare username: an
+email address never matches the username pattern above. The connect dialog
+fills in the username and does not let it be changed. [Per-user
 login](#per-user-login) has the whole flow and its errors.
 
 ## Saved connections
@@ -301,7 +305,7 @@ writable; saving profiles will fail` with its `dir`.
 | `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
 | `--session-max-age` | `LDAPUI_SESSION_MAX_AGE` | `8h` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
-| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
+| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)); for `identityUser` profiles it decides which username a person may sign in as (see [Per-user login](#per-user-login)) |
 | `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
 | `--version` | | prints `ldapui <version>` and exits |
 
