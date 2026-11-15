@@ -223,6 +223,42 @@ connections:
     environment: prod # prod profiles are read-only by default
 ```
 
+### Signing in with your own username
+
+A profile with `bindDNTemplate` instead of `bindDN` asks each person for a
+username and password at connect, and binds as the template with `{user}`
+replaced by the username. The template contains `{user}` exactly once and
+cannot be combined with `bindDN`, `passwordEnv` or `passwordFile`. Both keys
+below are read from `connections.yaml` only; profiles saved in the UI cannot
+have them.
+
+```yaml
+connections:
+  - name: people # OpenLDAP: the full DN
+    url: ldap://ldap.example.org:389
+    startTLS: true
+    baseDN: dc=example,dc=org
+    bindDNTemplate: uid={user},ou=people,dc=example,dc=org
+  - name: corp-ad # Active Directory: a UPN (or a down-level name, CORP\{user})
+    url: ldaps://dc1.corp.example:636
+    baseDN: dc=corp,dc=example
+    bindDNTemplate: "{user}@corp.example"
+    identityUser: localpart
+```
+
+The username must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (ASCII letters,
+digits, `.`, `_` and `-`, starting with a letter or digit, at most 64
+characters), so it cannot change the structure of the DN; in a template that
+contains `=` it is also escaped as a DN value.
+
+`identityUser` (`exact` or `localpart`, needs `bindDNTemplate`) ties the
+username to the user an authenticating proxy verified (see
+`--identity-header` under [Logs and accountability](#logs-and-accountability)):
+a connect needs that identity, and the username must equal it, compared
+case-insensitively. `exact` takes the identity as is; `localpart` takes the
+part before the last `@` (`alice@corp.example` gives `alice`). The connect
+dialog fills in the username and does not let it be changed.
+
 ## Saved connections
 
 Profiles created in the UI are kept, without passwords, in `profiles.json`

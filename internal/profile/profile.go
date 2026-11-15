@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/go-ldap/ldap/v3"
 )
 
 // Environment tells the user how careful to be with a connection.
@@ -34,8 +36,19 @@ const (
 // ErrInvalid marks a profile that fails validation.
 var ErrInvalid = errors.New("invalid profile")
 
+// ErrInvalidUsername marks a username that cannot be put into a bind DN
+// template. Its message never carries the username.
+var ErrInvalidUsername = errors.New("invalid username")
+
 // namePattern keeps profile names safe to use as a URL path segment.
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// usernamePattern keeps a typed username from changing the structure of the
+// bind DN, or of a UPN or down-level name, it is substituted into.
+var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// userPlaceholder is replaced by the username in BindDNTemplate.
+const userPlaceholder = "{user}"
 
 // Profile describes how to connect to one LDAP server.
 //
@@ -48,6 +61,8 @@ type Profile struct {
 	StartTLS           bool          `yaml:"startTLS" json:"startTLS"`
 	BaseDN             string        `yaml:"baseDN" json:"baseDN,omitempty"`
 	BindDN             string        `yaml:"bindDN" json:"bindDN,omitempty"`
+	BindDNTemplate     string        `yaml:"bindDNTemplate" json:"-"`
+	IdentityUser       string        `yaml:"identityUser" json:"-"`
 	PasswordEnv        string        `yaml:"passwordEnv" json:"-"`
 	PasswordFile       string        `yaml:"passwordFile" json:"-"`
 	CAFile             string        `yaml:"caFile" json:"-"`
@@ -105,6 +120,23 @@ func (p *Profile) normalize() error {
 	default:
 		return fmt.Errorf("%w: %s: environment must be dev, stage or prod, got %q", ErrInvalid, p.Name, p.Environment)
 	}
+	if p.BindDNTemplate != "" {
+		if strings.Count(p.BindDNTemplate, userPlaceholder) != 1 {
+			return fmt.Errorf("%w: %s: bindDNTemplate must contain %s exactly once", ErrInvalid, p.Name, userPlaceholder)
+		}
+		if p.BindDN != "" || p.PasswordEnv != "" || p.PasswordFile != "" {
+			return fmt.Errorf("%w: %s: bindDNTemplate cannot be combined with bindDN, passwordEnv or passwordFile", ErrInvalid, p.Name)
+		}
+	}
+	switch p.IdentityUser {
+	case "":
+	case "exact", "localpart":
+		if p.BindDNTemplate == "" {
+			return fmt.Errorf("%w: %s: identityUser requires bindDNTemplate", ErrInvalid, p.Name)
+		}
+	default:
+		return fmt.Errorf("%w: %s: identityUser must be exact or localpart, got %q", ErrInvalid, p.Name, p.IdentityUser)
+	}
 	if p.ConnectTimeout <= 0 {
 		p.ConnectTimeout = defaultConnectTimeout
 	}
@@ -112,6 +144,40 @@ func (p *Profile) normalize() error {
 		p.SearchTimeout = defaultSearchTimeout
 	}
 	return nil
+}
+
+// UserLogin reports whether users sign in with their own username, which
+// BindDNFor turns into the bind DN.
+func (p Profile) UserLogin() bool {
+	return p.BindDNTemplate != ""
+}
+
+// BindDNFor returns BindDNTemplate with the placeholder replaced by
+// username. A username that does not match usernamePattern is refused with
+// an error wrapping ErrInvalidUsername.
+func (p Profile) BindDNFor(username string) (string, error) {
+	if !p.UserLogin() {
+		return "", fmt.Errorf("profile %s has no bindDNTemplate", p.Name)
+	}
+	if !usernamePattern.MatchString(username) {
+		return "", fmt.Errorf("%w: must match %s", ErrInvalidUsername, usernamePattern)
+	}
+	if strings.Contains(p.BindDNTemplate, "=") {
+		// The pattern leaves nothing to escape; escaping keeps the DN safe if it is widened.
+		username = ldap.EscapeDN(username)
+	}
+	return strings.Replace(p.BindDNTemplate, userPlaceholder, username, 1), nil
+}
+
+// IdentityUsername maps a trusted identity, such as the user a proxy
+// authenticated, to the username it may sign in as. With identityUser
+// localpart that is the part before the last "@"; otherwise the identity
+// itself.
+func (p Profile) IdentityUsername(identity string) string {
+	if i := strings.LastIndex(identity, "@"); p.IdentityUser == "localpart" && i >= 0 {
+		return identity[:i]
+	}
+	return identity
 }
 
 // ConfiguredPassword returns the bind password from PasswordEnv or
