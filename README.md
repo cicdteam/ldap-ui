@@ -254,16 +254,24 @@ writable; saving profiles will fail` with its `dir`.
 | `--config` | `LDAPUI_CONFIG` | none |
 | `--data-dir` | `LDAPUI_DATA_DIR` | none (`/data` in the image) |
 | `--auth-token` | `LDAPUI_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
+| `--auth-token-file` | `LDAPUI_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
 | `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
-| `--session-idle` | | `30m` |
+| `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
 | `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
 | `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is logged; required with `--identity-header` |
 | `--version` | | prints `ldapui <version>` and exits |
 
-Behind a reverse proxy, always set `--auth-token` or `LDAPUI_AUTH_TOKEN`: a
-proxy that forwards `Host: localhost` or `127.0.0.1` looks like a local
-browser, which needs no token when ldapui listens on loopback.
+A flag beats its variable, and an empty variable counts as unset
+(`LDAPUI_DATA_DIR=""` disables saving). `--auth-token` or `--auth-token-file`
+on the command line overrides both token variables. Both flags at once, or
+both variables at once, are a startup error, and so is a token file that is
+missing or holds an invalid token (at least 16 characters from
+`A-Z a-z 0-9 . _ ~ -`); the error names the file, never the token.
+
+Behind a reverse proxy, always set a token (`LDAPUI_AUTH_TOKEN` or a token
+file): a proxy that forwards `Host: localhost` or `127.0.0.1` looks like a
+local browser, which needs no token when ldapui listens on loopback.
 `--allowed-hosts` without a token generates a new one on every restart, so
 set one explicitly to keep it stable. A request that runs longer than 5
 minutes is cut off.
@@ -285,6 +293,22 @@ Apply whose time runs out, or whose browser goes away, stops between entries:
 a modify already sent to the server finishes, the entries before the stop
 stay applied, and the response lists them and names the next entry as failed
 with `timeout`.
+
+The probes `GET /healthz` and `GET /readyz` answer `ok` without the token or
+the Host check, so a kubelet can call them by pod IP. With `--base-path
+/ldap` they answer at both `/healthz` and `/ldap/healthz` (and the same for
+`/readyz`).
+
+On SIGTERM or Ctrl-C the server stops accepting connections and waits up to
+25 seconds for running requests. Then it closes the rest, logs `shutdown
+drain timed out` and exits 0. A second Ctrl-C exits at once. The drain fits
+the 30 second default grace period of a Kubernetes pod.
+
+`connections.yaml`, the `passwordEnv` variables, the token (also from
+`--auth-token-file`) and every other flag and variable are read at startup:
+restart after changing them. `passwordFile` and `caFile` are read at every
+connect, so a rotated Secret is used at the next connect. Mount ConfigMaps
+and Secrets as directories, not with `subPath`, which never sees an update.
 
 ## Logs and accountability
 
@@ -318,6 +342,15 @@ The lines:
 `bindDN` is the profile's bind DN. Attribute values, passwords, tokens and
 session IDs are never logged, and a DN that does not parse or has a secret
 attribute in an RDN is logged as `<redacted>`.
+
+At startup the server logs `listening` with `version`, `addr`, `basePath`,
+`profiles` (how many from `connections.yaml`), `saved` (how many saved
+connections it loaded) and `dataDir` (empty when saving is disabled). A
+generated token adds the login link, and inside Kubernetes
+(`KUBERNETES_SERVICE_HOST` is set) a warning: a generated token changes on
+every restart and differs per replica, so set `LDAPUI_AUTH_TOKEN` or
+`LDAPUI_AUTH_TOKEN_FILE` from a Secret. A shutdown that runs out of time
+logs the warning `shutdown drain timed out` with `after`.
 
 The directory's own audit log sees only the bind DN. A profile bound as a
 shared service account (`passwordEnv` or `passwordFile`) makes every write

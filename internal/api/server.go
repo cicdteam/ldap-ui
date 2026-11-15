@@ -115,11 +115,17 @@ func New(opts Options) http.Handler {
 	h = requireToken(opts.AuthToken, cookies, logger, h)
 	h = hostCheck(opts.AllowedHosts, h)
 
+	// Probes answer at the root as well as under the base path: a kubelet
+	// probing /healthz must not depend on --base-path.
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", health)
 	root.HandleFunc("GET /readyz", health)
-	root.Handle("/", h)
-	return securityHeaders(base, withBasePath(base, root))
+	if base != "" {
+		root.HandleFunc("GET "+base+"/healthz", health)
+		root.HandleFunc("GET "+base+"/readyz", health)
+	}
+	root.Handle("/", withBasePath(base, h))
+	return securityHeaders(base, root)
 }
 
 // health answers liveness and readiness probes. Probes bypass the host and
