@@ -366,12 +366,13 @@ verified. For example, ingress-nginx asks oauth2-proxy (run with
 `nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Email`:
 
 ```sh
-ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.42.0.0/16
+ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
 ```
 
-`10.42.0.0/16` is the pod network of a k3s cluster, so this trusts every
-pod in it: it assumes a NetworkPolicy that lets only the ingress controller
-reach ldapui, like the one under [Kubernetes](#kubernetes).
+`10.244.0.0/16` stands for the cluster's pod network, which differs between
+Kubernetes clusters: use yours. This trusts every pod in it, so it assumes a
+NetworkPolicy that lets only the ingress controller reach ldapui, like the one
+under [Kubernetes](#kubernetes).
 
 The value is logged as `user`, cut to 256 bytes, on the lines that carry
 `session`, and only for requests whose client address is in
