@@ -1066,6 +1066,39 @@ func TestWriteLogsResolvedBindDN(t *testing.T) {
 	}
 }
 
+// TestWriteLogsAnonymousBindDN checks that the lines of an anonymous
+// connection carry an empty bindDN even after its profile was edited to a
+// bind DN: they name the DN the connection bound as, not the catalog's.
+func TestWriteLogsAnonymousBindDN(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`); rec.Code != http.StatusOK {
+		t.Fatalf("save lab = %d %s, want 200", rec.Code, rec.Body)
+	}
+	connectTo(t, env, `{"profile":"lab"}`)
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","bindDN":"cn=admin,dc=example,dc=org"}`); rec.Code != http.StatusOK {
+		t.Fatalf("edit lab = %d %s, want 200", rec.Code, rec.Body)
+	}
+	body := `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
+	if rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", body); rec.Code != http.StatusOK {
+		t.Fatalf("apply = %d %s, want 200", rec.Code, rec.Body)
+	}
+	env.dir.modifyErr = map[string]error{"uid=a,dc=example,dc=org": ldap.NewError(ldap.LDAPResultInsufficientAccessRights, errors.New("no"))}
+	if rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", body); rec.Code != http.StatusOK {
+		t.Fatalf("failing apply = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"lab"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
+	}
+	lines := jsonLogs(t, &logs)
+	for _, msg := range []string{"modified", "modify rejected", "disconnected"} {
+		found := withMsg(lines, msg)
+		if len(found) != 1 || found[0]["bindDN"] != "" {
+			t.Errorf("%q lines = %v, want one with an empty bindDN", msg, found)
+		}
+	}
+}
+
 // invalidCredentials is the error ldapx.Dial returns for a wrong password:
 // go-ldap's *ldap.Error as the server sent it, here Active Directory's.
 var invalidCredentials = ldap.NewError(ldap.LDAPResultInvalidCredentials,

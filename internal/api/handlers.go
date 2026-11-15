@@ -287,8 +287,8 @@ func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, _ := s.catalog.Find(req.Profile) // for the bind DN; "" for an unknown name
-	// The connection's DN, which for a template profile the catalog lacks.
-	if d, err := s.sessions.Get(sessionID(r), req.Profile); err == nil && d.Info().BindDN != "" {
+	// The connection's DN, as guard takes it.
+	if d, err := s.sessions.Get(sessionID(r), req.Profile); err == nil {
 		p.BindDN = d.Info().BindDN
 	}
 	s.sessions.Drop(sessionID(r), req.Profile)
