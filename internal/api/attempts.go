@@ -4,8 +4,11 @@
 package api
 
 import (
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-ldap/ldap/v3"
 )
 
 // attemptLimiter counts failed logins per key, a bind DN, together with the
@@ -35,7 +38,7 @@ func newAttemptLimiter(max int, window time.Duration, capacity int, now func() t
 
 // begin starts a login as key, or refuses it while key's failures in the
 // window and its logins in flight reach max. A refusal says how long to
-// wait: until the window ends, or 1 s when only logins in flight fill it.
+// wait: until the window ends, or 1 s when logins in flight fill it.
 // Each begin that returns ok must be followed by exactly one fail, succeed
 // or done.
 func (l *attemptLimiter) begin(key string) (retryAfter time.Duration, ok bool) {
@@ -47,8 +50,8 @@ func (l *attemptLimiter) begin(key string) (retryAfter time.Duration, ok bool) {
 		a.failures = 0 // the window is over
 	}
 	if a.failures+a.inflight >= l.max {
-		if a.failures == 0 {
-			return time.Second, false
+		if a.failures < l.max {
+			return time.Second, false // the logins in flight end soon
 		}
 		return a.start.Add(l.window).Sub(now), false
 	}
@@ -131,4 +134,33 @@ func (l *attemptLimiter) prune(now time.Time) {
 	if len(l.entries) >= l.capacity && !oldestStart.IsZero() {
 		delete(l.entries, oldest)
 	}
+}
+
+// limiterKey is the key that counts logins as bindDN, the same for every
+// spelling of one DN: types and values folded to lower case, spacing and
+// escapes taken out, RDNs and their values kept in order. Anything that is
+// not a DN, such as a UPN or DOMAIN\user, is folded and trimmed. Values are
+// not escaped again, so two DNs may share a key: that only makes the limit
+// stricter.
+//
+// ponytail: an attribute OID and its name (0.9.2342.19200300.100.1.1 and
+// uid) stay two keys; map OIDs through the schema if that matters.
+func limiterKey(bindDN string) string {
+	dn, err := ldap.ParseDN(bindDN)
+	if err != nil || len(dn.RDNs) == 0 {
+		return strings.ToLower(strings.TrimSpace(bindDN))
+	}
+	var b strings.Builder
+	for i, rdn := range dn.RDNs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		for j, ava := range rdn.Attributes {
+			if j > 0 {
+				b.WriteByte('+')
+			}
+			b.WriteString(ava.Type + "=" + ava.Value)
+		}
+	}
+	return strings.ToLower(b.String())
 }

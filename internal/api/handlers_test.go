@@ -1088,13 +1088,21 @@ func TestConnectThrottlePerAccount(t *testing.T) {
 			t.Errorf("connect as %s after 5 failures of user001 = %d %s, want 429", username, rec.Code, rec.Body)
 		}
 	}
+	// The same account as a saved profile spells it: another spelling of
+	// the DN gets no fresh tries.
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"alias","url":"ldap://people:389","bindDN":"UID=User001, ou=People,dc=example,dc=org"}`); rec.Code != http.StatusOK {
+		t.Fatalf("save alias = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"alias","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect to alias of user001 after 5 failures of user001 = %d %s, want 429", rec.Code, rec.Body)
+	}
 	env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user002","password":"pw"}`)
 	if env.dials != 6 || env.dialed.BindDN != "uid=user002,ou=people,dc=example,dc=org" {
 		t.Errorf("connect as user002: %d dials, last as %q, want 6, the last as user002", env.dials, env.dialed.BindDN)
 	}
 	found := withMsg(jsonLogs(t, &logs), "connect throttled")
-	if len(found) != 2 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1:1234" {
-		t.Errorf(`"connect throttled" lines = %v, want 2, the first with bindDN %q and remote 192.0.2.1:1234`, found, userDN)
+	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1:1234" {
+		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q and remote 192.0.2.1:1234`, found, userDN)
 	}
 	if strings.Contains(logs.String(), "secret-not-logged") {
 		t.Errorf("log contains the password:\n%s", logs.String())
@@ -1140,18 +1148,18 @@ func TestConnectConcurrentBurst(t *testing.T) {
 		return nil, invalidCredentials
 	}})
 	// post is env.do without cookies, which is not safe for concurrent use.
-	post := func() int {
+	post := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(body))
 		req.Host = "localhost:8080"
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		env.h.ServeHTTP(rec, req)
-		return rec.Code
+		return rec
 	}
-	codes := make(chan int, 10)
+	recs := make(chan *httptest.ResponseRecorder, 10)
 	var wg sync.WaitGroup
 	for range 10 {
-		wg.Go(func() { codes <- post() })
+		wg.Go(func() { recs <- post() })
 	}
 	// Every connect either waits in a dial or has been refused before any
 	// dial ends.
@@ -1159,9 +1167,13 @@ func TestConnectConcurrentBurst(t *testing.T) {
 	for range 10 {
 		select {
 		case <-dialed:
-		case code := <-codes:
-			if code == http.StatusTooManyRequests {
+		case rec := <-recs:
+			if rec.Code == http.StatusTooManyRequests {
 				throttled++
+			}
+			// Refused only for connects in flight, which end soon.
+			if ra := rec.Header().Get("Retry-After"); rec.Code == http.StatusTooManyRequests && ra != "1" {
+				t.Errorf("connect refused during the burst: Retry-After %q, want 1", ra)
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatalf("10 connects at once: %d dials and %d 429s after 10 s, want all 10 settled", dials.Load(), throttled)
@@ -1172,7 +1184,7 @@ func TestConnectConcurrentBurst(t *testing.T) {
 	if got := dials.Load(); got > 5 || int(got)+throttled != 10 {
 		t.Errorf("10 connects at once: %d dials, %d 429s before any dial ended, want at most 5 dials and 429 for the rest", got, throttled)
 	}
-	if code := post(); code != http.StatusTooManyRequests {
-		t.Errorf("connect after the burst failed = %d, want 429", code)
+	if rec := post(); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after the burst failed = %d %s, want 429", rec.Code, rec.Body)
 	}
 }

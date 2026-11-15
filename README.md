@@ -325,18 +325,30 @@ within 60 seconds refuse further connects as that DN with 429
 `too_many_attempts` and a `Retry-After` header in seconds, until 60 seconds
 after the first of them. Connects as that DN still waiting for the server
 count too, so a burst of them at once gets no more than five tries: a connect
-refused only for those gets `Retry-After: 1`. A successful connect clears the
-count; other failures, such as a server that cannot be reached, do not count.
-The limit is per account: it is keyed by the bind DN, ignoring case, not by
-client address, since behind a proxy every client has the same address. It
-applies to every connect with a typed password, on a `bindDN` profile as on a
-`bindDNTemplate` one. A connect with the configured password (`passwordEnv`
-or `passwordFile`) and an anonymous one are never refused, so a wrong service
-password cannot lock its DN for everyone. In return, anyone who can reach
-ldapui can keep one account from connecting through ldapui, a minute at a
-time; the directory's own lockout policy is separate and unaffected. The
-counts are kept in memory, per process, like sessions, for at most 10,000
-bind DNs; past that the oldest are dropped.
+refused before five have failed gets `Retry-After: 1`. A successful connect
+clears the count; other failures, such as a server that cannot be reached, do
+not count. The limit is per account: it is keyed by the bind DN (see below),
+not by client address, since behind a proxy every client has the same
+address. It applies to every connect with a typed password, on a `bindDN`
+profile as on a `bindDNTemplate` one. A connect with the configured password
+(`passwordEnv` or `passwordFile`) and an anonymous one are never refused, so a
+wrong service password cannot lock its DN for everyone. In return, anyone who
+can reach ldapui can keep one account from connecting through ldapui, a
+minute at a time; the directory's own lockout policy is separate and
+unaffected. The counts are kept in memory, per process, like sessions, for at
+most 10,000 bind DNs; past that the oldest are dropped.
+
+The count is per account as the bind DN names it, after normalizing spacing,
+case and escapes: `uid=alice,ou=people,dc=example,dc=org`,
+`UID=Alice, ou=People,dc=example,dc=org` and
+`uid=\61lice,ou=people,dc=example,dc=org` share one count, and so do
+`alice@corp.example` and `ALICE@corp.example`. Attribute OIDs
+(`0.9.2342.19200300.100.1.1=alice` for `uid=alice`) and Active Directory's
+other names for one account (its UPN, `DOMAIN\user` and its DN) still count
+separately, and a saved connection can name an account any of those ways. So
+where guessing passwords through ldapui matters, run with fixed profiles
+only: `LDAPUI_DATA_DIR=""` disables saved connections, and the profiles in
+`connections.yaml` each name one form.
 
 The server runs at most 64 API requests at once, and at most 4 of one
 session; the others wait their turn. A request that waits more than 10
@@ -552,7 +564,7 @@ address outside `--trusted-proxies`, cannot connect to the profile.
 | `identity_mismatch` | 403 | the username is not the one the identity maps to |
 | `invalid_username` | 400 | the username does not match the pattern above |
 | `password_required` | 400 | no password |
-| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects as it still under way; `Retry-After` gives the seconds to wait |
+| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects to this DN that are still under way; `Retry-After` gives the seconds to wait |
 
 The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without

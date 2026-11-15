@@ -31,7 +31,7 @@ type server struct {
 	sessions *session.Manager[Directory]
 	cookies  cookieOptions
 	log      *slog.Logger
-	// attempts counts wrong passwords per bind DN, folded to lower case.
+	// attempts counts wrong passwords per bind DN, keyed by limiterKey.
 	attempts *attemptLimiter
 
 	identityHeader string
@@ -184,7 +184,7 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	// on every path, a panic included.
 	end := s.attempts.done
 	if req.Password != "" && p.BindDN != "" {
-		key := strings.ToLower(p.BindDN)
+		key := limiterKey(p.BindDN)
 		wait, ok := s.attempts.begin(key)
 		if !ok {
 			secs := int((wait + time.Second - 1) / time.Second) // rounded up

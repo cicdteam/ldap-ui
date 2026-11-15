@@ -118,6 +118,45 @@ func TestLimiterInFlight(t *testing.T) {
 	if len(l.entries) != 0 {
 		t.Errorf("entries after every login is done = %v, want none", l.entries)
 	}
+	// Failures below max with logins in flight filling the rest: those end
+	// soon, so the wait is 1 s, not the rest of the window.
+	failN(t, l, "uid=b", 3)
+	l.begin("uid=b")
+	l.begin("uid=b")
+	if got, ok := l.begin("uid=b"); ok || got != time.Second {
+		t.Errorf("begin(uid=b) with 3 failures and 2 in flight = %v, %v, want 1s, false", got, ok)
+	}
+}
+
+func TestLimiterKey(t *testing.T) {
+	same := [][]string{
+		{
+			"uid=alice,ou=people,dc=example,dc=org",
+			"UID=Alice, ou=People,dc=example,dc=org",
+			`uid=\61lice,ou=people,dc=example,dc=org`,
+		},
+		{"alice@corp.example", "ALICE@corp.example", " alice@corp.example"},
+		{`CORP\alice`, `corp\ALICE`},
+		{"cn=a+uid=b,dc=org", "CN=A + UID=B,DC=org"},
+	}
+	for _, group := range same {
+		want := limiterKey(group[0])
+		for _, dn := range group[1:] {
+			if got := limiterKey(dn); got != want {
+				t.Errorf("limiterKey(%q) = %q, want %q, the key of %q", dn, got, want, group[0])
+			}
+		}
+	}
+	for _, pair := range [][2]string{
+		{"uid=alice,ou=people,dc=example,dc=org", "uid=bob,ou=people,dc=example,dc=org"},
+		{"uid=alice,ou=people,dc=example,dc=org", "uid=alice,ou=staff,dc=example,dc=org"},
+		{"alice@corp.example", "bob@corp.example"},
+		{`CORP\alice`, `CORP\bob`},
+	} {
+		if a, b := limiterKey(pair[0]), limiterKey(pair[1]); a == b {
+			t.Errorf("limiterKey(%q) = limiterKey(%q) = %q, want different keys", pair[0], pair[1], a)
+		}
+	}
 }
 
 func TestLimiterCapacity(t *testing.T) {
