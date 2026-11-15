@@ -212,6 +212,84 @@ func TestDialUntrustedCertificate(t *testing.T) {
 	}
 }
 
+// TestConnectStartTLSStallTimesOut checks that a server which accepts
+// StartTLS and then never answers the TLS handshake cannot hold connect
+// past the connect timeout.
+func TestConnectStartTLSStallTimesOut(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		id, err := readRequest(conn)
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn) // swallow the ClientHello, answer nothing
+	})
+	p := fakeProfile(url)
+	p.StartTLS = true
+	p.ConnectTimeout = 300 * time.Millisecond
+	cfg, err := p.TLSConfig()
+	if err != nil {
+		t.Fatalf("TLSConfig() error = %v", err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		lc, err := connect(context.Background(), p, cfg)
+		if err == nil {
+			_ = lc.Close()
+		}
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Error("connect(stalled StartTLS) error = nil, want a timeout")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("connect(stalled StartTLS) still blocked after 3s")
+	}
+}
+
+// TestWriteToStalledServerTimesOut checks that a request the server does
+// not read fails after the search timeout, and that the connection is then
+// closed: a request cut off midway leaves the stream unusable.
+func TestWriteToStalledServerTimesOut(t *testing.T) {
+	read, hungUp := make(chan struct{}), make(chan struct{})
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		<-read
+		_, _ = io.Copy(io.Discard, conn)
+		close(hungUp)
+	})
+	p := fakeProfile(url)
+	p.SearchTimeout = 500 * time.Millisecond
+	cfg, err := p.TLSConfig()
+	if err != nil {
+		t.Fatalf("TLSConfig() error = %v", err)
+	}
+	lc, err := connect(context.Background(), p, cfg)
+	if err != nil {
+		t.Fatalf("connect() error = %v", err)
+	}
+	defer lc.Close()
+	// Larger than the socket buffers, so the write blocks on the server.
+	req := ldap.NewModifyRequest("cn=x", nil)
+	req.Replace("description", []string{strings.Repeat("x", 32<<20)})
+	errc := make(chan error, 1)
+	go func() { errc <- lc.Modify(req) }()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("Modify(stalled server) error = nil, want a timeout")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Modify(stalled server) still blocked after 5s")
+	}
+	close(read)
+	select {
+	case <-hungUp:
+	case <-time.After(5 * time.Second):
+		t.Error("connection still open after a failed write, want it closed")
+	}
+}
+
 func TestReadDoesNotRetryTimeout(t *testing.T) {
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := fakeConn(t, url)

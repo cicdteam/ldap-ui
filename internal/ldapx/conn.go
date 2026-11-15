@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -148,11 +150,40 @@ func (c *Conn) dial(ctx context.Context) (*ldap.Conn, error) {
 	return lc, nil
 }
 
+// deadlineConn bounds each write by timeout, once connect has set it, so
+// that a server which stops reading cannot block go-ldap's writer forever.
+// Reads get no deadline: go-ldap's reader goroutine reads all the time.
+type deadlineConn struct {
+	net.Conn
+	// timeout is a time.Duration. It stays 0 while connect bounds every
+	// read and write by its own deadline.
+	timeout atomic.Int64
+}
+
+// Write closes the connection when it fails: the next request would
+// otherwise continue the stream where this one was cut off.
+func (c *deadlineConn) Write(b []byte) (int, error) {
+	if d := time.Duration(c.timeout.Load()); d > 0 {
+		if err := c.SetWriteDeadline(time.Now().Add(d)); err != nil {
+			return 0, err
+		}
+	}
+	n, err := c.Conn.Write(b)
+	if err != nil {
+		_ = c.Close()
+	}
+	return n, err
+}
+
 // connect opens the transport and upgrades it with StartTLS when the
 // profile asks for it. A certificate that fails verification yields an
 // UntrustedCertError. The certificate is verified in VerifyConnection
 // rather than by crypto/tls because go-ldap flattens StartTLS handshake
 // errors to text, losing both the error type and the chain.
+//
+// The dial and both kinds of TLS handshake must finish within the connect
+// timeout. On the returned connection each write is bounded by the search
+// timeout and reads have no deadline.
 func connect(ctx context.Context, p profile.Profile, cfg *tls.Config) (*ldap.Conn, error) {
 	var untrusted *UntrustedCertError
 	if !cfg.InsecureSkipVerify {
@@ -173,14 +204,48 @@ func connect(ctx context.Context, p profile.Profile, cfg *tls.Config) (*ldap.Con
 		}
 		return networkError(err)
 	}
-	d := &net.Dialer{Timeout: p.ConnectTimeout}
-	if deadline, ok := ctx.Deadline(); ok {
-		d.Deadline = deadline
-	}
-	lc, err := ldap.DialURL(p.URL, ldap.DialWithDialer(d), ldap.DialWithTLSConfig(cfg))
+	// Dial, handshake and errors as ldap.DialURL does them, but with
+	// deadlines it does not set.
+	u, err := url.Parse(p.URL)
 	if err != nil {
-		return nil, fail(err)
+		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
 	}
+	var port string
+	switch u.Scheme {
+	case "ldap":
+		port = ldap.DefaultLdapPort
+	case "ldaps":
+		port = ldap.DefaultLdapsPort
+	default:
+		return nil, fail(ldap.NewError(ldap.ErrorNetwork, fmt.Errorf("unknown scheme %q", u.Scheme)))
+	}
+	if u.Port() != "" {
+		port = u.Port()
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.ConnectTimeout)
+	defer cancel()
+	raw, err := new(net.Dialer).DialContext(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
+	if err != nil {
+		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
+	}
+	deadline, _ := ctx.Deadline()
+	if err := raw.SetDeadline(deadline); err != nil {
+		_ = raw.Close()
+		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
+	}
+	dc := &deadlineConn{Conn: raw}
+	var conn net.Conn = dc
+	isTLS := u.Scheme == "ldaps"
+	if isTLS {
+		tc := tls.Client(dc, cfg)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			_ = raw.Close()
+			return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
+		}
+		conn = tc
+	}
+	lc := ldap.NewConn(conn, isTLS)
+	lc.Start()
 	lc.SetTimeout(p.SearchTimeout)
 	if p.StartTLS {
 		if err := lc.StartTLS(cfg); err != nil {
@@ -188,6 +253,13 @@ func connect(ctx context.Context, p profile.Profile, cfg *tls.Config) (*ldap.Con
 			return nil, fail(err)
 		}
 	}
+	// The connect deadline must not outlive connect: an idle connection
+	// would lose its reader once it passed.
+	if err := raw.SetDeadline(time.Time{}); err != nil {
+		_ = lc.Close()
+		return nil, fail(ldap.NewError(ldap.ErrorNetwork, err))
+	}
+	dc.timeout.Store(int64(p.SearchTimeout))
 	return lc, nil
 }
 

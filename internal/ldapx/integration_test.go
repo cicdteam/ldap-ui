@@ -325,6 +325,31 @@ func TestReconnect(t *testing.T) {
 	}
 }
 
+// TestIdleConnectionSurvivesConnectTimeout checks that the connect-phase
+// deadline does not outlive connect: a connection idle for longer than the
+// connect timeout still serves a search, without a redial.
+func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
+	p := testProfile()
+	p.ConnectTimeout = time.Second
+	c, err := Dial(context.Background(), p, "adminpassword")
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer c.Close()
+	lc, err := c.current(context.Background())
+	if err != nil {
+		t.Fatalf("current() error = %v", err)
+	}
+	time.Sleep(2 * time.Second)
+	if lc.IsClosing() {
+		t.Error("connection closed while idle, want it open past the connect timeout")
+	}
+	page, err := c.Search(context.Background(), SearchRequest{BaseDN: userDN(0), Scope: ScopeBase})
+	if err != nil || len(page.Entries) != 1 {
+		t.Errorf("Search() after idling = %d entries, %v, want 1 entry", len(page.Entries), err)
+	}
+}
+
 // peopleListing lists all test users, pageSize entries at a time.
 func peopleListing(pageSize int) SearchRequest {
 	return SearchRequest{BaseDN: testPeople, Scope: ScopeOne, Filter: "(objectClass=inetOrgPerson)", Attributes: []string{"uid"}, PageSize: pageSize}

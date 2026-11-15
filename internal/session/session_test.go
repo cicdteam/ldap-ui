@@ -67,12 +67,20 @@ func TestNamesAndDrop(t *testing.T) {
 	}
 }
 
+// closeSignalSpy is closed by Close, which Sweep runs in the background.
+type closeSignalSpy chan struct{}
+
+func (c closeSignalSpy) Close() error {
+	close(c)
+	return nil
+}
+
 func TestSweep(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-	m := New[*closerSpy](30 * time.Minute)
+	m := New[closeSignalSpy](30 * time.Minute)
 	m.now = func() time.Time { return now }
 	idle, active := m.Create(), m.Create()
-	idleConn, activeConn := &closerSpy{}, &closerSpy{}
+	idleConn, activeConn := make(closeSignalSpy), make(closeSignalSpy)
 	_ = m.Put(idle, "dev", idleConn)
 	_ = m.Put(active, "dev", activeConn)
 
@@ -81,11 +89,56 @@ func TestSweep(t *testing.T) {
 	now = now.Add(20 * time.Minute)
 	m.Sweep()
 
-	if !idleConn.closed || m.Exists(idle) {
+	select {
+	case <-idleConn:
+	case <-time.After(time.Second):
+		t.Error("Sweep() did not close a session idle for 40m")
+	}
+	if m.Exists(idle) {
 		t.Error("Sweep() kept a session idle for 40m")
 	}
-	if activeConn.closed || !m.Exists(active) {
+	select {
+	case <-activeConn:
 		t.Error("Sweep() closed a session used 20m ago")
+	default:
+	}
+	if !m.Exists(active) {
+		t.Error("Sweep() dropped a session used 20m ago")
+	}
+}
+
+// blockingCloserStub blocks in Close until release is closed, like a
+// connection whose server stopped reading.
+type blockingCloserStub struct{ release chan struct{} }
+
+func (c blockingCloserStub) Close() error {
+	<-c.release
+	return nil
+}
+
+// A Close that hangs on a stalled server must not hold up the sweep.
+func TestSweepDoesNotWaitForClose(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	m := New[blockingCloserStub](time.Minute)
+	m.now = func() time.Time { return now }
+	release := make(chan struct{})
+	defer close(release)
+	id := m.Create()
+	_ = m.Put(id, "dev", blockingCloserStub{release: release})
+	now = now.Add(time.Hour)
+
+	swept := make(chan struct{})
+	go func() {
+		m.Sweep()
+		close(swept)
+	}()
+	select {
+	case <-swept:
+	case <-time.After(time.Second):
+		t.Fatal("Sweep() still waiting for a blocked Close after 1s")
+	}
+	if m.Exists(id) {
+		t.Error("Sweep() kept the expired session")
 	}
 }
 
