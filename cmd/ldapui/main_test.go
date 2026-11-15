@@ -205,6 +205,24 @@ func TestParseFlagsIdentity(t *testing.T) {
 	}
 }
 
+// TestRunIdentityUserNeedsHeader checks that a profile tied to the proxy's
+// identity is a startup error without --identity-header: nobody could
+// connect to it.
+func TestRunIdentityUserNeedsHeader(t *testing.T) {
+	clearEnv(t)
+	cfg := filepath.Join(t.TempDir(), "connections.yaml")
+	yaml := "connections:\n  - name: corp-ad\n    url: ldaps://dc1.corp.example:636\n    bindDNTemplate: \"{user}@corp.example\"\n    identityUser: localpart\n"
+	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Port -1 cannot be listened on, so that without the check run fails
+	// there instead of serving.
+	err := run([]string{"--config", cfg, "--listen", "127.0.0.1:-1"})
+	if err == nil || !strings.Contains(err.Error(), "corp-ad") || !strings.Contains(err.Error(), "--identity-header") {
+		t.Errorf("run(identityUser profile, no --identity-header) = %v, want an error naming corp-ad and --identity-header", err)
+	}
+}
+
 func TestParseFlagsAuthToken(t *testing.T) {
 	tests := []struct {
 		name    string

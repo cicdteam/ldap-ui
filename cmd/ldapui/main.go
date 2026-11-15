@@ -307,6 +307,12 @@ func runTo(args []string, stdout io.Writer) error {
 			return err
 		}
 	}
+	// Without the header there is no identity, so every connect would fail.
+	for _, p := range fixed {
+		if p.IdentityUser != "" && cfg.identityHeader == "" {
+			return fmt.Errorf("profile %s: identityUser needs --identity-header, the header the authenticating proxy sets to the user", p.Name)
+		}
+	}
 	catalog, err := profile.NewCatalog(fixed, cfg.dataDir)
 	if err != nil {
 		return err

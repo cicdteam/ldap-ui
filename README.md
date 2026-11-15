@@ -468,7 +468,8 @@ address: list only the proxy's addresses, and keep other clients off the
 ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
 `--identity-header` without `--trusted-proxies` is a startup error, and so
 is `Authorization`, `Proxy-Authorization` or `Cookie` as the header: they
-carry credentials.
+carry credentials. A profile in `connections.yaml` with `identityUser` is a
+startup error without `--identity-header`, since nobody could connect to it.
 
 ## Running for a team
 
