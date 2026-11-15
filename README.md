@@ -239,6 +239,8 @@ writable; saving profiles will fail` with its `dir`.
 | `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
 | `--session-idle` | | `30m` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
+| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
+| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is logged; required with `--identity-header` |
 | `--version` | | prints `ldapui <version>` and exits |
 
 Behind a reverse proxy, always set `--auth-token` or `LDAPUI_AUTH_TOKEN`: a
@@ -247,6 +249,63 @@ browser, which needs no token when ldapui listens on loopback.
 `--allowed-hosts` without a token generates a new one on every restart, so
 set one explicitly to keep it stable. A request that runs longer than 5
 minutes is cut off.
+
+## Logs and accountability
+
+ldapui logs to stdout, one `key=value` line per event. The lines below,
+except `auth failed`, end with who made them:
+
+- `session`: the first 8 hex characters of the SHA-256 of the browser's
+  session cookie, empty without one (a browser's first `connected` line).
+  It ties one browser's lines together; the session ID itself is never
+  logged.
+- `remote`: the client address and port. Behind a proxy this is the proxy:
+  match it with the proxy's access log.
+- `user`: the `--identity-header` value, see below.
+
+The lines:
+
+| Message | Fields |
+|---|---|
+| `connected`, `connect failed` | `profile`, `bindDN`, and `error` when it failed |
+| `disconnected` | `profile`, `bindDN` |
+| `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
+| `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
+| `renamed` | `profile`, `dn`, `newDN`, `bindDN` |
+| `password set` | `profile`, `dn`, `method`, `bindDN` |
+| `deleted` | `profile`, `dn`, `bindDN` |
+| `modify rejected`, `add rejected`, `rename rejected`, `password rejected`, `delete rejected` | the fields of the write, `code`, `ldapResultCode`, `bindDN`; an unexpected error also logs `<op> failed` with `error` |
+| `profile saved` | `name`, `oldURL` (empty for a new profile), `url`, `readOnly`, `insecureSkipVerify` |
+| `auth failed` | `remote` only: a request refused with 401 for a missing or wrong token |
+
+`bindDN` is the profile's bind DN. Attribute values, passwords, tokens and
+session IDs are never logged, and a DN that does not parse or has a secret
+attribute in an RDN is logged as `<redacted>`.
+
+The directory's own audit log sees only the bind DN. A profile bound as a
+shared service account (`passwordEnv` or `passwordFile`) makes every write
+that account's, and with one shared token only `session` and `remote` tell
+people apart. For per-person accountability, give each person a profile with
+their own bind DN and no configured password: they type their password at
+connect, and both the directory and ldapui log their DN.
+
+Behind an authenticating proxy, ldapui can also log the user the proxy
+verified. With oauth2-proxy (`--set-xauthrequest`) behind ingress-nginx
+(`nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Email`):
+
+```sh
+ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.42.0.0/16
+```
+
+The value is logged as `user`, cut to 256 bytes, on the lines that carry
+`session`, and only for requests whose client address is in
+`--trusted-proxies`. It is a log field only: it grants nothing, and the token
+still applies. Any client can send any header, so the value means something
+only when the proxy replaces it on every request (ingress-nginx and nginx's
+`proxy_set_header` do) and nothing else can reach ldapui from a trusted
+address: list only the proxy's addresses, and keep other clients off the
+ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
+`--identity-header` without `--trusted-proxies` is a startup error.
 
 ## Development
 

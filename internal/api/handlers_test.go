@@ -527,3 +527,149 @@ func TestWiring(t *testing.T) {
 		t.Errorf("form POST = %d, want 415", rec.Code)
 	}
 }
+
+// jsonLogs decodes the lines a slog.JSONHandler wrote.
+func jsonLogs(t *testing.T, logs *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var lines []map[string]any
+	for line := range strings.Lines(logs.String()) {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		lines = append(lines, m)
+	}
+	return lines
+}
+
+// withMsg is the lines whose msg is msg.
+func withMsg(lines []map[string]any, msg string) []map[string]any {
+	var found []map[string]any
+	for _, l := range lines {
+		if l["msg"] == msg {
+			found = append(found, l)
+		}
+	}
+	return found
+}
+
+func TestWriteLogsAttribution(t *testing.T) {
+	const (
+		token    = "attribution-token-not-logged" //nolint:gosec // test value, not a credential
+		typedPW  = "typed-password-not-logged"
+		bindDN   = "cn=admin,dc=example,dc=org"
+		remote   = "192.0.2.1:1234" // httptest.NewRequest's RemoteAddr
+		applyOne = `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["secret-value"]}]}]}`
+	)
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{AuthToken: token, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	env.do(t, http.MethodGet, "/?token="+token, "")
+
+	env.dialErr = ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("data 52e"))
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"`+typedPW+`"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("connect with bad credentials = %d %s, want 401", rec.Code, rec.Body)
+	}
+	env.dialErr = nil
+	connectTo(t, env, `{"profile":"dev"}`)
+	for _, w := range []struct{ path, body string }{
+		{path: "/api/c/dev/changes/apply", body: applyOne},
+		{path: "/api/c/dev/entries/add", body: addBody},
+		{path: "/api/c/dev/entries/rename", body: renameBody},
+		{path: "/api/c/dev/entries/password", body: setBody},
+		{path: "/api/c/dev/entries/delete", body: deleteBody},
+	} {
+		if rec := env.do(t, http.MethodPost, w.path, w.body); rec.Code != http.StatusOK {
+			t.Fatalf("POST %s = %d %s, want 200", w.path, rec.Code, rec.Body)
+		}
+	}
+	env.dir.writeErr = ldap.NewError(ldap.LDAPResultNotAllowedOnNonLeaf, errors.New("subordinate objects must be deleted first"))
+	if rec := env.do(t, http.MethodPost, "/api/c/dev/entries/delete", deleteBody); rec.Code == http.StatusOK {
+		t.Fatalf("failing delete = %d %s, want an error", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"dev"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
+	}
+
+	lines := jsonLogs(t, &logs)
+	for _, msg := range []string{"connect failed", "connected", "modified", "added", "renamed", "password set", "deleted", "delete rejected", "disconnected"} {
+		found := withMsg(lines, msg)
+		if len(found) == 0 {
+			t.Errorf("no %q log line in:\n%s", msg, logs.String())
+			continue
+		}
+		for _, l := range found {
+			if _, ok := l["session"].(string); !ok || l["remote"] != remote || l["bindDN"] != bindDN {
+				t.Errorf("%q line = %v, want session, remote %q and bindDN %q", msg, l, remote, bindDN)
+			}
+		}
+	}
+	for _, l := range withMsg(lines, "modified") {
+		if diff := cmp.Diff([]any{"description"}, l["attrs"]); diff != "" {
+			t.Errorf("modified attrs mismatch (-want +got):\n%s", diff)
+		}
+	}
+
+	var sessionID string
+	for _, c := range env.cookies {
+		if c.Name == sessionCookie {
+			sessionID = c.Value
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("no session cookie set")
+	}
+	for _, secret := range []string{sessionID, typedPW, "from-env", "secret-value", token} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("log contains %q:\n%s", secret, logs.String())
+		}
+	}
+}
+
+func TestSaveProfileLogged(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	for _, body := range []string{
+		`{"name":"lab","url":"ldap://lab:389","environment":"prod"}`,
+		`{"name":"lab","url":"ldap://evil.example:389","environment":"prod","readOnly":false,"insecureSkipVerify":true}`,
+	} {
+		if rec := env.do(t, http.MethodPost, "/api/profiles", body); rec.Code != http.StatusOK {
+			t.Fatalf("save %s = %d %s, want 200", body, rec.Code, rec.Body)
+		}
+	}
+	got := withMsg(jsonLogs(t, &logs), "profile saved")
+	for _, l := range got {
+		for _, k := range []string{"time", "level", "msg", "session", "remote"} {
+			delete(l, k)
+		}
+	}
+	want := []map[string]any{
+		{"name": "lab", "oldURL": "", "url": "ldap://lab:389", "readOnly": true, "insecureSkipVerify": false},
+		{"name": "lab", "oldURL": "ldap://lab:389", "url": "ldap://evil.example:389", "readOnly": false, "insecureSkipVerify": true},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("profile saved lines mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBadTokenLogged(t *testing.T) {
+	const token = "bad-token-test-real-token"
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{AuthToken: token, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	req.Host = "localhost:8080"
+	req.Header.Set("Authorization", "Bearer wrong-token-not-logged")
+	rec := httptest.NewRecorder()
+	env.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "unauthorized" {
+		t.Fatalf("bad token = %d %s, want 401 unauthorized", rec.Code, rec.Body)
+	}
+	got := withMsg(jsonLogs(t, &logs), "auth failed")
+	if len(got) != 1 || got[0]["remote"] != req.RemoteAddr {
+		t.Errorf("auth failed lines = %v, want one with remote %q", got, req.RemoteAddr)
+	}
+	for _, secret := range []string{token, "wrong-token-not-logged"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("log contains %q:\n%s", secret, logs.String())
+		}
+	}
+}

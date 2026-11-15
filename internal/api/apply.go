@@ -117,11 +117,11 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 	res := applyResult{Applied: []string{}}
 	for _, e := range req.Entries {
 		if err := d.Modify(r.Context(), e.DN, e.Changes); err != nil {
-			_, body := s.rejected("modify", p, sch, e.DN, err, changeAttrs(e.Changes), "changes", len(e.Changes))
+			_, body := s.rejected(r, "modify", p, sch, e.DN, err, changeAttrs(e.Changes), "changes", len(e.Changes))
 			res.Failed = &applyFailure{DN: e.DN, Error: body}
 			break
 		}
-		s.log.Info("modified", "profile", p.Name, "dn", logDN(e.DN, sch), "changes", len(e.Changes))
+		s.log.Info("modified", s.attributed(r, p, "profile", p.Name, "dn", logDN(e.DN, sch), "changes", len(e.Changes), "attrs", changeAttrs(e.Changes))...)
 		res.Applied = append(res.Applied, e.DN)
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -132,17 +132,17 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 // rejection names the one it was about, while a network error, a timeout or
 // a missing entry is about the whole entry. fields are extra slog key/value
 // pairs for both logs, never attribute values; a DN among them goes through
-// logDN first.
-func (s *server) rejected(op string, p profile.Profile, sch *schema.Schema, dn string, err error, names []string, fields ...any) (int, apiError) {
+// logDN first. Both logs end with attributed's fields.
+func (s *server) rejected(r *http.Request, op string, p profile.Profile, sch *schema.Schema, dn string, err error, names []string, fields ...any) (int, apiError) {
 	log := s.log.With(append([]any{"profile", p.Name, "dn", logDN(dn, sch)}, fields...)...)
 	status, body := errorResponse(err)
 	if status == http.StatusInternalServerError {
-		log.Error(op+" failed", "error", err)
+		log.Error(op+" failed", s.attributed(r, p, "error", err)...)
 	}
 	if body.Code == "conflict" || body.Code == "rejected" {
 		body.Attribute = blame(names, body.Diagnostic)
 	}
-	log.Info(op+" rejected", "code", body.Code, "ldapResultCode", body.LDAPResultCode)
+	log.Info(op+" rejected", s.attributed(r, p, "code", body.Code, "ldapResultCode", body.LDAPResultCode)...)
 	return status, body
 }
 
@@ -196,7 +196,7 @@ func validateValues(attr string, values []string, b64 bool) (apiError, bool) {
 	return apiError{}, true
 }
 
-// changeAttrs lists the attribute of each change, for blame.
+// changeAttrs lists the attribute of each change, for blame and the log.
 func changeAttrs(changes []ldapx.Change) []string {
 	attrs := make([]string, len(changes))
 	for i, c := range changes {

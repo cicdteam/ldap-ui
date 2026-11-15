@@ -6,6 +6,7 @@ package api
 import (
 	"crypto/subtle"
 	"fmt"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -87,8 +88,9 @@ func hostCheck(extra []string, next http.Handler) http.Handler {
 // requireToken admits requests carrying token as the ldapui_token cookie or
 // as a bearer token. A GET with ?token= sets the cookie and redirects to the
 // same URL without it, so the login link printed at startup just works. An
-// empty token disables the check.
-func requireToken(token string, cookies cookieOptions, next http.Handler) http.Handler {
+// empty token disables the check. A refusal logs "auth failed" with the
+// client address, never the token it presented.
+func requireToken(token string, cookies cookieOptions, log *slog.Logger, next http.Handler) http.Handler {
 	if token == "" {
 		return next
 	}
@@ -107,6 +109,7 @@ func requireToken(token string, cookies cookieOptions, next http.Handler) http.H
 			next.ServeHTTP(w, r)
 			return
 		}
+		log.Info("auth failed", "remote", r.RemoteAddr)
 		writeError(w, http.StatusUnauthorized, apiError{Code: "unauthorized", Message: "open the login link printed in the server log"})
 	})
 }

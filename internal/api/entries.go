@@ -68,10 +68,10 @@ func (s *server) addEntry(w http.ResponseWriter, r *http.Request) {
 		for i, a := range req.Attributes {
 			names[i] = a.Name
 		}
-		s.failWrite(w, "add", p, sch, req.DN, err, names, "attributes", len(req.Attributes))
+		s.failWrite(w, r, "add", p, sch, req.DN, err, names, "attributes", len(req.Attributes))
 		return
 	}
-	s.log.Info("added", "profile", p.Name, "dn", logDN(req.DN, sch), "attributes", len(req.Attributes))
+	s.log.Info("added", s.attributed(r, p, "profile", p.Name, "dn", logDN(req.DN, sch), "attributes", len(req.Attributes))...)
 	writeJSON(w, http.StatusOK, writeResult{DN: req.DN})
 }
 
@@ -87,10 +87,10 @@ func (s *server) deleteEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Delete(r.Context(), req.DN); err != nil {
-		s.failWrite(w, "delete", p, sch, req.DN, err, nil)
+		s.failWrite(w, r, "delete", p, sch, req.DN, err, nil)
 		return
 	}
-	s.log.Info("deleted", "profile", p.Name, "dn", logDN(req.DN, sch))
+	s.log.Info("deleted", s.attributed(r, p, "profile", p.Name, "dn", logDN(req.DN, sch))...)
 	writeJSON(w, http.StatusOK, writeResult{DN: req.DN})
 }
 
@@ -108,10 +108,10 @@ func (s *server) renameEntry(w http.ResponseWriter, r *http.Request) {
 	to := renamed(req)
 	err := d.Rename(r.Context(), req.DN, strings.TrimSpace(req.NewRDN), strings.TrimSpace(req.NewParent), !req.KeepOldRDN)
 	if err != nil {
-		s.failWrite(w, "rename", p, sch, req.DN, err, nil, "newDN", logDN(to, sch))
+		s.failWrite(w, r, "rename", p, sch, req.DN, err, nil, "newDN", logDN(to, sch))
 		return
 	}
-	s.log.Info("renamed", "profile", p.Name, "dn", logDN(req.DN, sch), "newDN", logDN(to, sch))
+	s.log.Info("renamed", s.attributed(r, p, "profile", p.Name, "dn", logDN(req.DN, sch), "newDN", logDN(to, sch))...)
 	writeJSON(w, http.StatusOK, writeResult{DN: to})
 }
 
@@ -132,17 +132,17 @@ func (s *server) setPassword(w http.ResponseWriter, r *http.Request) {
 		method = "unicodePwd"
 	}
 	if err := d.SetPassword(r.Context(), req.DN, req.Password, req.Method); err != nil {
-		s.failWrite(w, "password", p, sch, req.DN, err, nil, "method", method)
+		s.failWrite(w, r, "password", p, sch, req.DN, err, nil, "method", method)
 		return
 	}
-	s.log.Info("password set", "profile", p.Name, "dn", logDN(req.DN, sch), "method", method)
+	s.log.Info("password set", s.attributed(r, p, "profile", p.Name, "dn", logDN(req.DN, sch), "method", method)...)
 	writeJSON(w, http.StatusOK, writeResult{DN: req.DN})
 }
 
 // failWrite answers a failed entry write with rejected's response; see
 // rejected for names and fields.
-func (s *server) failWrite(w http.ResponseWriter, op string, p profile.Profile, sch *schema.Schema, dn string, err error, names []string, fields ...any) {
-	status, body := s.rejected(op, p, sch, dn, err, names, fields...)
+func (s *server) failWrite(w http.ResponseWriter, r *http.Request, op string, p profile.Profile, sch *schema.Schema, dn string, err error, names []string, fields ...any) {
+	status, body := s.rejected(r, op, p, sch, dn, err, names, fields...)
 	writeError(w, status, body)
 }
 

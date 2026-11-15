@@ -4,6 +4,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,7 +43,7 @@ func TestHostCheck(t *testing.T) {
 }
 
 func TestRequireToken(t *testing.T) {
-	h := requireToken("s3cret", cookieOptions{Path: "/ldap/", Secure: true}, okHandler)
+	h := requireToken("s3cret", cookieOptions{Path: "/ldap/", Secure: true}, slog.New(slog.DiscardHandler), okHandler)
 
 	if got := serve(h, httptest.NewRequest(http.MethodGet, "/api/profiles", nil)).Code; got != http.StatusUnauthorized {
 		t.Errorf("no token = %d, want 401", got)
@@ -94,7 +95,7 @@ func TestRequireToken(t *testing.T) {
 		}
 	}
 
-	if got := serve(requireToken("", cookieOptions{Path: "/"}, okHandler), httptest.NewRequest(http.MethodGet, "/", nil)).Code; got != http.StatusOK {
+	if got := serve(requireToken("", cookieOptions{Path: "/"}, slog.New(slog.DiscardHandler), okHandler), httptest.NewRequest(http.MethodGet, "/", nil)).Code; got != http.StatusOK {
 		t.Errorf("no token configured = %d, want 200", got)
 	}
 }

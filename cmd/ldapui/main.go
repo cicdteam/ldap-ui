@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -43,6 +44,9 @@ type config struct {
 	sessionIdle   time.Duration
 	secureCookies bool
 	showVersion   bool
+
+	identityHeader string
+	trustedProxies []netip.Prefix
 }
 
 var (
@@ -76,7 +80,7 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 		}
 	}
 	var c config
-	var hosts string
+	var hosts, proxies string
 	fs := flag.NewFlagSet("ldapui", flag.ContinueOnError)
 	fs.SetOutput(usage)
 	fs.StringVar(&c.listen, "listen", env("LDAPUI_LISTEN", "127.0.0.1:8080"), "address to listen on (env LDAPUI_LISTEN)")
@@ -87,6 +91,10 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	fs.StringVar(&c.authToken, "auth-token", "", "access token; generated when not on loopback or when --allowed-hosts is set (env LDAPUI_AUTH_TOKEN)")
 	fs.StringVar(&hosts, "allowed-hosts", env("LDAPUI_ALLOWED_HOSTS", ""), "extra Host header values to accept, comma-separated (env LDAPUI_ALLOWED_HOSTS)")
 	fs.DurationVar(&c.sessionIdle, "session-idle", 30*time.Minute, "close LDAP connections after this much inactivity")
+	fs.StringVar(&c.identityHeader, "identity-header", env("LDAPUI_IDENTITY_HEADER", ""),
+		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user (env LDAPUI_IDENTITY_HEADER)")
+	fs.StringVar(&proxies, "trusted-proxies", env("LDAPUI_TRUSTED_PROXIES", ""),
+		"CIDRs or IPs of the proxies whose --identity-header is logged, comma-separated (env LDAPUI_TRUSTED_PROXIES)")
 	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure when served over HTTPS, e.g. behind a TLS ingress (env LDAPUI_SECURE_COOKIES)")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -106,6 +114,20 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 			c.allowedHosts = append(c.allowedHosts, h)
 		}
 	}
+	for _, v := range strings.Split(proxies, ",") {
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		p, err := parsePrefix(v)
+		if err != nil {
+			return config{}, fmt.Errorf("--trusted-proxies: %w", err)
+		}
+		c.trustedProxies = append(c.trustedProxies, p)
+	}
+	// Without trusted proxies any client could set the header.
+	if c.identityHeader != "" && len(c.trustedProxies) == 0 {
+		return config{}, errors.New("--identity-header needs --trusted-proxies, the addresses of the proxy that sets it")
+	}
 	if c.sessionIdle <= 0 {
 		return config{}, fmt.Errorf("--session-idle %v: want a positive duration", c.sessionIdle)
 	}
@@ -118,6 +140,19 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 		return config{}, errors.New("--auth-token: want at least 16 characters from A-Z, a-z, 0-9 and . _ ~ -")
 	}
 	return c, nil
+}
+
+// parsePrefix parses a CIDR, or a bare IP as a prefix of that one address.
+func parsePrefix(s string) (netip.Prefix, error) {
+	if ip, err := netip.ParseAddr(s); err == nil {
+		ip = ip.Unmap()
+		return netip.PrefixFrom(ip, ip.BitLen()), nil
+	}
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("%q is not a CIDR or an IP address", s)
+	}
+	return p, nil
 }
 
 // isLoopback reports whether addr (host:port) only accepts local connections.
@@ -218,7 +253,8 @@ func runTo(args []string, stdout io.Writer) error {
 	srv := newHTTPServer(api.New(api.Options{
 		Catalog: catalog, Dial: dial, Sessions: sessions,
 		AllowedHosts: cfg.allowedHosts, AuthToken: cfg.authToken, BasePath: cfg.basePath,
-		SecureCookies: cfg.secureCookies, UI: web.Dist(), Logger: logger,
+		SecureCookies: cfg.secureCookies, IdentityHeader: cfg.identityHeader, TrustedProxies: cfg.trustedProxies,
+		UI: web.Dist(), Logger: logger,
 	}))
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
 	if err != nil {

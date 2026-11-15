@@ -9,6 +9,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"slices"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
@@ -23,6 +25,9 @@ type server struct {
 	sessions *session.Manager[Directory]
 	cookies  cookieOptions
 	log      *slog.Logger
+
+	identityHeader string
+	trustedProxies []netip.Prefix
 }
 
 // profileView is a profile as the UI sees it.
@@ -65,6 +70,9 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p, maxBody) {
 		return
 	}
+	// ponytail: read before Save, so two saves of one name at once may log a
+	// stale oldURL; have Save return the replaced profile if that matters.
+	old, _ := s.catalog.Find(p.Name) // the zero Profile, so oldURL "", for a new one
 	saved, err := s.catalog.Save(p)
 	switch {
 	case errors.Is(err, profile.ErrInvalid):
@@ -78,6 +86,10 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.fail(w, err)
 	default:
+		s.log.Info("profile saved", slices.Concat([]any{
+			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
+			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
+		}, s.who(r))...)
 		writeJSON(w, http.StatusOK, s.view(saved, true, nil))
 	}
 }
@@ -140,7 +152,7 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	dir, err := s.dial(ctx, p, password)
 	if err != nil {
-		s.log.Info("connect failed", "profile", p.Name, "bindDN", p.BindDN, "error", err)
+		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
 		s.fail(w, err)
 		return
 	}
@@ -149,7 +161,8 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.log.Info("connected", "profile", p.Name, "bindDN", p.BindDN)
+	// The session is the one the request came with: "" on a first connect.
+	s.log.Info("connected", s.attributed(r, p, "profile", p.Name)...)
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 
@@ -161,6 +174,8 @@ func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.Drop(sessionID(r), req.Profile)
+	p, _ := s.catalog.Find(req.Profile) // for the bind DN; "" for an unknown name
+	s.log.Info("disconnected", s.attributed(r, p, "profile", req.Profile)...)
 	w.WriteHeader(http.StatusNoContent)
 }
 

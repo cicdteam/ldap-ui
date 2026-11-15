@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -156,6 +157,35 @@ func TestRunVersion(t *testing.T) {
 				t.Errorf("run(--version) with %s=%q printed %q, want %q", tc.key, tc.value, got, want)
 			}
 		})
+	}
+}
+
+func TestParseFlagsIdentity(t *testing.T) {
+	env := map[string]string{"LDAPUI_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.7,,2001:db8::1"}
+	getenv := func(k string) string { return env[k] }
+	got, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, getenv, io.Discard)
+	if err != nil {
+		t.Fatalf("parseFlags(--identity-header) error = %v", err)
+	}
+	if got.identityHeader != "X-Auth-Request-Email" {
+		t.Errorf("parseFlags(--identity-header) identityHeader = %q, want X-Auth-Request-Email", got.identityHeader)
+	}
+	want := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("192.0.2.7/32"),
+		netip.MustParsePrefix("2001:db8::1/128"),
+	}
+	if diff := cmp.Diff(want, got.trustedProxies, cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
+		t.Errorf("parseFlags() trustedProxies mismatch (-want +got):\n%s", diff)
+	}
+
+	noEnv := func(string) string { return "" }
+	if _, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, noEnv, io.Discard); err == nil {
+		t.Errorf("parseFlags(--identity-header without --trusted-proxies) error = nil, want error")
+	}
+	args := []string{"--identity-header", "X-Auth-Request-Email", "--trusted-proxies", "10.0.0.0/8,10.0.0.0/99"}
+	if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "10.0.0.0/99") {
+		t.Errorf("parseFlags(%q) error = %v, want an error naming 10.0.0.0/99", args, err)
 	}
 }
 
