@@ -313,15 +313,16 @@ missing or holds an invalid token (at least 16 characters from
 `A-Z a-z 0-9 . _ ~ -`); the error names the file, never the token.
 
 A browser's open connections live in a session on the server, closed after
-`--session-idle` without use, or `--session-max-age` after it began, however
-active. Every successful connect moves the browser to a new session ID and
-keeps its connections, so an ID seen before a connect is worthless after it.
-That connect begins the new session, so the connections it keeps get a fresh
-`--session-max-age`. A request from another tab at the same instant can find
-its session gone; that tab reconnects. A session holds at most 8
-connections: one more connect fails with 409 `too_many_connections` until one
-is disconnected. The server holds at most 1000 sessions; one more closes the
-connections of the least recently used.
+`--session-idle` without use. Each connection is also closed
+`--session-max-age` after it was connected, however active; connecting that
+profile again starts the count again, an automatic reconnect after a dropped
+connection does not. Every successful connect moves the browser to a new
+session ID and keeps its other connections, each with its own count, so an
+ID seen before a connect is worthless after it. A request from another tab
+at the same instant can find its session gone; that tab reconnects. A
+session holds at most 8 connections: one more connect fails with 409
+`too_many_connections` until one is disconnected. The server holds at most
+1000 sessions; one more closes the connections of the least recently used.
 
 Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
 within 60 seconds refuse further connects as that DN with 429
@@ -572,7 +573,8 @@ address outside `--trusted-proxies`, cannot connect to the profile.
 The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without
 asking again. It is forgotten at disconnect, when the session expires after
-`--session-idle` without use, or when the session reaches `--session-max-age`.
+`--session-idle` without use, or `--session-max-age` after that connection
+was connected.
 
 ### Behind a reverse proxy
 

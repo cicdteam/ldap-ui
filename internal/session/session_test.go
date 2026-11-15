@@ -108,7 +108,8 @@ func TestSweep(t *testing.T) {
 	}
 }
 
-// A session in use every minute still ends 8h after it was created.
+// A connection in use every minute still ends 8h after it was put, and its
+// session goes with it once nothing is left.
 func TestMaxAgeExpires(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	m := New[closeSignalSpy](30*time.Minute, 8*time.Hour)
@@ -120,33 +121,35 @@ func TestMaxAgeExpires(t *testing.T) {
 	for elapsed := time.Minute; elapsed <= 8*time.Hour; elapsed += time.Minute {
 		now = now.Add(time.Minute)
 		if _, err := m.Get(id, "dev"); err != nil {
-			t.Fatalf("Get() %v after Create error = %v, want nil", elapsed, err)
+			t.Fatalf("Get() %v after Put error = %v, want nil", elapsed, err)
 		}
 	}
 	now = now.Add(time.Minute)
 
-	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNoSession) {
-		t.Errorf("Get() 8h1m after Create error = %v, want ErrNoSession", err)
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("Get() 8h1m after Put error = %v, want ErrNotConnected", err)
 	}
-	if names := m.Names(id); names != nil {
-		t.Errorf("Names() 8h1m after Create = %v, want nil", names)
+	if names := m.Names(id); len(names) != 0 {
+		t.Errorf("Names() 8h1m after Put = %v, want empty", names)
 	}
-	if m.Exists(id) {
-		t.Error("Exists() 8h1m after Create = true, want false")
-	}
-	if names := m.Names(m.Rotate(id)); len(names) != 0 {
-		t.Errorf("Names(Rotate()) 8h1m after Create = %v, want empty: rotation must not revive the session", names)
+	id = m.Rotate(id)
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("Get(Rotate()) 8h1m after Put error = %v, want ErrNotConnected: rotation must not revive the connection", err)
 	}
 	m.Sweep()
 	select {
 	case <-conn:
 	case <-time.After(time.Second):
-		t.Error("Sweep() did not close a session 8h1m after Create")
+		t.Error("Sweep() did not close a connection 8h1m after Put")
+	}
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNoSession) {
+		t.Errorf("Get() after Sweep error = %v, want ErrNoSession for a session left with no connections", err)
 	}
 }
 
-// Rotation is a new sign-in, so the moved connections get a fresh 8h.
-func TestRotateResetsAge(t *testing.T) {
+// Rotation moves connections with their age: it is not a new sign-in for
+// the connections it carries.
+func TestRotateKeepsConnAge(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	m := New[closeSignalSpy](24*time.Hour, 8*time.Hour)
 	m.now = func() time.Time { return now }
@@ -156,20 +159,52 @@ func TestRotateResetsAge(t *testing.T) {
 	now = now.Add(7 * time.Hour)
 	id := m.Rotate(old)
 
-	now = now.Add(8 * time.Hour)
-	m.Sweep()
-	if _, err := m.Get(id, "dev"); err != nil {
-		t.Errorf("Get() 8h after Rotate error = %v, want nil", err)
+	now = now.Add(time.Hour + time.Minute)
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("Get() 8h1m after Put, rotated at 7h, error = %v, want ErrNotConnected", err)
 	}
+	m.Sweep()
 	select {
 	case <-conn:
-		t.Error("Sweep() closed a session 8h after Rotate")
+	case <-time.After(time.Second):
+		t.Error("Sweep() did not close a connection 8h1m after Put, rotated at 7h")
+	}
+}
+
+// Each connection counts its own age from its own Put.
+func TestConnAgeIndependent(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	m := New[closeSignalSpy](24*time.Hour, 8*time.Hour)
+	m.now = func() time.Time { return now }
+	id := m.Create()
+	a, b := make(closeSignalSpy), make(closeSignalSpy)
+	_ = m.Put(id, "a", a)
+	now = now.Add(4 * time.Hour)
+	_ = m.Put(id, "b", b)
+	now = now.Add(4*time.Hour + time.Minute)
+
+	if _, err := m.Get(id, "a"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("Get(a) 8h1m after its Put error = %v, want ErrNotConnected", err)
+	}
+	if got, err := m.Get(id, "b"); err != nil || got != b {
+		t.Errorf("Get(b) 4h1m after its Put = %v, %v, want b, nil", got, err)
+	}
+	if diff := cmp.Diff([]string{"b"}, m.Names(id)); diff != "" {
+		t.Errorf("Names() mismatch (-want +got):\n%s", diff)
+	}
+	m.Sweep()
+	select {
+	case <-a:
+	case <-time.After(time.Second):
+		t.Error("Sweep() did not close a connection 8h1m after its Put")
+	}
+	select {
+	case <-b:
+		t.Error("Sweep() closed a connection 4h1m after its Put")
 	default:
 	}
-
-	now = now.Add(time.Minute)
-	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNoSession) {
-		t.Errorf("Get() 8h1m after Rotate error = %v, want ErrNoSession", err)
+	if got, err := m.Get(id, "b"); err != nil || got != b {
+		t.Errorf("Get(b) after Sweep = %v, %v, want b, nil", got, err)
 	}
 }
 
