@@ -200,6 +200,60 @@ func TestADStartTLS(t *testing.T) {
 	}
 }
 
+// TestTemplateBindSambaUPN adds user001 and the disabled user041 of the AD
+// demo data, as the seed has no users with passwords, and signs in as each
+// by user principal name through a template.
+func TestTemplateBindSambaUPN(t *testing.T) {
+	const (
+		template = "{user}@corp.example.test"
+		password = "Demo-Passw0rd!"
+	)
+	admin := dialAD(t)
+	ctx := context.Background()
+	addUser := func(name, userAccountControl string) {
+		t.Helper()
+		dn := "CN=" + name + "," + adOU
+		attrs := []TextAttribute{
+			{Name: "objectClass", Values: []string{"user"}},
+			{Name: "sAMAccountName", Values: []string{name}},
+			{Name: "userPrincipalName", Values: []string{name + "@corp.example.test"}},
+		}
+		if err := admin.Add(ctx, dn, attrs); err != nil {
+			t.Fatalf("Add(%s) error = %v", dn, err)
+		}
+		t.Cleanup(func() { // runs before dialAD's Close
+			if err := admin.Delete(ctx, dn); err != nil {
+				t.Errorf("Delete(%s) error = %v", dn, err)
+			}
+		})
+		if err := admin.SetPassword(ctx, dn, password, ""); err != nil {
+			t.Fatalf("SetPassword(%s) error = %v", dn, err)
+		}
+		uac := []Change{{Op: "replace", Attr: "userAccountControl", Values: []string{userAccountControl}}}
+		if err := admin.Modify(ctx, dn, uac); err != nil {
+			t.Fatalf("Modify(%s, userAccountControl %s) error = %v", dn, userAccountControl, err)
+		}
+	}
+	addUser("user001", "512")
+	addUser("user041", "514") // disabled
+
+	c, err := Dial(ctx, asUser(t, adProfile(adLDAPS, false), template, "user001"), password)
+	if err != nil {
+		t.Fatalf("Dial(as user001) error = %v", err)
+	}
+	defer c.Close()
+	if got, want := c.Info().BindDN, "user001@corp.example.test"; got != want {
+		t.Errorf("Info().BindDN = %q, want %q", got, want)
+	}
+	// The API explains a failed bind by its diagnostic message.
+	_, err = Dial(ctx, asUser(t, adProfile(adLDAPS, false), template, "user041"), password)
+	var le *ldap.Error
+	if !errors.As(err, &le) || le.ResultCode != ldap.LDAPResultInvalidCredentials || le.Err == nil ||
+		ad.DiagnosticReason(le.Err.Error()) != "account disabled" {
+		t.Errorf("Dial(as disabled user041) error = %v, want invalidCredentials with reason account disabled", err)
+	}
+}
+
 func TestADPlainBindRefused(t *testing.T) {
 	_, err := Dial(context.Background(), adProfile(adLDAP, false), adAdminPass)
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultStrongAuthRequired) {
