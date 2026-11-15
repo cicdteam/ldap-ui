@@ -987,6 +987,60 @@ func TestListProfilesIdentity(t *testing.T) {
 	}
 }
 
+// TestIdentityCheckedEveryRequest checks that a connection made under a
+// trusted identity serves only requests with that identity: a request with
+// another one, or with none, drops the connection and gets 401
+// not_connected, which makes the UI ask to connect again.
+func TestIdentityCheckedEveryRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		remote   string
+		user     string // X-User of the request after the connect
+		wantDrop bool
+	}{
+		{name: "same identity", user: "alice@corp.example"},
+		{name: "other identity", user: "bob@corp.example", wantDrop: true},
+		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", wantDrop: true},
+		{name: "no header", wantDrop: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			opts := identityOptions
+			opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+			env := newTestEnvWith(t, opts)
+			env.header = http.Header{"X-User": {"alice@corp.example"}}
+			connectTo(t, env, `{"profile":"self","username":"alice","password":"pw"}`)
+
+			env.remote, env.header = tc.remote, nil
+			if tc.user != "" {
+				env.header = http.Header{"X-User": {tc.user}}
+			}
+			rec := env.do(t, http.MethodGet, "/api/c/self/info", "")
+			if !tc.wantDrop {
+				if rec.Code != http.StatusOK || env.dir.closed {
+					t.Errorf("info with X-User %q = %d %s, closed %v, want 200 and the connection open", tc.user, rec.Code, rec.Body, env.dir.closed)
+				}
+				return
+			}
+			if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
+				t.Errorf("info with X-User %q from %q = %d %s, want 401 not_connected", tc.user, tc.remote, rec.Code, rec.Body)
+			}
+			if !env.dir.closed {
+				t.Error("connection is open after a request with another identity, want it closed")
+			}
+			env.remote, env.header = "", http.Header{"X-User": {"alice@corp.example"}}
+			if rec := env.do(t, http.MethodGet, "/api/c/self/info", ""); rec.Code != http.StatusUnauthorized {
+				t.Errorf("info with X-User alice after the drop = %d %s, want 401", rec.Code, rec.Body)
+			}
+			found := withMsg(jsonLogs(t, &logs), "identity changed")
+			if len(found) != 1 || found[0]["profile"] != "self" || found[0]["bindDN"] != "uid=alice,ou=people,dc=example,dc=org" {
+				t.Errorf(`"identity changed" lines = %v, want one with profile self and alice's bindDN`, found)
+			}
+		})
+	}
+}
+
 // TestWriteLogsResolvedBindDN checks that a template connection's lines
 // carry the DN it bound as, not the template's empty bindDN.
 func TestWriteLogsResolvedBindDN(t *testing.T) {

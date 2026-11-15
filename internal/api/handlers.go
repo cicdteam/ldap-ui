@@ -210,6 +210,10 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	end = s.attempts.succeed
+	if p.IdentityUser != "" {
+		identity, _ := s.identity(r) // userLogin made sure there is one
+		dir = identityDir{Directory: dir, identity: identity}
+	}
 	// Every connect moves the browser to a new session ID, so an ID that
 	// leaked before it reaches no connection. The cookie is set before Put:
 	// a refused Put leaves the session, under its new ID, as it was.
@@ -381,13 +385,33 @@ func (s *server) refs(w http.ResponseWriter, r *http.Request, list func(Director
 	writeJSON(w, http.StatusOK, m)
 }
 
+// identityDir is the connection of an identityUser profile with the
+// trusted identity its connect carried.
+type identityDir struct {
+	Directory
+	identity string
+}
+
 // directory returns the connection named by the {conn} path segment, or
-// writes an error and returns false.
+// writes an error and returns false. A connection made under a trusted
+// identity serves only requests that carry the same identity, byte for
+// byte: any other request, for example from a shared browser after its
+// proxy sign-in switched to another person, drops the connection and gets
+// 401 not_connected, which makes the UI ask to connect again.
 func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, bool) {
-	d, err := s.sessions.Get(sessionID(r), r.PathValue("conn"))
+	name := r.PathValue("conn")
+	d, err := s.sessions.Get(sessionID(r), name)
 	if err != nil {
 		s.fail(w, err)
 		return nil, false
+	}
+	if id, ok := d.(identityDir); ok {
+		if user, _ := s.identity(r); user != id.identity {
+			s.sessions.Drop(sessionID(r), name)
+			s.log.Info("identity changed", s.attributed(r, profile.Profile{BindDN: d.Info().BindDN}, "profile", name)...)
+			s.fail(w, session.ErrNotConnected)
+			return nil, false
+		}
 	}
 	return d, true
 }

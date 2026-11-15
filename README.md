@@ -404,6 +404,7 @@ The lines:
 | `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
 | `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts` |
 | `disconnected` | `profile`, `bindDN` |
+| `identity changed` | `profile`, `bindDN`: a request on an `identityUser` connection with another trusted identity or none; the connection is closed (see [Per-user login](#per-user-login)) |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
 | `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
 | `renamed` | `profile`, `dn`, `newDN`, `bindDN` |
@@ -579,7 +580,11 @@ Someone signed in to oauth2-proxy as `alice@corp.example` can connect to
 bind uses the username as typed), and the connect dialog fills that in. The
 password is still the directory's: the proxy decides who may sign in, the
 directory checks the password. A request without the header, or from an
-address outside `--trusted-proxies`, cannot connect to the profile.
+address outside `--trusted-proxies`, cannot connect to the profile. Every
+later request on that connection must carry the same identity: one with
+another identity or with none, for example from a shared browser after the
+proxy sign-in changed to someone else, closes the connection, and the UI
+asks to connect again.
 
 | Code | Status | When | The connect dialog says |
 |---|---|---|---|
