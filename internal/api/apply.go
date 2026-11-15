@@ -145,12 +145,13 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			err = d.Modify(r.Context(), e.DN, e.Changes)
 		}
+		attrs := changeAttrs(e.Changes)
 		if err != nil {
-			_, body := s.rejected(r, "modify", p, sch, e.DN, err, changeAttrs(e.Changes), "changes", len(e.Changes))
+			_, body := s.rejected(r, "modify", p, sch, e.DN, err, attrs, "changes", len(e.Changes), "attrs", attrs)
 			res.Failed = &applyFailure{DN: e.DN, Error: body}
 			break
 		}
-		s.log.Info("modified", s.attributed(r, p, "profile", p.Name, "dn", logDN(e.DN, sch), "changes", len(e.Changes), "attrs", changeAttrs(e.Changes))...)
+		s.log.Info("modified", s.attributed(r, p, "profile", p.Name, "dn", logDN(e.DN, sch), "changes", len(e.Changes), "attrs", attrs)...)
 		res.Applied = append(res.Applied, e.DN)
 	}
 	writeJSON(w, http.StatusOK, res)

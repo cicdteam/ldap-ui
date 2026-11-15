@@ -611,12 +611,16 @@ func TestWriteLogsAttribution(t *testing.T) {
 	if rec := env.do(t, http.MethodPost, "/api/c/dev/entries/delete", deleteBody); rec.Code == http.StatusOK {
 		t.Fatalf("failing delete = %d %s, want an error", rec.Code, rec.Body)
 	}
+	env.dir.modifyErr = map[string]error{"uid=a,dc=example,dc=org": ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("no"))}
+	if rec := env.do(t, http.MethodPost, "/api/c/dev/changes/apply", applyOne); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"failed"`) {
+		t.Fatalf("failing apply = %d %s, want 200 with a failed entry", rec.Code, rec.Body)
+	}
 	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"dev"}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
 	}
 
 	lines := jsonLogs(t, &logs)
-	for _, msg := range []string{"connect failed", "connected", "modified", "added", "renamed", "password set", "deleted", "delete rejected", "disconnected"} {
+	for _, msg := range []string{"connect failed", "connected", "modified", "added", "renamed", "password set", "deleted", "delete rejected", "modify rejected", "disconnected"} {
 		found := withMsg(lines, msg)
 		if len(found) == 0 {
 			t.Errorf("no %q log line in:\n%s", msg, logs.String())
@@ -633,9 +637,11 @@ func TestWriteLogsAttribution(t *testing.T) {
 	if c, m := withMsg(lines, "connected"), withMsg(lines, "modified"); len(c) > 0 && len(m) > 0 && (c[0]["session"] == "" || c[0]["session"] != m[0]["session"]) {
 		t.Errorf("connected session = %q, want the modified line's %q", c[0]["session"], m[0]["session"])
 	}
-	for _, l := range withMsg(lines, "modified") {
-		if diff := cmp.Diff([]any{"description"}, l["attrs"]); diff != "" {
-			t.Errorf("modified attrs mismatch (-want +got):\n%s", diff)
+	for _, msg := range []string{"modified", "modify rejected"} {
+		for _, l := range withMsg(lines, msg) {
+			if diff := cmp.Diff([]any{"description"}, l["attrs"]); diff != "" {
+				t.Errorf("%q attrs mismatch (-want +got):\n%s", msg, diff)
+			}
 		}
 	}
 
@@ -751,6 +757,33 @@ func TestConnectRotatesSession(t *testing.T) {
 	env.cookies = firstCookies
 	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
 		t.Errorf("info with the first cookie = %d %s, want 401 not_connected", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectLogsPrevious checks that a connected line ties the new session
+// to the one the request came with.
+func TestConnectLogsPrevious(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	connectTo(t, env, `{"profile":"dev"}`)
+	connectTo(t, env, `{"profile":"anon"}`)
+	var got []map[string]any
+	for _, l := range withMsg(jsonLogs(t, &logs), "connected") {
+		got = append(got, map[string]any{"session": l["session"], "previous": l["previous"]})
+	}
+	if len(got) != 2 {
+		t.Fatalf("connected lines = %v, want 2", got)
+	}
+	first, second := got[0]["session"], got[1]["session"]
+	want := []map[string]any{
+		{"session": first, "previous": ""},
+		{"session": second, "previous": first},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("connected lines mismatch (-want +got):\n%s", diff)
+	}
+	if first == "" || first == second {
+		t.Errorf("connected sessions = %q, then %q, want two different fingerprints", first, second)
 	}
 }
 

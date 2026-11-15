@@ -40,6 +40,7 @@ type Catalog struct {
 	lock        *os.File // holds the data dir lock; nil without one
 	unlocked    bool
 	quarantined string
+	quarantine  error // why quarantined was moved aside
 
 	mu    sync.Mutex
 	saved []Profile
@@ -97,7 +98,7 @@ func (c *Catalog) load() error {
 	if err := os.Rename(c.path, bad); err != nil {
 		return err
 	}
-	c.quarantined = bad
+	c.quarantined, c.quarantine = bad, err
 	return nil
 }
 
@@ -116,9 +117,10 @@ func parseSaved(b []byte, fixed []Profile) ([]Profile, error) {
 }
 
 // Quarantined returns the path that a broken profiles.json was moved to
-// when the catalog was created, or "" if there was none.
-func (c *Catalog) Quarantined() string {
-	return c.quarantined
+// when the catalog was created and why: the JSON or validation error, which
+// holds no secrets. It is "", nil if there was none.
+func (c *Catalog) Quarantined() (path string, reason error) {
+	return c.quarantined, c.quarantine
 }
 
 // Unlocked reports whether the data dir was not writable when the catalog

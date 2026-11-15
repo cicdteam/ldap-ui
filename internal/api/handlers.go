@@ -166,10 +166,11 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	// Logged under the new ID, the one the browser's next lines carry.
+	// Logged under the new ID, the one the browser's next lines carry, with
+	// the old one in previous to tie them to the lines before.
 	lr := r.Clone(r.Context())
 	lr.Header.Set("Cookie", sessionCookie+"="+id)
-	s.log.Info("connected", s.attributed(lr, p, "profile", p.Name)...)
+	s.log.Info("connected", s.attributed(lr, p, "profile", p.Name, "previous", fingerprint(sessionID(r)))...)
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 

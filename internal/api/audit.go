@@ -21,12 +21,7 @@ const maxUser = 256
 // (behind a proxy, the proxy's: match it with the proxy's access log); and
 // "user", the IdentityHeader value, only on a request from TrustedProxies.
 func (s *server) who(r *http.Request) []any {
-	fp := ""
-	if id := sessionID(r); id != "" {
-		sum := sha256.Sum256([]byte(id))
-		fp = hex.EncodeToString(sum[:4])
-	}
-	kv := []any{"session", fp, "remote", r.RemoteAddr}
+	kv := []any{"session", fingerprint(sessionID(r)), "remote", r.RemoteAddr}
 	if s.identityHeader == "" || !s.trusted(r.RemoteAddr) {
 		return kv
 	}
@@ -35,6 +30,16 @@ func (s *server) who(r *http.Request) []any {
 		user = user[:maxUser]
 	}
 	return append(kv, "user", user)
+}
+
+// fingerprint is the first 8 hex characters of the SHA-256 of a session ID,
+// or "" for no ID.
+func fingerprint(id string) string {
+	if id == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:4])
 }
 
 // trusted reports whether remote, a request's RemoteAddr, is in one of the

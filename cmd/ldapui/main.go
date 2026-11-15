@@ -286,8 +286,8 @@ func runTo(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer catalog.Close()
-	if path := catalog.Quarantined(); path != "" {
-		logger.Warn("profiles file was invalid and was moved aside", "path", path)
+	if moved, reason := catalog.Quarantined(); moved != "" {
+		logger.Warn("profiles file was invalid and was moved aside", "path", moved, "error", reason)
 	}
 	if catalog.Unlocked() {
 		logger.Warn("data dir is not writable; saving profiles will fail", "dir", cfg.dataDir)

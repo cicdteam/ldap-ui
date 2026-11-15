@@ -232,11 +232,13 @@ has its own limit of 16 KiB; saving one more profile, or a bigger one, fails
 with 409 `profile_limit`. Saves are written to a temporary file, synced and
 renamed, so a crash never leaves a partial file.
 
-A `profiles.json` that does not parse or holds an invalid profile does not
-stop the server: it is moved to `profiles.json.bad` (replacing an older one),
-the server starts with no saved profiles and logs the warning `profiles file
-was invalid and was moved aside` with its `path`. A file the server cannot
-read (permissions) is a startup error.
+On a writable data dir, a `profiles.json` that does not parse or holds an
+invalid profile does not stop the server: it is moved to `profiles.json.bad`
+(replacing an older one), the server starts with no saved profiles and logs
+the warning `profiles file was invalid and was moved aside` with its `path`
+and the parse or validation `error`. On a read-only data dir it cannot be
+moved, so it is a startup error, and so is a file the server cannot read
+(permissions).
 
 Run one ldapui process per data dir. The server locks `.lock` in it (Linux,
 macOS and the BSDs), and a second process on the same directory exits with
@@ -315,9 +317,9 @@ except `auth failed`, end with who made them:
 
 - `session`: the first 8 hex characters of the SHA-256 of the browser's
   session cookie, empty without one. A connect gives the browser a new
-  session ID, and its `connected` line carries the new one. It ties one
-  browser's lines together from one connect to the next; the session ID
-  itself is never logged.
+  session ID: its `connected` line carries the new one, and the one the
+  request came with in `previous`. It ties one browser's lines together
+  across connects; the session ID itself is never logged.
 - `remote`: the client address and port. Behind a proxy this is the proxy:
   match it with the proxy's access log.
 - `user`: the `--identity-header` value, see below.
@@ -326,7 +328,7 @@ The lines:
 
 | Message | Fields |
 |---|---|
-| `connected`, `connect failed` | `profile`, `bindDN`, and `error` when it failed |
+| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
 | `disconnected` | `profile`, `bindDN` |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
 | `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
@@ -834,12 +836,12 @@ the login link. Passwords for `passwordFile` profiles go in
 - **A broken `profiles.json`** is moved to `profiles.json.bad` next to it
   (`/data` in the image, `/var/lib/ldapui` with the unit), and ldapui starts
   without saved profiles and logs `profiles file was invalid and was moved
-  aside` with its `path`. The next broken file replaces it. To put a fixed
-  copy back, stop ldapui first, because it rewrites the file from its own
-  list at the next save. In Kubernetes: scale the Deployment to 0, mount the
-  PVC in a helper pod with the same `securityContext` (on the same node for
-  a ReadWriteOnce volume), copy the file in with `kubectl cp`, delete the
-  helper and scale back to 1.
+  aside` with its `path` and `error`. The next broken file replaces it. To
+  put a fixed copy back, stop ldapui first, because it rewrites the file
+  from its own list at the next save. In Kubernetes: scale the Deployment to
+  0, mount the PVC in a helper pod with the same `securityContext` (on the
+  same node for a ReadWriteOnce volume), copy the file in with `kubectl cp`,
+  delete the helper and scale back to 1.
 - **Debugging** the image, which has no shell: attach a debug container
   that runs as the app's user. `--custom` sets that user even when the pod
   sets none, because the `restricted` policy refuses busybox's root.

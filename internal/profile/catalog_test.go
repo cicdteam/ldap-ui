@@ -204,11 +204,12 @@ func TestNewCatalogQuarantinesBadFile(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
+		invalid bool // the reason is ErrInvalid, not a JSON error
 	}{
 		{name: "empty", content: ""},
 		{name: "truncated", content: `[{"name":"lab","url":"ldap://lab"`},
 		{name: "trailing garbage", content: `[{"name":"lab","url":"ldap://lab"}] x`},
-		{name: "invalid profile", content: `[{"name":"lab","url":"http://x"}]`},
+		{name: "invalid profile", content: `[{"name":"lab","url":"http://x"}]`, invalid: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -221,8 +222,12 @@ func TestNewCatalogQuarantinesBadFile(t *testing.T) {
 			if _, saved := c.All(); len(saved) != 0 {
 				t.Errorf("All() saved = %v, want none", saved)
 			}
-			if got := c.Quarantined(); got != bad {
-				t.Errorf("Quarantined() = %q, want %q", got, bad)
+			moved, reason := c.Quarantined()
+			if moved != bad {
+				t.Errorf("Quarantined() path = %q, want %q", moved, bad)
+			}
+			if reason == nil || errors.Is(reason, ErrInvalid) != tc.invalid {
+				t.Errorf("Quarantined() reason = %v, want an error, ErrInvalid: %v", reason, tc.invalid)
 			}
 			if got, err := os.ReadFile(bad); err != nil || string(got) != tc.content { //nolint:gosec // bad is in a test temp dir
 				t.Errorf("profiles.json.bad = %q, %v, want the old bytes %q", got, err, tc.content)
@@ -279,8 +284,8 @@ func TestNewCatalogReadsOldFile(t *testing.T) {
 	want := readProfiles(t, dir)
 
 	c := newCatalog(t, dir)
-	if got := c.Quarantined(); got != "" {
-		t.Fatalf("Quarantined() = %q, want the v1.1.0 file accepted", got)
+	if got, reason := c.Quarantined(); got != "" || reason != nil {
+		t.Fatalf("Quarantined() = %q, %v, want the v1.1.0 file accepted", got, reason)
 	}
 	if _, err := c.Save(Profile{Name: "new", URL: "ldap://new"}); err != nil {
 		t.Fatalf("Save(new) error = %v", err)
