@@ -7,6 +7,7 @@ import {
   errorKind,
   errorMessage,
   passwordHint,
+  retryBusy,
   routerBasename,
   toProfileInput,
 } from './api'
@@ -145,6 +146,21 @@ describe('errorKind', () => {
     expect(errorKind(new ApiError(401, { code: 'invalid_credentials', message: '' }))).toBe('other')
     expect(errorKind(new ApiError(500, { code: 'internal', message: '' }))).toBe('other')
     expect(errorKind(new Error('x'))).toBe('other')
+  })
+})
+
+describe('retryBusy', () => {
+  const busy = new ApiError(503, { code: 'busy', message: '' })
+  it('retries busy up to 3 times', () => {
+    expect([0, 1, 2, 3].map((n) => retryBusy(n, busy))).toEqual([true, true, true, false])
+  })
+  it.each([
+    ['timeout', new ApiError(504, { code: 'timeout', message: '' })],
+    ['not_connected', new ApiError(401, { code: 'not_connected', message: '' })],
+    ['offline', new ApiError(0, { code: 'offline', message: '' })],
+    ['a plain error', new Error('busy')],
+  ])('does not retry %s', (_, err) => {
+    expect(retryBusy(0, err)).toBe(false)
   })
 })
 

@@ -61,6 +61,14 @@ export function errorKind(e: unknown): ErrorKind {
   return 'other'
 }
 
+/**
+ * The query retry predicate: a read refused with 503 busy (the server is
+ * saturated) is retried up to 3 times; any other error is final.
+ */
+export function retryBusy(failureCount: number, e: unknown): boolean {
+  return isApiError(e) && e.code === 'busy' && failureCount < 3
+}
+
 export function errorMessage(e: unknown): string {
   if (isApiError(e)) return e.body.reason ? `${e.body.message} (${e.body.reason})` : e.body.message
   if (e instanceof Error) return e.message

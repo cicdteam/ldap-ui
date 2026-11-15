@@ -283,12 +283,14 @@ connections of the least recently used.
 
 The server runs at most 64 API requests at once, and at most 4 of one
 session; the others wait their turn. A request that waits more than 10
-seconds gets 503 `busy` with `Retry-After: 1`. Once running, an API request
-has 2 minutes before it ends with 504 `timeout`. An Apply has 4 minutes and
-stops between entries instead: when its time runs out or its browser goes
-away, a modify already sent to the server finishes, the entries before the
-stop stay applied, and the response is a 200 that lists them and names the
-next entry as failed with `timeout` (`canceled` when the browser went away).
+seconds gets 503 `busy` with `Retry-After: 1`; the UI retries a read that
+gets it up to 3 times, a second apart, and never retries a write. Once
+running, an API request has 2 minutes before it ends with 504 `timeout`. An
+Apply has 4 minutes and stops between entries instead: when its time runs
+out or its browser goes away, a modify already sent to the server finishes,
+the entries before the stop stay applied, and the response is a 200 that
+lists them and names the next entry as failed with `timeout` (`canceled`
+when the browser went away).
 
 The probes `GET /healthz` and `GET /readyz` answer `ok` without the token or
 the Host check, so a kubelet can call them by pod IP. With `--base-path
