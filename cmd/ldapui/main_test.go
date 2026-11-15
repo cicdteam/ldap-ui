@@ -289,3 +289,52 @@ func TestLoginURL(t *testing.T) {
 		t.Errorf("loginURL() = %q, want %q", got, want)
 	}
 }
+
+func TestNewHTTPServerTimeouts(t *testing.T) {
+	srv := newHTTPServer(http.NotFoundHandler())
+	tests := []struct {
+		name      string
+		got, want time.Duration
+	}{
+		{name: "ReadHeaderTimeout", got: srv.ReadHeaderTimeout, want: 10 * time.Second},
+		{name: "ReadTimeout", got: srv.ReadTimeout, want: 60 * time.Second},
+		{name: "WriteTimeout", got: srv.WriteTimeout, want: 5 * time.Minute},
+		{name: "IdleTimeout", got: srv.IdleTimeout, want: 2 * time.Minute},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("newHTTPServer().%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+	if got, want := srv.MaxHeaderBytes, 64<<10; got != want {
+		t.Errorf("newHTTPServer().MaxHeaderBytes = %d, want %d", got, want)
+	}
+	// A search may run for the profile default searchTimeout (30s, unexported
+	// in profile); the write deadline must leave room for long requests.
+	if minWrite := 10 * 30 * time.Second; srv.WriteTimeout < minWrite {
+		t.Errorf("newHTTPServer().WriteTimeout = %v, want at least %v", srv.WriteTimeout, minWrite)
+	}
+	if srv.Handler == nil {
+		t.Errorf("newHTTPServer().Handler = nil, want the given handler")
+	}
+}
+
+func TestNeedsToken(t *testing.T) {
+	tests := []struct {
+		listen       string
+		allowedHosts []string
+		want         bool
+	}{
+		{listen: "127.0.0.1:8080", want: false},
+		{listen: "[::1]:8080", want: false},
+		{listen: "localhost:8080", want: false},
+		{listen: "0.0.0.0:8080", want: true},
+		{listen: "127.0.0.1:8080", allowedHosts: []string{"ldap.example.com"}, want: true},
+		{listen: ":8080", want: true},
+	}
+	for _, tc := range tests {
+		if got := needsToken(tc.listen, tc.allowedHosts); got != tc.want {
+			t.Errorf("needsToken(%q, %q) = %v, want %v", tc.listen, tc.allowedHosts, got, tc.want)
+		}
+	}
+}

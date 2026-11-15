@@ -84,7 +84,7 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	fs.StringVar(&c.configPath, "config", env("LDAPUI_CONFIG", ""), "connections.yaml path (env LDAPUI_CONFIG)")
 	fs.StringVar(&c.dataDir, "data-dir", env("LDAPUI_DATA_DIR", ""), "directory for profiles created in the UI (env LDAPUI_DATA_DIR)")
 	// No env default here: flag prints non-empty defaults in usage output.
-	fs.StringVar(&c.authToken, "auth-token", "", "access token; generated when listening beyond loopback (env LDAPUI_AUTH_TOKEN)")
+	fs.StringVar(&c.authToken, "auth-token", "", "access token; generated when not on loopback or when --allowed-hosts is set (env LDAPUI_AUTH_TOKEN)")
 	fs.StringVar(&hosts, "allowed-hosts", env("LDAPUI_ALLOWED_HOSTS", ""), "extra Host header values to accept, comma-separated (env LDAPUI_ALLOWED_HOSTS)")
 	fs.DurationVar(&c.sessionIdle, "session-idle", 30*time.Minute, "close LDAP connections after this much inactivity")
 	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure when served over HTTPS, e.g. behind a TLS ingress (env LDAPUI_SECURE_COOKIES)")
@@ -133,8 +133,29 @@ func isLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// loginURL is the link printed when a token was generated. Inside a
-// container the published host port may differ; the log line says so.
+// needsToken reports whether the UI must require a token. With
+// --allowed-hosts on loopback, a reverse proxy forwards remote clients, so
+// loopback alone no longer means local.
+func needsToken(listen string, allowedHosts []string) bool {
+	return !isLoopback(listen) || len(allowedHosts) > 0
+}
+
+// newHTTPServer returns a server for h with timeouts that stop slow or idle
+// clients from holding connections. WriteTimeout is ten times the profile
+// default searchTimeout (30s), so long searches and large applies finish.
+func newHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+	}
+}
+
+// loginURL is the link printed when a token was generated. Behind a proxy or
+// inside a container the host and port may differ; the log line says so.
 func loginURL(listenAddr, basePath, token string) string {
 	_, port, _ := net.SplitHostPort(listenAddr)
 	return "http://localhost:" + port + basePath + "/?token=" + url.QueryEscape(token)
@@ -177,7 +198,7 @@ func runTo(args []string, stdout io.Writer) error {
 	}
 
 	generated := false
-	if cfg.authToken == "" && !isLoopback(cfg.listen) {
+	if cfg.authToken == "" && needsToken(cfg.listen, cfg.allowedHosts) {
 		cfg.authToken, generated = rand.Text(), true
 	}
 
@@ -187,21 +208,18 @@ func runTo(args []string, stdout io.Writer) error {
 	sessions := session.New[api.Directory](cfg.sessionIdle)
 	go sessions.Run(ctx)
 
-	srv := &http.Server{
-		Handler: api.New(api.Options{
-			Catalog: catalog, Dial: dial, Sessions: sessions,
-			AllowedHosts: cfg.allowedHosts, AuthToken: cfg.authToken, BasePath: cfg.basePath,
-			SecureCookies: cfg.secureCookies, UI: web.Dist(), Logger: logger,
-		}),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := newHTTPServer(api.New(api.Options{
+		Catalog: catalog, Dial: dial, Sessions: sessions,
+		AllowedHosts: cfg.allowedHosts, AuthToken: cfg.authToken, BasePath: cfg.basePath,
+		SecureCookies: cfg.secureCookies, UI: web.Dist(), Logger: logger,
+	}))
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
 	if err != nil {
 		return err
 	}
 	logger.Info("listening", "version", version, "addr", ln.Addr().String(), "basePath", cfg.basePath, "profiles", len(fixed))
 	if generated {
-		logger.Info("no --auth-token set; open the UI with this login link (adjust the port if it is published differently)",
+		logger.Info("no --auth-token set; open the UI with this login link (adjust the host and port to how you reach it)",
 			"url", loginURL(ln.Addr().String(), cfg.basePath, cfg.authToken))
 	}
 

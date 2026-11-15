@@ -10,8 +10,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
@@ -248,5 +250,45 @@ func TestWriteBodyLimits(t *testing.T) {
 				t.Errorf("%s body = %.200s, want a too-large refusal", tc.path, rec.Body)
 			}
 		})
+	}
+}
+
+// TestBlameManyNames bounds blame on 50 000 names that its diagnostic does
+// not name: a scan per name made it quadratic.
+func TestBlameManyNames(t *testing.T) {
+	names := make([]string, 50000)
+	for i := range names {
+		names[i] = "a" + strconv.Itoa(i)
+	}
+	const diagnostic = "modify/add: description: value #0 already exists"
+	start := time.Now()
+	got := blame(names, diagnostic)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("blame(50000 names, %q) took %v, want at most 5s", diagnostic, elapsed)
+	}
+	if got != "" {
+		t.Errorf("blame(50000 names, %q) = %q, want \"\"", diagnostic, got)
+	}
+}
+
+// TestFoldKey checks that foldKey keys exactly what strings.EqualFold
+// matches, also where strings.ToLower disagrees with EqualFold: long s,
+// dotted capital I and final sigma.
+func TestFoldKey(t *testing.T) {
+	pairs := [][2]string{
+		{"cn", "CN"},
+		{"cn", "cn;x"},
+		{"objectClass", "OBJECTCLASS"},
+		{"a", ""},
+		{"sn", "\u017fn"},
+		{"i", "\u0130"},
+		{"k", "\u212a"},
+		{"\u03a3", "\u03c2"},
+		{"\xff", "\ufffd"},
+	}
+	for _, p := range pairs {
+		if got, want := foldKey(p[0]) == foldKey(p[1]), strings.EqualFold(p[0], p[1]); got != want {
+			t.Errorf("foldKey(%q) == foldKey(%q) is %v, want %v as strings.EqualFold", p[0], p[1], got, want)
+		}
 	}
 }

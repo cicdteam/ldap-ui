@@ -10,6 +10,15 @@ const NON_ASCII = /[^\x00-\x7F]/
 /** Characters a reader cannot see or that reorder text: controls, format (bidi, zero-width, BOM), line and paragraph separators. */
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
+/** RFC 4512 attribute description: a name or numeric OID, then options (;lang-de, ;binary, AD's ;range=0-1499). */
+const ATTR_DESCRIPTION = /^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)(;[A-Za-z0-9=*-]+)*$/
+/** Stands in for a line whose attribute name could break out of it and inject LDIF records. */
+export const SKIPPED_NAME = '# invalid attribute name skipped'
+
+export function isAttrDescription(name: string): boolean {
+  return ATTR_DESCRIPTION.test(name)
+}
+
 export function isSafe(s: string): boolean {
   return s === '' || (SAFE_INIT.test(s) && SAFE.test(s) && !s.endsWith(' '))
 }
@@ -28,6 +37,7 @@ export function base64UTF8(s: string): string {
 }
 
 export function ldifLine(name: string, text: string, isBase64: boolean): string {
+  if (!isAttrDescription(name)) return SKIPPED_NAME
   if (isBase64) return `${name}:: ${text}`
   return isSafe(text) ? `${name}: ${text}` : `${name}:: ${base64UTF8(text)}`
 }
@@ -43,6 +53,10 @@ export function fold(l: string, width = 76): string {
 export function entryToLDIF(e: Entry): string {
   const lines = [fold(ldifLine('dn', e.dn, false))]
   for (const a of e.attributes ?? []) {
+    if (!isAttrDescription(a.name)) {
+      lines.push(SKIPPED_NAME)
+      continue
+    }
     if (a.masked) lines.push(`# ${a.name}: ${a.masked} value(s) hidden`)
     for (const v of a.values ?? []) lines.push(fold(ldifLine(a.name, v.text, v.base64 === true)))
   }

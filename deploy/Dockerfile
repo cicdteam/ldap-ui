@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/ldapui ./cmd/ldapui \
  && mkdir /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/ldapui /ldapui
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV LDAPUI_LISTEN=0.0.0.0:8080 \

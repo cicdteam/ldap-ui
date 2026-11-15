@@ -125,7 +125,9 @@ func (m *Manager[C]) Drop(id, name string) {
 	}
 }
 
-// Sweep closes every session idle for longer than the timeout.
+// Sweep closes every session idle for longer than the timeout. Each
+// connection closes in a goroutine of its own and Sweep does not wait for
+// it: a Close stuck on a stalled server must not hold up the sweeper.
 func (m *Manager[C]) Sweep() {
 	var expired []C
 	m.mu.Lock()
@@ -138,7 +140,7 @@ func (m *Manager[C]) Sweep() {
 	}
 	m.mu.Unlock()
 	for _, c := range expired {
-		_ = c.Close()
+		go func() { _ = c.Close() }()
 	}
 }
 

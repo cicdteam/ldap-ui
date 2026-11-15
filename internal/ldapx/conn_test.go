@@ -19,6 +19,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -209,6 +210,205 @@ func TestDialUntrustedCertificate(t *testing.T) {
 				t.Errorf("Dial(trusted CA) error = %v, want no certificate error", err)
 			}
 		})
+	}
+}
+
+// TestIdleTLSConnectionSurvivesConnectTimeout checks that the connect-phase
+// deadline does not outlive connect over TLS either: an ldaps:// or StartTLS
+// connection idle for longer than the connect timeout still serves a search,
+// without a redial.
+func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
+	cert, caPEM := selfSignedCert(t)
+	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	ldaps := func(_ int32, conn net.Conn) {
+		tc := tls.Server(conn, serverTLS)
+		if tc.Handshake() == nil {
+			answerSearches(tc)
+		}
+	}
+	startTLS := func(n int32, conn net.Conn) {
+		id, err := readRequest(conn)
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		ldaps(n, conn)
+	}
+	tests := []struct {
+		name     string
+		scheme   string
+		startTLS bool
+		serve    func(int32, net.Conn)
+	}{
+		{name: "ldaps", scheme: "ldaps", serve: ldaps},
+		{name: "StartTLS", scheme: "ldap", startTLS: true, serve: startTLS},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, accepts := fakeServer(t, tc.serve)
+			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
+			p.StartTLS = tc.startTLS
+			p.CAPEM = caPEM
+			p.ConnectTimeout = 300 * time.Millisecond
+			cfg, err := p.TLSConfig()
+			if err != nil {
+				t.Fatalf("TLSConfig() error = %v", err)
+			}
+			lc, err := connect(context.Background(), p, cfg)
+			if err != nil {
+				t.Fatalf("connect(%s) error = %v", p.URL, err)
+			}
+			c := &Conn{prof: p, lc: lc}
+			defer c.Close()
+			time.Sleep(time.Second)
+			if lc.IsClosing() {
+				t.Error("connection closed while idle, want it open past the connect timeout")
+			}
+			// The fake answers with no entries, which rawEntry reports as
+			// noSuchObject.
+			if _, err := c.rawEntry(context.Background(), "dc=x", nil); !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) {
+				t.Errorf("rawEntry() after idling error = %v, want noSuchObject", err)
+			}
+			if n := accepts.Load(); n != 1 {
+				t.Errorf("rawEntry() after idling opened %d connections in total, want 1", n)
+			}
+		})
+	}
+}
+
+// TestConnectStartTLSStallTimesOut checks that a server which accepts
+// StartTLS and then never answers the TLS handshake cannot hold connect
+// past the connect timeout.
+func TestConnectStartTLSStallTimesOut(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		id, err := readRequest(conn)
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn) // swallow the ClientHello, answer nothing
+	})
+	p := fakeProfile(url)
+	p.StartTLS = true
+	p.ConnectTimeout = 300 * time.Millisecond
+	cfg, err := p.TLSConfig()
+	if err != nil {
+		t.Fatalf("TLSConfig() error = %v", err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		lc, err := connect(context.Background(), p, cfg)
+		if err == nil {
+			_ = lc.Close()
+		}
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Error("connect(stalled StartTLS) error = nil, want a timeout")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("connect(stalled StartTLS) still blocked after 3s")
+	}
+}
+
+// TestConnectTimeoutErrors pins how connect reports a server that stops
+// answering. An ldaps handshake out of time is a context.DeadlineExceeded,
+// the API's timeout, as tls.DialWithDialer reported it. go-ldap turns any
+// StartTLS failure into ErrorNetwork text, and a StartTLS request timeout
+// was ErrorNetwork before connect had a deadline.
+func TestConnectTimeoutErrors(t *testing.T) {
+	silent := func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
+	stallHandshake := func(n int32, conn net.Conn) {
+		id, err := readRequest(conn)
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+			return
+		}
+		silent(n, conn)
+	}
+	tests := []struct {
+		name        string
+		scheme      string
+		startTLS    bool
+		serve       func(int32, net.Conn)
+		wantTimeout bool // errors.Is(err, context.DeadlineExceeded)
+	}{
+		{name: "ldaps handshake", scheme: "ldaps", serve: silent, wantTimeout: true},
+		{name: "StartTLS response", scheme: "ldap", startTLS: true, serve: silent},
+		{name: "StartTLS handshake", scheme: "ldap", startTLS: true, serve: stallHandshake},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, _ := fakeServer(t, tc.serve)
+			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
+			p.StartTLS = tc.startTLS
+			p.ConnectTimeout = 200 * time.Millisecond
+			p.SearchTimeout = 10 * time.Second // the connect deadline must fire first
+			cfg, err := p.TLSConfig()
+			if err != nil {
+				t.Fatalf("TLSConfig() error = %v", err)
+			}
+			// A socket deadline and a context timer that expire together can
+			// fire in either order; enough attempts catch the losing order.
+			errs := make([]error, 20)
+			var wg sync.WaitGroup
+			for i := range errs {
+				wg.Go(func() {
+					lc, err := connect(context.Background(), p, cfg)
+					if err == nil {
+						_ = lc.Close()
+					}
+					errs[i] = err
+				})
+			}
+			wg.Wait()
+			for _, err := range errs {
+				if !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) || errors.Is(err, context.DeadlineExceeded) != tc.wantTimeout {
+					t.Fatalf("connect(stalled %s) error = %v, want ErrorNetwork with context.DeadlineExceeded %v", tc.name, err, tc.wantTimeout)
+				}
+			}
+		})
+	}
+}
+
+// TestWriteToStalledServerTimesOut checks that a request the server does
+// not read fails after the search timeout, and that the connection is then
+// closed: a request cut off midway leaves the stream unusable.
+func TestWriteToStalledServerTimesOut(t *testing.T) {
+	read, hungUp := make(chan struct{}), make(chan struct{})
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		<-read
+		_, _ = io.Copy(io.Discard, conn)
+		close(hungUp)
+	})
+	p := fakeProfile(url)
+	p.SearchTimeout = 500 * time.Millisecond
+	cfg, err := p.TLSConfig()
+	if err != nil {
+		t.Fatalf("TLSConfig() error = %v", err)
+	}
+	lc, err := connect(context.Background(), p, cfg)
+	if err != nil {
+		t.Fatalf("connect() error = %v", err)
+	}
+	defer lc.Close()
+	// Larger than the socket buffers, so the write blocks on the server.
+	req := ldap.NewModifyRequest("cn=x", nil)
+	req.Replace("description", []string{strings.Repeat("x", 32<<20)})
+	errc := make(chan error, 1)
+	go func() { errc <- lc.Modify(req) }()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("Modify(stalled server) error = nil, want a timeout")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Modify(stalled server) still blocked after 5s")
+	}
+	close(read)
+	select {
+	case <-hungUp:
+	case <-time.After(5 * time.Second):
+		t.Error("connection still open after a failed write, want it closed")
 	}
 }
 

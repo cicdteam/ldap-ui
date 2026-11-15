@@ -1,5 +1,5 @@
 import { looksLikeDN, sameDN, splitDN } from './dn'
-import { fold, ldifLine } from './ldif'
+import { fold, isAttrDescription, ldifLine, SKIPPED_NAME } from './ldif'
 import { attrKey, SYNTAX, type SchemaIndex } from './schema'
 import type { Entry, Value } from './types'
 
@@ -199,8 +199,14 @@ export function toLDIF(batch: Batch): string {
   if (!batch.length) return ''
   const blocks = batch.map((e) => {
     const lines = [ldifLine('dn', e.dn, false), 'changetype: modify']
-    for (const c of e.changes)
+    for (const c of e.changes) {
+      // Skip the whole change: a '-' without its operation line makes ldapmodify reject the record.
+      if (!isAttrDescription(c.attr)) {
+        lines.push(SKIPPED_NAME)
+        continue
+      }
       lines.push(`${c.op}: ${c.attr}`, ...c.values.map((v) => ldifLine(c.attr, v, !!c.base64)), '-')
+    }
     return lines.map((l) => fold(l)).join('\n') + '\n'
   })
   return 'version: 1\n\n' + blocks.join('\n')
