@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -167,7 +168,8 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 }
 
 // do sends a same-origin request to localhost, replaying cookies set by
-// earlier responses.
+// earlier responses. A cookie replaces an earlier one of the same name, as
+// in a browser.
 func (e *testEnv) do(t *testing.T, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
@@ -184,7 +186,10 @@ func (e *testEnv) do(t *testing.T, method, target, body string) *httptest.Respon
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
-	e.cookies = append(e.cookies, (&http.Response{Header: rec.Header()}).Cookies()...)
+	for _, c := range (&http.Response{Header: rec.Header()}).Cookies() {
+		e.cookies = slices.DeleteFunc(e.cookies, func(old *http.Cookie) bool { return old.Name == c.Name })
+		e.cookies = append(e.cookies, c)
+	}
 	return rec
 }
 
@@ -603,6 +608,11 @@ func TestWriteLogsAttribution(t *testing.T) {
 			}
 		}
 	}
+	// A connect starts a new session; its line carries the new ID's
+	// fingerprint, as the writes after it do.
+	if c, m := withMsg(lines, "connected"), withMsg(lines, "modified"); len(c) > 0 && len(m) > 0 && (c[0]["session"] == "" || c[0]["session"] != m[0]["session"]) {
+		t.Errorf("connected session = %q, want the modified line's %q", c[0]["session"], m[0]["session"])
+	}
 	for _, l := range withMsg(lines, "modified") {
 		if diff := cmp.Diff([]any{"description"}, l["attrs"]); diff != "" {
 			t.Errorf("modified attrs mismatch (-want +got):\n%s", diff)
@@ -671,5 +681,91 @@ func TestBadTokenLogged(t *testing.T) {
 		if strings.Contains(logs.String(), secret) {
 			t.Errorf("log contains %q:\n%s", secret, logs.String())
 		}
+	}
+}
+
+// cookie is the value of the named cookie env replays, or "".
+func (e *testEnv) cookie(name string) string {
+	for _, c := range e.cookies {
+		if c.Name == name {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// connectedNames is the names /api/profiles reports as connected.
+func connectedNames(t *testing.T, env *testEnv) []string {
+	t.Helper()
+	rec := env.do(t, http.MethodGet, "/api/profiles", "")
+	var views []struct {
+		Name      string `json:"name"`
+		Connected bool   `json:"connected"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &views); err != nil {
+		t.Fatalf("decode profiles %q: %v", rec.Body, err)
+	}
+	var names []string
+	for _, v := range views {
+		if v.Connected {
+			names = append(names, v.Name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestConnectRotatesSession(t *testing.T) {
+	env := newTestEnv(t)
+	connectTo(t, env, `{"profile":"dev"}`)
+	first, firstCookies := env.cookie(sessionCookie), slices.Clone(env.cookies)
+	connectTo(t, env, `{"profile":"anon"}`)
+	second := env.cookie(sessionCookie)
+	if first == "" || second == "" || second == first {
+		t.Fatalf("session cookie after two connects = %q, then %q, want two different IDs", first, second)
+	}
+	if diff := cmp.Diff([]string{"anon", "dev"}, connectedNames(t, env)); diff != "" {
+		t.Errorf("connected profiles with the new cookie mismatch (-want +got):\n%s", diff)
+	}
+
+	env.cookies = firstCookies
+	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
+		t.Errorf("info with the first cookie = %d %s, want 401 not_connected", rec.Code, rec.Body)
+	}
+}
+
+func TestConnectFailureCreatesNoSession(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = ldap.NewError(ldap.ErrorNetwork, errors.New("refused"))
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"dev"}`); rec.Code != http.StatusBadGateway {
+		t.Fatalf("connect with a failing dial = %d %s, want 502", rec.Code, rec.Body)
+	}
+	if id := env.cookie(sessionCookie); id != "" {
+		t.Errorf("connect with a failing dial set session cookie %q, want none", id)
+	}
+}
+
+func TestConnectTooManyConnections(t *testing.T) {
+	env := newTestEnv(t)
+	var want []string
+	for i := range session.MaxConns {
+		name := fmt.Sprintf("p%d", i)
+		if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"`+name+`","url":"ldap://`+name+`:389"}`); rec.Code != http.StatusOK {
+			t.Fatalf("save %s = %d %s", name, rec.Code, rec.Body)
+		}
+		connectTo(t, env, `{"profile":"`+name+`"}`)
+		want = append(want, name)
+	}
+
+	env.dir = &directoryFake{}
+	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"anon"}`)
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "too_many_connections" {
+		t.Errorf("connect %d = %d %s, want 409 too_many_connections", session.MaxConns+1, rec.Code, rec.Body)
+	}
+	if !env.dir.closed {
+		t.Error("refused connect did not close the dialed directory")
+	}
+	if diff := cmp.Diff(want, connectedNames(t, env)); diff != "" {
+		t.Errorf("connected profiles after the refused connect mismatch (-want +got):\n%s", diff)
 	}
 }

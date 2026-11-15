@@ -18,10 +18,20 @@ import (
 	"time"
 )
 
+// Limits on what one process holds.
+const (
+	// MaxSessions bounds the live sessions: a new one past it evicts the
+	// least recently used.
+	MaxSessions = 1000
+	// MaxConns bounds the connections of one session.
+	MaxConns = 8
+)
+
 // Errors returned by Manager.
 var (
 	ErrNoSession    = errors.New("no such session")
 	ErrNotConnected = errors.New("not connected")
+	ErrTooManyConns = errors.New("too many connections in this session")
 )
 
 // Manager maps session IDs to named connections and closes connections of
@@ -46,13 +56,48 @@ func New[C io.Closer](idle time.Duration) *Manager[C] {
 	return &Manager[C]{idle: idle, now: time.Now, sessions: map[string]*session[C]{}}
 }
 
-// Create starts an empty session and returns its unguessable ID.
-func (m *Manager[C]) Create() string {
-	id := rand.Text()
+// Create starts an empty session and returns its unguessable ID. At
+// MaxSessions it first evicts the least recently used session, as Rotate
+// does.
+func (m *Manager[C]) Create() string { return m.Rotate("") }
+
+// Rotate moves the connections of session id, when it exists, to a new
+// session and returns the new unguessable ID; id stops naming a session. An
+// unknown or empty id gives a new empty session. Adding a session at
+// MaxSessions evicts the least recently used one, closing its connections
+// in the background as Sweep does.
+//
+// ponytail: a request still carrying id after Rotate, from another tab at
+// the same instant, finds it gone: that tab reconnects, and if it was
+// connecting too, one tab's connections are lost. Keep id as a short-lived
+// alias of the new ID if that bites.
+func (m *Manager[C]) Rotate(id string) string {
+	newID := rand.Text()
+	var evicted []C
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sessions[id] = &session[C]{lastUsed: m.now(), conns: map[string]C{}}
-	return id
+	s, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+	} else {
+		s = &session[C]{conns: map[string]C{}}
+	}
+	if len(m.sessions) >= MaxSessions {
+		// ponytail: linear scan at the cap, cheap at MaxSessions; keep the
+		// sessions in a list ordered by use if the cap grows.
+		var oldest string
+		for k, v := range m.sessions {
+			if oldest == "" || v.lastUsed.Before(m.sessions[oldest].lastUsed) {
+				oldest = k
+			}
+		}
+		evicted = slices.Collect(maps.Values(m.sessions[oldest].conns))
+		delete(m.sessions, oldest)
+	}
+	s.lastUsed = m.now()
+	m.sessions[newID] = s
+	m.mu.Unlock()
+	closeInBackground(evicted)
+	return newID
 }
 
 // Exists reports whether id names a live session.
@@ -63,7 +108,9 @@ func (m *Manager[C]) Exists(id string) bool {
 	return ok
 }
 
-// Put stores c under name in session id, closing any connection it replaces.
+// Put stores c under name in session id, closing any connection it
+// replaces. It returns ErrTooManyConns, leaving c open, when name is new and
+// the session already holds MaxConns connections.
 func (m *Manager[C]) Put(id, name string, c C) error {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
@@ -72,6 +119,10 @@ func (m *Manager[C]) Put(id, name string, c C) error {
 		return ErrNoSession
 	}
 	old, replaced := s.conns[name]
+	if !replaced && len(s.conns) >= MaxConns {
+		m.mu.Unlock()
+		return ErrTooManyConns
+	}
 	s.conns[name] = c
 	s.lastUsed = m.now()
 	m.mu.Unlock()
@@ -139,7 +190,13 @@ func (m *Manager[C]) Sweep() {
 		}
 	}
 	m.mu.Unlock()
-	for _, c := range expired {
+	closeInBackground(expired)
+}
+
+// closeInBackground closes each connection in a goroutine of its own and
+// does not wait for it.
+func closeInBackground[C io.Closer](conns []C) {
+	for _, c := range conns {
 		go func() { _ = c.Close() }()
 	}
 }

@@ -64,6 +64,8 @@ func errorResponse(err error) (int, apiError) {
 	// request, for example by idle expiry.
 	case errors.Is(err, session.ErrNoSession), errors.Is(err, session.ErrNotConnected), errors.Is(err, net.ErrClosed):
 		return http.StatusUnauthorized, apiError{Code: "not_connected", Message: "connect to this profile first"}
+	case errors.Is(err, session.ErrTooManyConns):
+		return http.StatusConflict, apiError{Code: "too_many_connections", Message: "too many connections in this session; disconnect one first"}
 	// Checked before *ldap.Error: an expired cursor may wrap the server's
 	// rejection of the paging cookie.
 	case errors.Is(err, ldapx.ErrCursorExpired):

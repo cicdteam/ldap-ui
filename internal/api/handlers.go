@@ -156,13 +156,20 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if err := s.sessions.Put(s.ensureSession(w, r), p.Name, dir); err != nil {
+	// Every connect moves the browser to a new session ID, so an ID that
+	// leaked before it reaches no connection. The cookie is set before Put:
+	// a refused Put leaves the session, under its new ID, as it was.
+	id := s.sessions.Rotate(sessionID(r))
+	http.SetCookie(w, s.cookies.cookie(sessionCookie, id, r))
+	if err := s.sessions.Put(id, p.Name, dir); err != nil {
 		_ = dir.Close()
 		s.fail(w, err)
 		return
 	}
-	// The session is the one the request came with: "" on a first connect.
-	s.log.Info("connected", s.attributed(r, p, "profile", p.Name)...)
+	// Logged under the new ID, the one the browser's next lines carry.
+	lr := r.Clone(r.Context())
+	lr.Header.Set("Cookie", sessionCookie+"="+id)
+	s.log.Info("connected", s.attributed(lr, p, "profile", p.Name)...)
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 
@@ -280,15 +287,6 @@ func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, b
 		return nil, false
 	}
 	return d, true
-}
-
-func (s *server) ensureSession(w http.ResponseWriter, r *http.Request) string {
-	if id := sessionID(r); id != "" && s.sessions.Exists(id) {
-		return id
-	}
-	id := s.sessions.Create()
-	http.SetCookie(w, s.cookies.cookie(sessionCookie, id, r))
-	return id
 }
 
 func (s *server) fail(w http.ResponseWriter, err error) {

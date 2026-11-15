@@ -250,15 +250,25 @@ browser, which needs no token when ldapui listens on loopback.
 set one explicitly to keep it stable. A request that runs longer than 5
 minutes is cut off.
 
+A browser's open connections live in a session on the server, closed after
+`--session-idle` without use. Every successful connect moves the browser to a
+new session ID and keeps its connections, so an ID seen before a connect is
+worthless after it. A request from another tab at the same instant can
+find its session gone; that tab reconnects. A session holds at most 8
+connections: one more connect fails with 409 `too_many_connections` until one
+is disconnected. The server holds at most 1000 sessions; one more closes the
+connections of the least recently used.
+
 ## Logs and accountability
 
 ldapui logs to stdout, one `key=value` line per event. The lines below,
 except `auth failed`, end with who made them:
 
 - `session`: the first 8 hex characters of the SHA-256 of the browser's
-  session cookie, empty without one (a browser's first `connected` line).
-  It ties one browser's lines together; the session ID itself is never
-  logged.
+  session cookie, empty without one. A connect gives the browser a new
+  session ID, and its `connected` line carries the new one. It ties one
+  browser's lines together from one connect to the next; the session ID
+  itself is never logged.
 - `remote`: the client address and port. Behind a proxy this is the proxy:
   match it with the proxy's access log.
 - `user`: the `--identity-header` value, see below.
