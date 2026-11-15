@@ -44,6 +44,7 @@ type config struct {
 	authTokenFile string
 	allowedHosts  []string
 	sessionIdle   time.Duration
+	sessionMaxAge time.Duration
 	secureCookies bool
 	showVersion   bool
 
@@ -96,6 +97,13 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 			idleErr = fmt.Errorf("LDAPUI_SESSION_IDLE %q: want a duration like 30m", v)
 		}
 	}
+	maxAge := 8 * time.Hour
+	var maxAgeErr error
+	if v := getenv("LDAPUI_SESSION_MAX_AGE"); v != "" {
+		if maxAge, maxAgeErr = time.ParseDuration(v); maxAgeErr != nil {
+			maxAgeErr = fmt.Errorf("LDAPUI_SESSION_MAX_AGE %q: want a duration like 8h", v)
+		}
+	}
 	var c config
 	var hosts, proxies string
 	fs := flag.NewFlagSet("ldapui", flag.ContinueOnError)
@@ -111,6 +119,7 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	fs.StringVar(&c.authTokenFile, "auth-token-file", "", "file holding the access token, e.g. a mounted Secret; read at startup (env LDAPUI_AUTH_TOKEN_FILE)")
 	fs.StringVar(&hosts, "allowed-hosts", env("LDAPUI_ALLOWED_HOSTS", ""), "extra Host header values to accept, comma-separated (env LDAPUI_ALLOWED_HOSTS)")
 	fs.DurationVar(&c.sessionIdle, "session-idle", idle, "close LDAP connections after this much inactivity (env LDAPUI_SESSION_IDLE)")
+	fs.DurationVar(&c.sessionMaxAge, "session-max-age", maxAge, "close LDAP connections this long after the last connect, however active (env LDAPUI_SESSION_MAX_AGE)")
 	fs.StringVar(&c.identityHeader, "identity-header", env("LDAPUI_IDENTITY_HEADER", ""),
 		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user (env LDAPUI_IDENTITY_HEADER)")
 	fs.StringVar(&proxies, "trusted-proxies", env("LDAPUI_TRUSTED_PROXIES", ""),
@@ -128,6 +137,9 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	}
 	if idleErr != nil {
 		return config{}, idleErr
+	}
+	if maxAgeErr != nil {
+		return config{}, maxAgeErr
 	}
 	// A token flag overrides both token variables.
 	switch {
@@ -174,6 +186,9 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	}
 	if c.sessionIdle <= 0 {
 		return config{}, fmt.Errorf("--session-idle %v: want a positive duration", c.sessionIdle)
+	}
+	if c.sessionMaxAge <= 0 {
+		return config{}, fmt.Errorf("--session-max-age %v: want a positive duration", c.sessionMaxAge)
 	}
 	if !basePathPattern.MatchString(c.basePath) {
 		return config{}, fmt.Errorf("--base-path %q: want a path like /ldap", c.basePath)
@@ -312,7 +327,7 @@ func runTo(args []string, stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	sessions := session.New[api.Directory](cfg.sessionIdle)
+	sessions := session.New[api.Directory](cfg.sessionIdle, cfg.sessionMaxAge)
 	go sessions.Run(ctx)
 
 	srv := newHTTPServer(api.New(api.Options{

@@ -35,25 +35,47 @@ var (
 )
 
 // Manager maps session IDs to named connections and closes connections of
-// sessions that stay idle longer than the configured timeout. It is safe for
-// concurrent use. Connections are closed after the internal lock is
-// released, so a Close that blocks on the network stalls only its caller.
+// sessions that stay idle longer than the idle timeout or live longer than
+// the maximum age. It is safe for concurrent use. Connections are closed
+// after the internal lock is released, so a Close that blocks on the network
+// stalls only its caller.
 type Manager[C io.Closer] struct {
-	idle time.Duration
-	now  func() time.Time
+	idle   time.Duration
+	maxAge time.Duration
+	now    func() time.Time
 
 	mu       sync.Mutex
 	sessions map[string]*session[C]
 }
 
 type session[C io.Closer] struct {
+	created  time.Time // set at Rotate
 	lastUsed time.Time
 	conns    map[string]C
 }
 
-// New returns a Manager that expires sessions after idle.
-func New[C io.Closer](idle time.Duration) *Manager[C] {
-	return &Manager[C]{idle: idle, now: time.Now, sessions: map[string]*session[C]{}}
+// New returns a Manager that expires sessions after idle without use, and
+// maxAge after they were created or last rotated, however active.
+func New[C io.Closer](idle, maxAge time.Duration) *Manager[C] {
+	return &Manager[C]{idle: idle, maxAge: maxAge, now: time.Now, sessions: map[string]*session[C]{}}
+}
+
+// live returns session id unless it is past maxAge. Callers hold m.mu. A
+// session past maxAge counts as missing everywhere and stays in the map, its
+// connections open, until Sweep closes them.
+//
+// ponytail: up to a minute of open connections past maxAge, with Run's
+// ticker; close them right here in the background if that matters.
+func (m *Manager[C]) live(id string) (*session[C], bool) {
+	s, ok := m.sessions[id]
+	if !ok || m.tooOld(s, m.now()) {
+		return nil, false
+	}
+	return s, true
+}
+
+func (m *Manager[C]) tooOld(s *session[C], now time.Time) bool {
+	return now.Sub(s.created) > m.maxAge
 }
 
 // Create starts an empty session and returns its unguessable ID. At
@@ -62,8 +84,9 @@ func New[C io.Closer](idle time.Duration) *Manager[C] {
 func (m *Manager[C]) Create() string { return m.Rotate("") }
 
 // Rotate moves the connections of session id, when it exists, to a new
-// session and returns the new unguessable ID; id stops naming a session. An
-// unknown or empty id gives a new empty session. Adding a session at
+// session and returns the new unguessable ID; id stops naming a session.
+// The new session's maximum age starts now: a connect is a new sign-in. An
+// unknown, empty or too old id gives a new empty session. Adding a session at
 // MaxSessions evicts the least recently used one, closing its connections
 // in the background as Sweep does.
 //
@@ -75,7 +98,7 @@ func (m *Manager[C]) Rotate(id string) string {
 	newID := rand.Text()
 	var evicted []C
 	m.mu.Lock()
-	s, ok := m.sessions[id]
+	s, ok := m.live(id)
 	if ok {
 		delete(m.sessions, id)
 	} else {
@@ -93,7 +116,8 @@ func (m *Manager[C]) Rotate(id string) string {
 		evicted = slices.Collect(maps.Values(m.sessions[oldest].conns))
 		delete(m.sessions, oldest)
 	}
-	s.lastUsed = m.now()
+	s.created = m.now()
+	s.lastUsed = s.created
 	m.sessions[newID] = s
 	m.mu.Unlock()
 	closeInBackground(evicted)
@@ -104,7 +128,7 @@ func (m *Manager[C]) Rotate(id string) string {
 func (m *Manager[C]) Exists(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.sessions[id]
+	_, ok := m.live(id)
 	return ok
 }
 
@@ -113,7 +137,7 @@ func (m *Manager[C]) Exists(id string) bool {
 // the session already holds MaxConns connections.
 func (m *Manager[C]) Put(id, name string, c C) error {
 	m.mu.Lock()
-	s, ok := m.sessions[id]
+	s, ok := m.live(id)
 	if !ok {
 		m.mu.Unlock()
 		return ErrNoSession
@@ -137,7 +161,7 @@ func (m *Manager[C]) Get(id, name string) (C, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var zero C
-	s, ok := m.sessions[id]
+	s, ok := m.live(id)
 	if !ok {
 		return zero, ErrNoSession
 	}
@@ -153,7 +177,7 @@ func (m *Manager[C]) Get(id, name string) (C, error) {
 func (m *Manager[C]) Names(id string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
+	s, ok := m.live(id)
 	if !ok {
 		return nil
 	}
@@ -163,7 +187,7 @@ func (m *Manager[C]) Names(id string) []string {
 // Drop closes and forgets one connection.
 func (m *Manager[C]) Drop(id, name string) {
 	m.mu.Lock()
-	s, ok := m.sessions[id]
+	s, ok := m.live(id)
 	if !ok {
 		m.mu.Unlock()
 		return
@@ -176,15 +200,17 @@ func (m *Manager[C]) Drop(id, name string) {
 	}
 }
 
-// Sweep closes every session idle for longer than the timeout. Each
-// connection closes in a goroutine of its own and Sweep does not wait for
-// it: a Close stuck on a stalled server must not hold up the sweeper.
+// Sweep closes every session idle for longer than the timeout or older than
+// the maximum age. Each connection closes in a goroutine of its own and
+// Sweep does not wait for it: a Close stuck on a stalled server must not
+// hold up the sweeper.
 func (m *Manager[C]) Sweep() {
 	var expired []C
 	m.mu.Lock()
-	cutoff := m.now().Add(-m.idle)
+	now := m.now()
+	cutoff := now.Add(-m.idle)
 	for id, s := range m.sessions {
-		if s.lastUsed.Before(cutoff) {
+		if s.lastUsed.Before(cutoff) || m.tooOld(s, now) {
 			expired = slices.AppendSeq(expired, maps.Values(s.conns))
 			delete(m.sessions, id)
 		}

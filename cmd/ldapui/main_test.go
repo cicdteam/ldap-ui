@@ -40,6 +40,7 @@ func TestParseFlags(t *testing.T) {
 	want := config{
 		listen: "0.0.0.0:9000", basePath: "/ldap", dataDir: "/data",
 		allowedHosts: []string{"ldap.example.com", "ui.local"}, sessionIdle: 30 * time.Minute,
+		sessionMaxAge: 8 * time.Hour,
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(config{})); diff != "" {
 		t.Errorf("parseFlags() mismatch (-want +got):\n%s", diff)
@@ -149,6 +150,7 @@ func TestRunVersion(t *testing.T) {
 		{name: "short auth token", key: "LDAPUI_AUTH_TOKEN", value: "short"},
 		{name: "missing auth token file", key: "LDAPUI_AUTH_TOKEN_FILE", value: "/nonexistent/token"},
 		{name: "bad session idle", key: "LDAPUI_SESSION_IDLE", value: "soon"},
+		{name: "bad session max age", key: "LDAPUI_SESSION_MAX_AGE", value: "soon"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -377,6 +379,43 @@ func TestParseFlagsSessionIdleEnv(t *testing.T) {
 	env["LDAPUI_SESSION_IDLE"] = "soon"
 	if _, err := parseFlags(nil, getenv, io.Discard); err == nil {
 		t.Errorf("parseFlags() with LDAPUI_SESSION_IDLE=soon error = nil, want error")
+	}
+}
+
+func TestParseFlagsSessionMaxAge(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		env     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "default", want: 8 * time.Hour},
+		{name: "env", env: "2h", want: 2 * time.Hour},
+		{name: "flag", args: []string{"--session-max-age", "90m"}, want: 90 * time.Minute},
+		{name: "flag wins over env", args: []string{"--session-max-age", "1h"}, env: "2h", want: time.Hour},
+		{name: "zero flag", args: []string{"--session-max-age", "0"}, wantErr: true},
+		{name: "zero env", env: "0", wantErr: true},
+		{name: "negative flag", args: []string{"--session-max-age", "-1h"}, wantErr: true},
+		{name: "invalid env with flag", args: []string{"--session-max-age", "1h"}, env: "soon", wantErr: true},
+	}
+	for _, tc := range tests {
+		getenv := func(k string) string {
+			if k == "LDAPUI_SESSION_MAX_AGE" {
+				return tc.env
+			}
+			return ""
+		}
+		got, err := parseFlags(tc.args, getenv, io.Discard)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s: parseFlags(%q) error = nil, want error", tc.name, tc.args)
+			}
+			continue
+		}
+		if err != nil || got.sessionMaxAge != tc.want {
+			t.Errorf("%s: parseFlags(%q) sessionMaxAge = %v, %v, want %v, nil", tc.name, tc.args, got.sessionMaxAge, err, tc.want)
+		}
 	}
 }
 

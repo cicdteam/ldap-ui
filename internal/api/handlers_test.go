@@ -173,7 +173,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Cleanup(func() { _ = cat.Close() })
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
-	opts.Sessions = session.New[Directory](time.Hour)
+	opts.Sessions = session.New[Directory](time.Hour, 8*time.Hour)
 	if opts.Dial == nil {
 		opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
 			env.password, env.dialed = password, p

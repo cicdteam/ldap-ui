@@ -297,6 +297,7 @@ writable; saving profiles will fail` with its `dir`.
 | `--auth-token-file` | `LDAPUI_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
 | `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
 | `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
+| `--session-max-age` | `LDAPUI_SESSION_MAX_AGE` | `8h` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
 | `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
 | `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
@@ -312,10 +313,12 @@ missing or holds an invalid token (at least 16 characters from
 `A-Z a-z 0-9 . _ ~ -`); the error names the file, never the token.
 
 A browser's open connections live in a session on the server, closed after
-`--session-idle` without use. Every successful connect moves the browser to a
-new session ID and keeps its connections, so an ID seen before a connect is
-worthless after it. A request from another tab at the same instant can
-find its session gone; that tab reconnects. A session holds at most 8
+`--session-idle` without use, or `--session-max-age` after it began, however
+active. Every successful connect moves the browser to a new session ID and
+keeps its connections, so an ID seen before a connect is worthless after it.
+That connect begins the new session, so the connections it keeps get a fresh
+`--session-max-age`. A request from another tab at the same instant can find
+its session gone; that tab reconnects. A session holds at most 8
 connections: one more connect fails with 409 `too_many_connections` until one
 is disconnected. The server holds at most 1000 sessions; one more closes the
 connections of the least recently used.
@@ -569,7 +572,7 @@ address outside `--trusted-proxies`, cannot connect to the profile.
 The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without
 asking again. It is forgotten at disconnect, when the session expires after
-`--session-idle` without use, or when the session reaches its maximum age.
+`--session-idle` without use, or when the session reaches `--session-max-age`.
 
 ### Behind a reverse proxy
 

@@ -21,7 +21,7 @@ func (c *closerSpy) Close() error {
 }
 
 func TestPutGet(t *testing.T) {
-	m := New[*closerSpy](time.Hour)
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	id := m.Create()
 	first, second := &closerSpy{}, &closerSpy{}
 	if err := m.Put(id, "dev", first); err != nil {
@@ -48,7 +48,7 @@ func TestPutGet(t *testing.T) {
 }
 
 func TestNamesAndDrop(t *testing.T) {
-	m := New[*closerSpy](time.Hour)
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	id := m.Create()
 	b := &closerSpy{}
 	_ = m.Put(id, "b", b)
@@ -78,7 +78,7 @@ func (c closeSignalSpy) Close() error {
 
 func TestSweep(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-	m := New[closeSignalSpy](30 * time.Minute)
+	m := New[closeSignalSpy](30*time.Minute, 8*time.Hour)
 	m.now = func() time.Time { return now }
 	idle, active := m.Create(), m.Create()
 	idleConn, activeConn := make(closeSignalSpy), make(closeSignalSpy)
@@ -108,6 +108,71 @@ func TestSweep(t *testing.T) {
 	}
 }
 
+// A session in use every minute still ends 8h after it was created.
+func TestMaxAgeExpires(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	m := New[closeSignalSpy](30*time.Minute, 8*time.Hour)
+	m.now = func() time.Time { return now }
+	id := m.Create()
+	conn := make(closeSignalSpy)
+	_ = m.Put(id, "dev", conn)
+
+	for elapsed := time.Minute; elapsed <= 8*time.Hour; elapsed += time.Minute {
+		now = now.Add(time.Minute)
+		if _, err := m.Get(id, "dev"); err != nil {
+			t.Fatalf("Get() %v after Create error = %v, want nil", elapsed, err)
+		}
+	}
+	now = now.Add(time.Minute)
+
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNoSession) {
+		t.Errorf("Get() 8h1m after Create error = %v, want ErrNoSession", err)
+	}
+	if names := m.Names(id); names != nil {
+		t.Errorf("Names() 8h1m after Create = %v, want nil", names)
+	}
+	if m.Exists(id) {
+		t.Error("Exists() 8h1m after Create = true, want false")
+	}
+	if names := m.Names(m.Rotate(id)); len(names) != 0 {
+		t.Errorf("Names(Rotate()) 8h1m after Create = %v, want empty: rotation must not revive the session", names)
+	}
+	m.Sweep()
+	select {
+	case <-conn:
+	case <-time.After(time.Second):
+		t.Error("Sweep() did not close a session 8h1m after Create")
+	}
+}
+
+// Rotation is a new sign-in, so the moved connections get a fresh 8h.
+func TestRotateResetsAge(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	m := New[closeSignalSpy](24*time.Hour, 8*time.Hour)
+	m.now = func() time.Time { return now }
+	old := m.Create()
+	conn := make(closeSignalSpy)
+	_ = m.Put(old, "dev", conn)
+	now = now.Add(7 * time.Hour)
+	id := m.Rotate(old)
+
+	now = now.Add(8 * time.Hour)
+	m.Sweep()
+	if _, err := m.Get(id, "dev"); err != nil {
+		t.Errorf("Get() 8h after Rotate error = %v, want nil", err)
+	}
+	select {
+	case <-conn:
+		t.Error("Sweep() closed a session 8h after Rotate")
+	default:
+	}
+
+	now = now.Add(time.Minute)
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNoSession) {
+		t.Errorf("Get() 8h1m after Rotate error = %v, want ErrNoSession", err)
+	}
+}
+
 // blockingCloserStub blocks in Close until release is closed, like a
 // connection whose server stopped reading.
 type blockingCloserStub struct{ release chan struct{} }
@@ -120,7 +185,7 @@ func (c blockingCloserStub) Close() error {
 // A Close that hangs on a stalled server must not hold up the sweep.
 func TestSweepDoesNotWaitForClose(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-	m := New[blockingCloserStub](time.Minute)
+	m := New[blockingCloserStub](time.Minute, 8*time.Hour)
 	m.now = func() time.Time { return now }
 	release := make(chan struct{})
 	defer close(release)
@@ -144,7 +209,7 @@ func TestSweepDoesNotWaitForClose(t *testing.T) {
 }
 
 func TestCreateUnique(t *testing.T) {
-	m := New[*closerSpy](time.Hour)
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	if a, b := m.Create(), m.Create(); a == b || len(a) < 20 {
 		t.Errorf("Create() = %q, %q, want distinct random IDs", a, b)
 	}
@@ -168,7 +233,7 @@ func (c *lockSpy) Close() error {
 // A Close that blocks on the network must not stall every other session.
 func TestCloseOutsideLock(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-	m := New[*lockSpy](time.Minute)
+	m := New[*lockSpy](time.Minute, 8*time.Hour)
 	m.now = func() time.Time { return now }
 	id := m.Create()
 	replaced, dropped, swept := &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}
@@ -188,7 +253,7 @@ func TestCloseOutsideLock(t *testing.T) {
 }
 
 func TestRotateMovesConns(t *testing.T) {
-	m := New[*closerSpy](time.Hour)
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	old := m.Create()
 	a, b := &closerSpy{}, &closerSpy{}
 	_ = m.Put(old, "a", a)
@@ -212,7 +277,7 @@ func TestRotateMovesConns(t *testing.T) {
 }
 
 func TestRotateUnknown(t *testing.T) {
-	m := New[*closerSpy](time.Hour)
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	for _, id := range []string{"", "nope"} {
 		got := m.Rotate(id)
 		if got == id || !m.Exists(got) {
@@ -225,7 +290,7 @@ func TestRotateUnknown(t *testing.T) {
 }
 
 func TestPutConnLimit(t *testing.T) {
-	m := New[*closerSpy](time.Hour)
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	id := m.Create()
 	first := &closerSpy{}
 	_ = m.Put(id, "c0", first)
@@ -254,7 +319,7 @@ func TestPutConnLimit(t *testing.T) {
 
 func TestSessionLimitEvictsOldest(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-	m := New[closeSignalSpy](time.Hour)
+	m := New[closeSignalSpy](time.Hour, 8*time.Hour)
 	m.now = func() time.Time { return now }
 	recent := m.Create() // created first, used last
 	now = now.Add(time.Second)
