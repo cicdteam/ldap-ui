@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 var okHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -166,5 +167,55 @@ func TestWithBasePath(t *testing.T) {
 	}
 	if withBasePath("", inner) != http.Handler(inner) {
 		t.Error("withBasePath(\"\") wrapped the handler, want it unchanged")
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	const wantCSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+		"font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+	ui := fstest.MapFS{
+		"index.html":    {Data: []byte(`<html><head><base href="/"></head><body>app</body></html>`)},
+		"assets/app.js": {Data: []byte(`console.log(1)`)},
+	}
+	type request struct {
+		name, path, host string
+		wantCode         int
+		wantCache        string
+	}
+	for _, base := range []string{"", "/ldap"} {
+		env := newTestEnvWith(t, Options{BasePath: base, UI: ui})
+		requests := []request{
+			{name: "index", path: "/", wantCode: http.StatusOK, wantCache: "no-cache"},
+			{name: "asset", path: "/assets/app.js", wantCode: http.StatusOK, wantCache: immutable},
+			{name: "api", path: "/api/profiles", wantCode: http.StatusOK, wantCache: "no-store"},
+			{name: "unknown api", path: "/api/nope", wantCode: http.StatusNotFound, wantCache: "no-store"},
+			{name: "probe", path: "/healthz", wantCode: http.StatusOK},
+			{name: "host rejected", path: "/api/profiles", host: "evil.example.com", wantCode: http.StatusForbidden, wantCache: "no-store"},
+		}
+		if base != "" {
+			requests = append(requests, request{name: "bare base redirect", wantCode: http.StatusMovedPermanently})
+		}
+		for _, tc := range requests {
+			r := httptest.NewRequest(http.MethodGet, base+tc.path, nil)
+			r.Host = "localhost:8080"
+			if tc.host != "" {
+				r.Host = tc.host
+			}
+			rec := serve(env.h, r)
+			if rec.Code != tc.wantCode {
+				t.Errorf("base %q %s: GET %s = %d, want %d", base, tc.name, r.URL, rec.Code, tc.wantCode)
+			}
+			for name, want := range map[string]string{
+				"Content-Security-Policy": wantCSP,
+				"X-Frame-Options":         "DENY",
+				"X-Content-Type-Options":  "nosniff",
+				"Referrer-Policy":         "no-referrer",
+				"Cache-Control":           tc.wantCache,
+			} {
+				if got := rec.Header().Get(name); got != want {
+					t.Errorf("base %q %s: GET %s header %s = %q, want %q", base, tc.name, r.URL, name, got, want)
+				}
+			}
+		}
 	}
 }

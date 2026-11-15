@@ -106,7 +106,7 @@ func New(opts Options) http.Handler {
 	root.HandleFunc("GET /healthz", health)
 	root.HandleFunc("GET /readyz", health)
 	root.Handle("/", h)
-	return withBasePath(base, root)
+	return securityHeaders(base, withBasePath(base, root))
 }
 
 // health answers liveness and readiness probes. Probes bypass the host and

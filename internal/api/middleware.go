@@ -15,6 +15,12 @@ import (
 
 const tokenCookie = "ldapui_token" //nolint:gosec // cookie name, not a credential
 
+// contentSecurityPolicy allows only this origin, plus data: images (photos
+// and the favicon) and inline styles, which CodeMirror and the dialogs'
+// scroll lock inject as <style> elements.
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+	"font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+
 // cookieOptions scopes the cookies the server sets.
 type cookieOptions struct {
 	// Path is the base path plus "/", or "/" without a base path, so the
@@ -32,6 +38,25 @@ func (o cookieOptions) cookie(name, value string, r *http.Request) *http.Cookie 
 		Name: name, Value: value, Path: o.Path,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: o.Secure || r.TLS != nil,
 	}
+}
+
+// securityHeaders sets the CSP, anti-framing, nosniff and referrer headers on
+// every response, and no-store on responses under base+"/api", which carry
+// directory data. They are set before next runs, so error responses and
+// redirects carry them too; a handler may still override Cache-Control.
+func securityHeaders(base string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		// URLs carry DNs and filters.
+		h.Set("Referrer-Policy", "no-referrer")
+		if p, ok := strings.CutPrefix(r.URL.Path, base); ok && (p == "/api" || strings.HasPrefix(p, "/api/")) {
+			h.Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // hostCheck rejects requests whose Host header is not localhost or one of
