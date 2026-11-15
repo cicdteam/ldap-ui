@@ -55,7 +55,8 @@ type Page struct {
 	Entries []Entry `json:"entries"`
 	Cursor  string  `json:"cursor,omitempty"`
 	// Truncated is set when the server stopped early because of a size or
-	// time limit; Entries holds what arrived before that.
+	// time limit, or the response passed maxResponseEntries entries or
+	// maxResponseBytes value bytes; Entries holds what arrived before that.
 	Truncated bool     `json:"truncated,omitempty"`
 	Referrals []string `json:"referrals,omitempty"`
 }

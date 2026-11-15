@@ -67,7 +67,12 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 - **Search** (center): RFC 4515 filter editor with highlighting, completion
   from the schema and inline errors, or a visual builder; base DN, scope and
   columns sit next to it. Results load 500 at a time; sorting by column and
-  export to CSV or LDIF act on the rows loaded so far. Recent and saved
+  export to CSV or LDIF act on the rows loaded so far. A page the server cut
+  with a size or time limit, or one past ldapui's caps on a single response
+  (5000 entries, 64 MiB of attribute values), shows what arrived and is
+  marked truncated ("The search stopped early"); a listing cut by a cap has
+  no further pages. One server message (an entry) over 64 MiB fails the
+  request instead. Recent and saved
   searches are kept per connection in the browser. A filter can test a
   password or secret attribute for presence (`(userPassword=*)`) but not
   match on its values: equality, substring, ordering, approximate and
@@ -88,8 +93,13 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   password and secret attributes never leave the server (their names and a
   count of hidden values are shown). Long value lists show the first 100
   values and grow by 1000 on request; the attribute filter also narrows the
-  values it matches. Member of searches `member`, `uniqueMember` and
-  `memberUid`; an equality index on each keeps it fast.
+  values it matches. An attribute with more than 10 000 values (the `member`
+  list of a huge group) arrives truncated to its first 10 000, noted
+  "Showing the first 10,000 values"; Edit still adds and deletes single
+  values, and Apply touches only those. Member of searches `member`,
+  `uniqueMember` and `memberUid`; an equality index on each keeps it fast.
+  Member of and Members list at most 10 000 groups or members: a longer list
+  is truncated there and marked incomplete.
 - **Status bar** (bottom): the server address, whether the connection is
   encrypted (TLS, StartTLS, not encrypted, certificate not verified), the
   server type and the number of staged changes.

@@ -88,6 +88,20 @@ describe('stage', () => {
     expect(entryChanges(b, 'UID=b,dc=x')?.dn).toBe('uid=b,dc=x')
     expect(dropEntry(b, DN).map((e) => e.dn)).toEqual(['uid=b,dc=x'])
   })
+  it('a truncated attribute stages only value adds and deletes', () => {
+    // The inspector holds only the first values: a replace of the attribute would drop the rest.
+    const big: Entry = {
+      dn: DN,
+      attributes: [{ name: 'member', truncated: true, values: [{ text: 'a' }, { text: 'b' }] }],
+    }
+    let b = stage([], big.dn, { kind: 'add', attr: 'member', value: 'c' })
+    b = stage(b, big.dn, { kind: 'delete', attr: 'member', value: 'a' })
+    b = stage(b, big.dn, { kind: 'replace', attr: 'member', from: 'b', to: 'd' })
+    expect(entryChanges(b, big.dn)?.changes).toEqual([
+      { op: 'delete', attr: 'member', values: ['a', 'b'] },
+      { op: 'add', attr: 'member', values: ['c', 'd'] },
+    ])
+  })
 })
 
 describe('view', () => {

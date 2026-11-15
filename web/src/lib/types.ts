@@ -71,6 +71,8 @@ export interface Attribute {
   values?: Value[]
   /** Number of secret values the server withheld. */
   masked?: number
+  /** The attribute has more values than ldapui reads: values holds the first 10,000. */
+  truncated?: boolean
 }
 
 export interface Entry {

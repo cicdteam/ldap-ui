@@ -72,6 +72,10 @@ func (c *Conn) MemberOf(ctx context.Context, dn string, nested bool) (Membership
 				if seen[normDN(g)] {
 					continue
 				}
+				if len(m.Refs) == maxRefs {
+					m.Truncated = true
+					return m, nil
+				}
 				seen[normDN(g)] = true
 				m.Refs = append(m.Refs, Ref{DN: g, Via: viaFor(depth, member)})
 				next = append(next, g)
@@ -122,6 +126,10 @@ func (c *Conn) Members(ctx context.Context, dn string, nested bool) (Membership,
 				if seen[normDN(member)] {
 					continue
 				}
+				if len(m.Refs) == maxRefs {
+					m.Truncated = true
+					return m, nil
+				}
 				seen[normDN(member)] = true
 				m.Refs = append(m.Refs, Ref{DN: member, Via: viaFor(depth, group)})
 				if isGroup[normDN(member)] {
@@ -157,8 +165,9 @@ func (c *Conn) memberValues(ctx context.Context, dn string) ([]string, error) {
 }
 
 // allDNs returns the DNs of the entries under the base DN that match
-// filter, at most limit of them. truncated is set when a server limit or
-// the limit argument cut the scan short. It pages on the shared connection
+// filter, at most limit of them. truncated is set when a server limit, the
+// limit argument or, without paging, maxResponseEntries cut the scan short.
+// It pages on the shared connection
 // taken out of its slot, like the first page of a listing, but keeps the
 // paging cookie to itself: it neither uses nor evicts the cursors of Search.
 // ponytail: Members(nested) lists every group under the base DN to know

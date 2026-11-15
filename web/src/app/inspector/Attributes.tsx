@@ -139,6 +139,9 @@ function AttributeRow({
             </Button>
           </li>
         )}
+        {attr.truncated && (
+          <li className="py-0.5 text-xs text-muted">Showing the first 10,000 values</li>
+        )}
         {edit && adding && (
           <li className="flex py-0.5">
             <ValueEditor

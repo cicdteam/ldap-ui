@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -69,6 +70,21 @@ func readRequest(r io.Reader) (int64, error) {
 	}
 	id, _ := p.Children[0].Value.(int64)
 	return id, nil
+}
+
+// readSearch reads one search request and returns its message ID and base
+// DN.
+func readSearch(r io.Reader) (id int64, base string, err error) {
+	p, err := ber.ReadPacket(r)
+	if err != nil {
+		return 0, "", err
+	}
+	if len(p.Children) < 2 || len(p.Children[1].Children) == 0 {
+		return 0, "", errors.New("not a search request")
+	}
+	id, _ = p.Children[0].Value.(int64)
+	base, _ = p.Children[1].Children[0].Value.(string)
+	return id, base, nil
 }
 
 // writeResult writes an LDAPResult-shaped response of type op with the
@@ -625,5 +641,156 @@ func TestIsEncrypted(t *testing.T) {
 		if got := isEncrypted(profile.Profile{URL: tc.url, StartTLS: tc.startTLS}); got != tc.want {
 			t.Errorf("isEncrypted(%s, startTLS %v) = %v, want %v", tc.url, tc.startTLS, got, tc.want)
 		}
+	}
+}
+
+// TestSearchOnceCaps checks that a response with more than
+// maxResponseEntries entries or maxResponseBytes value bytes ends early as
+// truncated rather than as an error, and that the next search still works.
+func TestSearchOnceCaps(t *testing.T) {
+	tests := []struct {
+		name        string
+		entries     int
+		value       string
+		wantEntries int
+	}{
+		{name: "entries", entries: maxResponseEntries + 1, value: "x", wantEntries: maxResponseEntries},
+		// 70 MiB in 2 MiB values: the 33rd would pass 64 MiB.
+		{name: "value bytes", entries: 35, value: strings.Repeat("x", 2<<20), wantEntries: 32},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var searches atomic.Int32
+			url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+				for {
+					id, err := readRequest(conn)
+					if err != nil {
+						return
+					}
+					// Only the first search is big; the next one is empty.
+					if searches.Add(1) == 1 {
+						for i := range tc.entries {
+							if writeEntry(conn, id, fmt.Sprintf("cn=%d", i), attr("description", tc.value)) != nil {
+								return
+							}
+						}
+					}
+					if writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+						return
+					}
+				}
+			})
+			c := fakeConn(t, url)
+			// go-ldap's request timeout covers the whole response, which
+			// takes longer than the fake's 200ms under the race detector.
+			c.prof.SearchTimeout = time.Minute
+			c.lc.SetTimeout(time.Minute)
+			search := func() (*result, error) {
+				var res *result
+				err := c.read(context.Background(), func(lc *ldap.Conn) error {
+					var err error
+					res, err = searchOnce(context.Background(), lc, &ldap.SearchRequest{BaseDN: "dc=x", Filter: "(objectClass=*)"})
+					return err
+				})
+				return res, err
+			}
+			res, err := search()
+			if err != nil {
+				t.Fatalf("searchOnce(%d entries) error = %v, want none", tc.entries, err)
+			}
+			if len(res.entries) != tc.wantEntries || !res.truncated {
+				t.Errorf("searchOnce(%d entries) = %d entries, truncated %v; want %d, truncated", tc.entries, len(res.entries), res.truncated, tc.wantEntries)
+			}
+			res, err = search()
+			if err != nil || len(res.entries) != 0 || res.truncated {
+				t.Errorf("next searchOnce() = %+v, %v; want an empty complete result", res, err)
+			}
+		})
+	}
+}
+
+// TestMembersHardCap checks that a nested membership scan returns at most
+// maxRefs refs, marked truncated, even when the groups of one level bring
+// more than that together.
+func TestMembersHardCap(t *testing.T) {
+	// Members: cn=root holds cn=a and cn=b, which hold 6000 users each.
+	members := map[string][]string{"cn=root": {"cn=a", "cn=b"}}
+	for _, g := range members["cn=root"] {
+		for i := range 6000 {
+			members[g] = append(members[g], fmt.Sprintf("uid=%d,%s", i, g))
+		}
+	}
+	serveMembers := func(_ int32, conn net.Conn) {
+		for {
+			id, base, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			if base == "" { // the group index under the empty base DN
+				err = errors.Join(writeEntry(conn, id, "cn=a"), writeEntry(conn, id, "cn=b"))
+			} else {
+				err = writeEntry(conn, id, base, attr("member", members[base]...))
+			}
+			if err != nil || writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+				return
+			}
+		}
+	}
+	// MemberOf: the entry is in 4 groups, and each of them in 3000 more.
+	var scans atomic.Int32
+	serveMemberOf := func(_ int32, conn net.Conn) {
+		for {
+			id, base, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			if base == "" { // a scan for the groups listing a member
+				n := scans.Add(1)
+				count := 3000
+				if n == 1 {
+					count = 4
+				}
+				for i := range count {
+					if err = writeEntry(conn, id, fmt.Sprintf("cn=g%d-%d", n, i)); err != nil {
+						break
+					}
+				}
+			} else {
+				err = writeEntry(conn, id, base)
+			}
+			if err != nil || writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+				return
+			}
+		}
+	}
+	tests := []struct {
+		name  string
+		serve func(int32, net.Conn)
+		scan  func(*Conn) (Membership, error)
+	}{
+		{name: "Members", serve: serveMembers, scan: func(c *Conn) (Membership, error) {
+			return c.Members(context.Background(), "cn=root", true)
+		}},
+		{name: "MemberOf", serve: serveMemberOf, scan: func(c *Conn) (Membership, error) {
+			return c.MemberOf(context.Background(), "uid=u", true)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, _ := fakeServer(t, tc.serve)
+			m, err := tc.scan(fakeConn(t, url))
+			if err != nil {
+				t.Fatalf("%s(nested) error = %v", tc.name, err)
+			}
+			if len(m.Refs) != maxRefs || !m.Truncated {
+				t.Errorf("%s(nested) = %d refs, truncated %v; want %d, truncated", tc.name, len(m.Refs), m.Truncated, maxRefs)
+			}
+		})
+	}
+}
+
+func TestBERPacketCap(t *testing.T) {
+	if got, want := ber.MaxPacketLengthBytes, int64(64<<20); got != want {
+		t.Errorf("ber.MaxPacketLengthBytes = %d, want %d", got, want)
 	}
 }

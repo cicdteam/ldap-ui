@@ -248,7 +248,7 @@ function Listing({ search }: { search: SearchState }) {
         ))}
       {listing.truncated && (
         <Banner tone="warn">
-          The server stopped early (size or time limit). Showing what arrived.
+          The search stopped early (a size, time or response limit). Showing what arrived.
         </Banner>
       )}
       {listing.referrals.length > 0 && (

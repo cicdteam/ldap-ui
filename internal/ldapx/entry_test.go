@@ -4,6 +4,7 @@
 package ldapx
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/go-ldap/ldap/v3"
@@ -172,5 +173,29 @@ func TestConvertEntryDropsInvalidNames(t *testing.T) {
 	want := Entry{DN: e.DN, Attributes: []Attribute{{Name: "cn", Values: []Value{{Text: "Mallory"}}}}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("convertEntry(%v) mismatch (-want +got):\n%s", e.DN, diff)
+	}
+}
+
+// TestConvertEntryCapsValues checks that an attribute keeps its first
+// maxAttrValues values and is marked truncated, while a secret one still
+// counts all its withheld values.
+func TestConvertEntryCapsValues(t *testing.T) {
+	raw := make([][]byte, maxAttrValues+1)
+	for i := range raw {
+		raw[i] = []byte(strconv.Itoa(i))
+	}
+	e := &ldap.Entry{DN: "cn=big", Attributes: []*ldap.EntryAttribute{
+		{Name: "member", ByteValues: raw},
+		{Name: "userPassword", ByteValues: raw},
+	}}
+	got := convertEntry(e, schema.Parse(nil, nil, nil), false)
+	member := got.Attributes[0]
+	last := strconv.Itoa(maxAttrValues - 1)
+	if len(member.Values) != maxAttrValues || !member.Truncated || member.Values[len(member.Values)-1].Text != last {
+		t.Errorf("convertEntry(%d values) = %d values, truncated %v; want %d ending in %s, truncated", len(raw), len(member.Values), member.Truncated, maxAttrValues, last)
+	}
+	want := Attribute{Name: "userPassword", Values: []Value{}, Masked: maxAttrValues + 1}
+	if diff := cmp.Diff(want, got.Attributes[1]); diff != "" {
+		t.Errorf("convertEntry(%d secret values) mismatch (-want +got):\n%s", len(raw), diff)
 	}
 }

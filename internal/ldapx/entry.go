@@ -30,12 +30,19 @@ type Value struct {
 	Display string `json:"display,omitempty"`
 }
 
+// maxAttrValues caps the values of one attribute that an entry carries to
+// the UI.
+const maxAttrValues = 10000
+
 // Attribute is one attribute of an entry. Secret attributes carry no
-// values; Masked counts the values that were withheld.
+// values; Masked counts the values that were withheld. Truncated is set
+// when the attribute has more than maxAttrValues values and Values holds
+// only the first maxAttrValues.
 type Attribute struct {
-	Name   string  `json:"name"`
-	Values []Value `json:"values"`
-	Masked int     `json:"masked,omitempty"`
+	Name      string  `json:"name"`
+	Values    []Value `json:"values"`
+	Masked    int     `json:"masked,omitempty"`
+	Truncated bool    `json:"truncated,omitempty"`
 }
 
 // Entry is a directory entry ready for the UI.
@@ -124,7 +131,11 @@ func convertAttribute(name string, raw [][]byte, s *schema.Schema, isAD bool) At
 	}
 	binary := s.IsBinary(name)
 	timeSyntax := s.Syntax(name) == schema.SyntaxGeneralizedTime
-	a := Attribute{Name: name, Values: make([]Value, 0, len(raw))}
+	a := Attribute{Name: name}
+	if len(raw) > maxAttrValues {
+		raw, a.Truncated = raw[:maxAttrValues], true
+	}
+	a.Values = make([]Value, 0, len(raw))
 	for _, b := range raw {
 		a.Values = append(a.Values, convertValue(base, b, binary, timeSyntax, isAD))
 	}
