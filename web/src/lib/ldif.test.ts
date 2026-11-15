@@ -93,7 +93,7 @@ describe('entryToLDIF', () => {
         dn: 'uid=mallory,dc=example,dc=com',
         attributes: [
           { name: 'cn', values: [{ text: 'Mallory' }] },
-          { name, values: [{ text: 'x' }] },
+          { name, values: [{ text: 'x' }, { text: 'y' }] },
           { name, values: [], masked: 1 },
         ],
       },
@@ -103,7 +103,9 @@ describe('entryToLDIF', () => {
     expect(lines.filter((l) => l.startsWith('dn'))).toHaveLength(1)
     expect(lines.filter((l) => l.startsWith('changetype'))).toEqual([])
     expect(lines.slice(dn, -1)).not.toContain('')
-    expect(out).toContain('# invalid attribute name skipped')
+    // One comment per attribute, not per value.
+    expect(lines.filter((l) => l === '# invalid attribute name skipped')).toHaveLength(2)
+    expect(lines).toContain('cn: Mallory')
   })
 
   it('separates entries and adds the version line', () => {

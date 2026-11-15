@@ -53,10 +53,11 @@ export function fold(l: string, width = 76): string {
 export function entryToLDIF(e: Entry): string {
   const lines = [fold(ldifLine('dn', e.dn, false))]
   for (const a of e.attributes ?? []) {
-    if (a.masked)
-      lines.push(
-        isAttrDescription(a.name) ? `# ${a.name}: ${a.masked} value(s) hidden` : SKIPPED_NAME,
-      )
+    if (!isAttrDescription(a.name)) {
+      lines.push(SKIPPED_NAME)
+      continue
+    }
+    if (a.masked) lines.push(`# ${a.name}: ${a.masked} value(s) hidden`)
     for (const v of a.values ?? []) lines.push(fold(ldifLine(a.name, v.text, v.base64 === true)))
   }
   return lines.join('\n') + '\n'

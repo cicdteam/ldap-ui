@@ -92,15 +92,15 @@ func isSecret(name, base string, s *schema.Schema) bool {
 	return false
 }
 
-// attrName is an RFC 4512 attribute description: a name or numeric OID,
+// attrDescription is an RFC 4512 attribute description: a name or numeric OID,
 // then options such as ";lang-de", ";binary" or AD's ";range=0-1499".
-var attrName = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)(;[A-Za-z0-9=*-]+)*$`)
+var attrDescription = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)(;[A-Za-z0-9=*-]+)*$`)
 
 // validAttrName reports whether name is an attribute description. go-ldap
 // accepts any octet string, and a name with a line break would inject
 // records into the LDIF the UI exports.
 func validAttrName(name string) bool {
-	return attrName.MatchString(name)
+	return attrDescription.MatchString(name)
 }
 
 // convertEntry and convertAttribute make empty lists non-nil, so the UI gets
