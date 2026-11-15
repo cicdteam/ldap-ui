@@ -14,11 +14,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -133,8 +137,14 @@ type testEnv struct {
 	h        http.Handler
 	dir      *directoryFake
 	dialErr  error
-	password string // password of the last dial
+	password string          // password of the last dial
+	dialed   profile.Profile // profile of the last dial
+	dials    int
 	cookies  []*http.Cookie
+	// header is added to every request; remote, when set, is its
+	// RemoteAddr instead of httptest's 192.0.2.1:1234.
+	header http.Header
+	remote string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -142,8 +152,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, Options{})
 }
 
-// newTestEnvWith is newTestEnv with extra options. It always sets Catalog,
-// Sessions and Dial.
+// newTestEnvWith is newTestEnv with extra options. It always sets Catalog
+// and Sessions, and Dial unless opts has one; the testEnv fields about the
+// last dial are then unused.
 func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Helper()
 	t.Setenv("LDAPUI_TEST_PW", "from-env")
@@ -153,6 +164,8 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", Environment: profile.Prod, InsecureSkipVerify: true, Color: "red"},
 		{Name: "anon", URL: "ldap://anon:389"},
 		{Name: "prodrw", URL: "ldap://prodrw:389", Environment: profile.Prod, ReadOnly: &no},
+		{Name: "people", URL: "ldap://people:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"},
+		{Name: "self", URL: "ldap://self:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org", IdentityUser: "localpart"},
 	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
@@ -160,13 +173,17 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Cleanup(func() { _ = cat.Close() })
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
-	opts.Sessions = session.New[Directory](time.Hour)
-	opts.Dial = func(_ context.Context, _ profile.Profile, password string) (Directory, error) {
-		env.password = password
-		if env.dialErr != nil {
-			return nil, env.dialErr
+	opts.Sessions = session.New[Directory](time.Hour, 8*time.Hour)
+	if opts.Dial == nil {
+		opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
+			env.password, env.dialed = password, p
+			env.dials++
+			if env.dialErr != nil {
+				return nil, env.dialErr
+			}
+			env.dir.info.BindDN = p.BindDN // as ldapx.Dial reports it
+			return env.dir, nil
 		}
-		return env.dir, nil
 	}
 	env.h = New(opts)
 	return env
@@ -191,6 +208,12 @@ func (e *testEnv) doContext(ctx context.Context, t *testing.T, method, target, b
 	req.Host = "localhost:8080"
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range e.header {
+		req.Header[k] = v
+	}
+	if e.remote != "" {
+		req.RemoteAddr = e.remote
 	}
 	for _, c := range e.cookies {
 		req.AddCookie(c)
@@ -820,5 +843,499 @@ func TestConnectTooManyConnections(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, connectedNames(t, env)); diff != "" {
 		t.Errorf("connected profiles after the refused connect mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// userDN is what the test catalog's template profiles bind as for user001.
+const userDN = "uid=user001,ou=people,dc=example,dc=org"
+
+func TestConnectTemplate(t *testing.T) {
+	env := newTestEnv(t)
+	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"secret001"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("connect = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if env.dialed.BindDN != userDN || env.password != "secret001" {
+		t.Errorf("dial bindDN, password = %q, %q, want %q, the typed password", env.dialed.BindDN, env.password, userDN)
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"connect": rec,
+		"info":    env.do(t, http.MethodGet, "/api/c/people/info", ""),
+	} {
+		var got struct {
+			BindDN string `json:"bindDN"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.BindDN != userDN {
+			t.Errorf("%s = %d %s, want bindDN %q", name, rec.Code, rec.Body, userDN)
+		}
+	}
+}
+
+// TestConnectTemplateRefusals checks that a template profile never binds,
+// anonymously or as a half-filled DN, without a valid username and a
+// password.
+func TestConnectTemplateRefusals(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "no username", body: `{"profile":"people","password":"pw"}`, wantStatus: http.StatusBadRequest, wantCode: "username_required"},
+		{name: "invalid username", body: `{"profile":"people","username":"a,ou=x","password":"pw"}`, wantStatus: http.StatusBadRequest, wantCode: "invalid_username"},
+		{name: "no password", body: `{"profile":"people","username":"user001"}`, wantStatus: http.StatusBadRequest, wantCode: "password_required"},
+		{name: "empty password", body: `{"profile":"people","username":"user001","password":""}`, wantStatus: http.StatusBadRequest, wantCode: "password_required"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			rec := env.do(t, http.MethodPost, "/api/connect", tc.body)
+			if rec.Code != tc.wantStatus || errorCode(t, rec) != tc.wantCode {
+				t.Errorf("connect %s = %d %s, want %d %s", tc.body, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
+			}
+			if env.dials != 0 {
+				t.Errorf("connect %s dialed %d times as %q, want no dial", tc.body, env.dials, env.dialed.BindDN)
+			}
+			if strings.Contains(rec.Body.String(), "a,ou=x") {
+				t.Errorf("connect %s = %s, want no username in the error", tc.body, rec.Body)
+			}
+		})
+	}
+}
+
+// identityOptions trusts httptest's remote, 192.0.2.1, to set X-User.
+var identityOptions = Options{IdentityHeader: "X-User", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
+
+func TestConnectIdentityLock(t *testing.T) {
+	tests := []struct {
+		name       string
+		remote     string
+		user       string // X-User
+		username   string
+		wantStatus int
+		wantCode   string
+		wantBindDN string
+	}{
+		{name: "same user", user: "alice@corp.example", username: "alice", wantStatus: http.StatusOK, wantBindDN: "uid=alice,ou=people,dc=example,dc=org"},
+		{name: "other user", user: "alice@corp.example", username: "bob", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
+		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
+		{name: "no header", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
+		{name: "case-insensitive", user: "alice@corp.example", username: "ALICE", wantStatus: http.StatusOK, wantBindDN: "uid=ALICE,ou=people,dc=example,dc=org"},
+		// The Kelvin sign folds to k in Unicode, but is no ASCII k.
+		{name: "Kelvin sign", user: "\u212Aate@corp.example", username: "kate", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnvWith(t, identityOptions)
+			env.remote = tc.remote
+			if tc.user != "" {
+				env.header = http.Header{"X-User": {tc.user}}
+			}
+			rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"`+tc.username+`","password":"pw"}`)
+			if rec.Code != tc.wantStatus || (tc.wantCode != "" && errorCode(t, rec) != tc.wantCode) {
+				t.Fatalf("connect as %s with X-User %q = %d %s, want %d %s", tc.username, tc.user, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
+			}
+			wantDials := 0
+			if tc.wantBindDN != "" {
+				wantDials = 1
+			}
+			if env.dials != wantDials || env.dialed.BindDN != tc.wantBindDN {
+				t.Errorf("connect as %s dialed %d times as %q, want %d as %q", tc.username, env.dials, env.dialed.BindDN, wantDials, tc.wantBindDN)
+			}
+		})
+	}
+}
+
+// TestConnectIdentityRefusalLogged checks that a connect refused for the
+// trusted identity is logged with its code, without the username it asked
+// for.
+func TestConnectIdentityRefusalLogged(t *testing.T) {
+	var logs bytes.Buffer
+	opts := identityOptions
+	opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	env := newTestEnvWith(t, opts)
+	env.remote, env.header = "198.51.100.1:1234", http.Header{"X-User": {"alice@corp.example"}}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("connect from an untrusted remote = %d %s, want 403", rec.Code, rec.Body)
+	}
+	env.remote = ""
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("connect as mallory with X-User alice = %d %s, want 403", rec.Code, rec.Body)
+	}
+	var got []map[string]any
+	for _, l := range withMsg(jsonLogs(t, &logs), "connect refused") {
+		if _, ok := l["session"]; !ok {
+			t.Errorf("connect refused line = %v, want who made it", l)
+		}
+		got = append(got, map[string]any{"profile": l["profile"], "code": l["code"], "bindDN": l["bindDN"], "remote": l["remote"], "user": l["user"]})
+	}
+	want := []map[string]any{
+		{"profile": "self", "code": "identity_required", "bindDN": "", "remote": "198.51.100.1:1234", "user": nil},
+		{"profile": "self", "code": "identity_mismatch", "bindDN": "", "remote": "192.0.2.1:1234", "user": "alice@corp.example"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("connect refused lines mismatch (-want +got):\n%s", diff)
+	}
+	if strings.Contains(logs.String(), "mallory") {
+		t.Errorf("log contains the username:\n%s", logs.String())
+	}
+}
+
+func TestListProfilesIdentity(t *testing.T) {
+	type view struct {
+		UserLogin      bool   `json:"userLogin"`
+		Username       string `json:"username"`
+		UsernameLocked bool   `json:"usernameLocked"`
+	}
+	views := func(t *testing.T, env *testEnv) map[string]view {
+		t.Helper()
+		rec := env.do(t, http.MethodGet, "/api/profiles", "")
+		var list []struct {
+			Name string `json:"name"`
+			view
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("decode profiles %q: %v", rec.Body, err)
+		}
+		m := map[string]view{}
+		for _, v := range list {
+			if v.Name == "dev" || v.Name == "people" || v.Name == "self" {
+				m[v.Name] = v.view
+			}
+		}
+		return m
+	}
+	env := newTestEnvWith(t, identityOptions)
+	env.header = http.Header{"X-User": {"alice@corp.example"}}
+	want := map[string]view{
+		"dev":    {},
+		"people": {UserLogin: true},
+		"self":   {UserLogin: true, Username: "alice", UsernameLocked: true},
+	}
+	if diff := cmp.Diff(want, views(t, env)); diff != "" {
+		t.Errorf("profiles with X-User mismatch (-want +got):\n%s", diff)
+	}
+	env.header = nil
+	want["self"] = view{UserLogin: true}
+	if diff := cmp.Diff(want, views(t, env)); diff != "" {
+		t.Errorf("profiles without X-User mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestIdentityCheckedEveryRequest checks that a connection made under a
+// trusted identity serves only requests with that identity: a request with
+// another one, or with none, drops the connection and gets 401
+// not_connected, which makes the UI ask to connect again.
+func TestIdentityCheckedEveryRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		remote   string
+		user     string // X-User of the request after the connect
+		wantDrop bool
+	}{
+		{name: "same identity", user: "alice@corp.example"},
+		{name: "other identity", user: "bob@corp.example", wantDrop: true},
+		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", wantDrop: true},
+		{name: "no header", wantDrop: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			opts := identityOptions
+			opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+			env := newTestEnvWith(t, opts)
+			env.header = http.Header{"X-User": {"alice@corp.example"}}
+			connectTo(t, env, `{"profile":"self","username":"alice","password":"pw"}`)
+
+			env.remote, env.header = tc.remote, nil
+			if tc.user != "" {
+				env.header = http.Header{"X-User": {tc.user}}
+			}
+			rec := env.do(t, http.MethodGet, "/api/c/self/info", "")
+			if !tc.wantDrop {
+				if rec.Code != http.StatusOK || env.dir.closed {
+					t.Errorf("info with X-User %q = %d %s, closed %v, want 200 and the connection open", tc.user, rec.Code, rec.Body, env.dir.closed)
+				}
+				return
+			}
+			if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
+				t.Errorf("info with X-User %q from %q = %d %s, want 401 not_connected", tc.user, tc.remote, rec.Code, rec.Body)
+			}
+			if !env.dir.closed {
+				t.Error("connection is open after a request with another identity, want it closed")
+			}
+			env.remote, env.header = "", http.Header{"X-User": {"alice@corp.example"}}
+			if rec := env.do(t, http.MethodGet, "/api/c/self/info", ""); rec.Code != http.StatusUnauthorized {
+				t.Errorf("info with X-User alice after the drop = %d %s, want 401", rec.Code, rec.Body)
+			}
+			found := withMsg(jsonLogs(t, &logs), "identity changed")
+			if len(found) != 1 || found[0]["profile"] != "self" || found[0]["bindDN"] != "uid=alice,ou=people,dc=example,dc=org" {
+				t.Errorf(`"identity changed" lines = %v, want one with profile self and alice's bindDN`, found)
+			}
+		})
+	}
+}
+
+// TestWriteLogsResolvedBindDN checks that a template connection's lines
+// carry the DN it bound as, not the template's empty bindDN.
+func TestWriteLogsResolvedBindDN(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	connectTo(t, env, `{"profile":"people","username":"user001","password":"secret001"}`)
+	body := `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
+	if rec := env.do(t, http.MethodPost, "/api/c/people/changes/apply", body); rec.Code != http.StatusOK {
+		t.Fatalf("apply = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"people"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
+	}
+	lines := jsonLogs(t, &logs)
+	for _, msg := range []string{"connected", "modified", "disconnected"} {
+		found := withMsg(lines, msg)
+		if len(found) != 1 || found[0]["bindDN"] != userDN {
+			t.Errorf("%q lines = %v, want one with bindDN %q", msg, found, userDN)
+		}
+	}
+	if strings.Contains(logs.String(), "secret001") {
+		t.Errorf("log contains the password:\n%s", logs.String())
+	}
+}
+
+// TestWriteLogsAnonymousBindDN checks that the lines of an anonymous
+// connection carry an empty bindDN even after its profile was edited to a
+// bind DN: they name the DN the connection bound as, not the catalog's.
+func TestWriteLogsAnonymousBindDN(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`); rec.Code != http.StatusOK {
+		t.Fatalf("save lab = %d %s, want 200", rec.Code, rec.Body)
+	}
+	connectTo(t, env, `{"profile":"lab"}`)
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","bindDN":"cn=admin,dc=example,dc=org"}`); rec.Code != http.StatusOK {
+		t.Fatalf("edit lab = %d %s, want 200", rec.Code, rec.Body)
+	}
+	body := `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
+	if rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", body); rec.Code != http.StatusOK {
+		t.Fatalf("apply = %d %s, want 200", rec.Code, rec.Body)
+	}
+	env.dir.modifyErr = map[string]error{"uid=a,dc=example,dc=org": ldap.NewError(ldap.LDAPResultInsufficientAccessRights, errors.New("no"))}
+	if rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", body); rec.Code != http.StatusOK {
+		t.Fatalf("failing apply = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"lab"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
+	}
+	lines := jsonLogs(t, &logs)
+	for _, msg := range []string{"modified", "modify rejected", "disconnected"} {
+		found := withMsg(lines, msg)
+		if len(found) != 1 || found[0]["bindDN"] != "" {
+			t.Errorf("%q lines = %v, want one with an empty bindDN", msg, found)
+		}
+	}
+}
+
+// invalidCredentials is the error ldapx.Dial returns for a wrong password:
+// go-ldap's *ldap.Error as the server sent it, here Active Directory's.
+var invalidCredentials = ldap.NewError(ldap.LDAPResultInvalidCredentials,
+	errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 52e, v4563"))
+
+// retryAfter is rec's Retry-After header in seconds, or -1 if it is not a
+// whole number.
+func retryAfter(rec *httptest.ResponseRecorder) int {
+	n, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// TestConnectThrottled checks that 5 wrong passwords for one bind DN refuse
+// the 6th connect without dialing, for every connect with a typed password
+// and only for those.
+func TestConnectThrottled(t *testing.T) {
+	const people = `{"profile":"people","username":"user001","password":"wrong"}`
+	tests := []struct {
+		name          string
+		body          string
+		dialErr       error
+		wantThrottled bool
+	}{
+		{name: "template", body: people, dialErr: invalidCredentials, wantThrottled: true},
+		{name: "wrapped error", body: people, dialErr: fmt.Errorf("connect: %w", invalidCredentials), wantThrottled: true},
+		{name: "fixed bindDN, typed password", body: `{"profile":"manual","password":"wrong"}`, dialErr: invalidCredentials, wantThrottled: true},
+		{name: "network error", body: people, dialErr: ldap.NewError(ldap.ErrorNetwork, errors.New("connection refused"))},
+		{name: "configured password", body: `{"profile":"dev"}`, dialErr: invalidCredentials},
+		{name: "anonymous", body: `{"profile":"anon","password":"wrong"}`, dialErr: invalidCredentials},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.dialErr = tc.dialErr
+			for i := range 5 {
+				if rec := env.do(t, http.MethodPost, "/api/connect", tc.body); rec.Code == http.StatusTooManyRequests {
+					t.Fatalf("connect %d of %s = %d %s, want a dial", i+1, tc.body, rec.Code, rec.Body)
+				}
+			}
+			rec := env.do(t, http.MethodPost, "/api/connect", tc.body)
+			if !tc.wantThrottled {
+				if rec.Code == http.StatusTooManyRequests || env.dials != 6 {
+					t.Errorf("6th connect of %s = %d %s after %d dials, want 6 dials and no 429", tc.body, rec.Code, rec.Body, env.dials)
+				}
+				return
+			}
+			if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+				t.Errorf("6th connect of %s = %d %s, want 429 too_many_attempts", tc.body, rec.Code, rec.Body)
+			}
+			if got := retryAfter(rec); got < 1 || got > 60 {
+				t.Errorf("6th connect of %s Retry-After = %q, want whole seconds in 1..60", tc.body, rec.Header().Get("Retry-After"))
+			}
+			if env.dials != 5 {
+				t.Errorf("6th connect of %s: %d dials, want 5", tc.body, env.dials)
+			}
+		})
+	}
+}
+
+// TestConnectThrottlePerAccount checks that the limit is per bind DN,
+// ignoring case, and that a refused connect is logged.
+func TestConnectThrottlePerAccount(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	env.dialErr = invalidCredentials
+	for range 5 {
+		env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"secret-not-logged"}`)
+	}
+	for _, username := range []string{"user001", "USER001"} {
+		if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"`+username+`","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+			t.Errorf("connect as %s after 5 failures of user001 = %d %s, want 429", username, rec.Code, rec.Body)
+		}
+	}
+	// The same account as a saved profile spells it: another spelling of
+	// the DN gets no fresh tries.
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"alias","url":"ldap://people:389","bindDN":"UID=User001, ou=People,dc=example,dc=org"}`); rec.Code != http.StatusOK {
+		t.Fatalf("save alias = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"alias","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect to alias of user001 after 5 failures of user001 = %d %s, want 429", rec.Code, rec.Body)
+	}
+	env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user002","password":"pw"}`)
+	if env.dials != 6 || env.dialed.BindDN != "uid=user002,ou=people,dc=example,dc=org" {
+		t.Errorf("connect as user002: %d dials, last as %q, want 6, the last as user002", env.dials, env.dialed.BindDN)
+	}
+	found := withMsg(jsonLogs(t, &logs), "connect throttled")
+	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1:1234" {
+		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q and remote 192.0.2.1:1234`, found, userDN)
+	}
+	if strings.Contains(logs.String(), "secret-not-logged") {
+		t.Errorf("log contains the password:\n%s", logs.String())
+	}
+}
+
+// TestConnectThrottlePerServer checks that the limit counts one bind DN per
+// server, however the profile's URL spells it, and that a success on another
+// server, such as one a saved profile points at, does not clear the count.
+func TestConnectThrottlePerServer(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for range 5 {
+		env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"wrong"}`)
+	}
+	for _, p := range []string{
+		`{"name":"same","url":"ldap://PEOPLE","bindDN":"` + userDN + `"}`,
+		`{"name":"other","url":"ldap://other:389","bindDN":"` + userDN + `"}`,
+	} {
+		if rec := env.do(t, http.MethodPost, "/api/profiles", p); rec.Code != http.StatusOK {
+			t.Fatalf("save %s = %d %s, want 200", p, rec.Code, rec.Body)
+		}
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"same","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect as %s to ldap://PEOPLE after 5 failures on ldap://people:389 = %d %s, want 429", userDN, rec.Code, rec.Body)
+	}
+	env.dialErr = nil
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"other","password":"pw"}`); rec.Code != http.StatusOK {
+		t.Errorf("connect as %s to ldap://other:389 after 5 failures on ldap://people:389 = %d %s, want 200", userDN, rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect as user001 to ldap://people:389 after a success on ldap://other:389 = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectSuccessResetsThrottle checks that a successful connect clears
+// the failures before it.
+func TestConnectSuccessResetsThrottle(t *testing.T) {
+	const body = `{"profile":"people","username":"user001","password":"pw"}`
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for range 4 {
+		env.do(t, http.MethodPost, "/api/connect", body)
+	}
+	env.dialErr = nil
+	if rec := env.do(t, http.MethodPost, "/api/connect", body); rec.Code != http.StatusOK {
+		t.Fatalf("5th connect = %d %s, want 200", rec.Code, rec.Body)
+	}
+	env.dialErr = invalidCredentials
+	for range 4 {
+		env.do(t, http.MethodPost, "/api/connect", body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", body); rec.Code == http.StatusTooManyRequests {
+		t.Errorf("connect after 4 failures, a success and 4 failures = %d %s, want a dial", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectConcurrentBurst checks that connects in flight count against
+// the limit: of 10 connects at once as one DN, whose binds all wait and
+// then fail, at most 5 reach the server and the rest get 429.
+func TestConnectConcurrentBurst(t *testing.T) {
+	const body = `{"profile":"people","username":"user001","password":"wrong"}`
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	defer releaseAll() // unblocks the dials if the test fails early
+	var dials atomic.Int32
+	dialed := make(chan struct{}, 10)
+	env := newTestEnvWith(t, Options{Dial: func(context.Context, profile.Profile, string) (Directory, error) {
+		dials.Add(1)
+		dialed <- struct{}{}
+		<-release
+		return nil, invalidCredentials
+	}})
+	// post is env.do without cookies, which is not safe for concurrent use.
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(body))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		env.h.ServeHTTP(rec, req)
+		return rec
+	}
+	recs := make(chan *httptest.ResponseRecorder, 10)
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() { recs <- post() })
+	}
+	// Every connect either waits in a dial or has been refused before any
+	// dial ends.
+	throttled := 0
+	for range 10 {
+		select {
+		case <-dialed:
+		case rec := <-recs:
+			if rec.Code == http.StatusTooManyRequests {
+				throttled++
+			}
+			// Refused only for connects in flight, which end soon.
+			if ra := rec.Header().Get("Retry-After"); rec.Code == http.StatusTooManyRequests && ra != "1" {
+				t.Errorf("connect refused during the burst: Retry-After %q, want 1", ra)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("10 connects at once: %d dials and %d 429s after 10 s, want all 10 settled", dials.Load(), throttled)
+		}
+	}
+	releaseAll()
+	wg.Wait()
+	if got := dials.Load(); got > 5 || int(got)+throttled != 10 {
+		t.Errorf("10 connects at once: %d dials, %d 429s before any dial ended, want at most 5 dials and 429 for the rest", got, throttled)
+	}
+	if rec := post(); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after the burst failed = %d %s, want 429", rec.Code, rec.Body)
 	}
 }

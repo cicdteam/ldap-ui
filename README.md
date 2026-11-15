@@ -57,7 +57,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 - **Connections** (`/`): profiles from `connections.yaml` (marked `yaml`) and
   ones saved in the UI. Passwords are never stored: a profile with a bind DN
   but no `passwordEnv`/`passwordFile` asks for one at connect time, and so
-  does one whose configured password the server rejects or cannot read. An
+  does one whose configured password the server rejects or cannot read. A
+  `bindDNTemplate` profile asks for a username and a password (see [Per-user
+  login](#per-user-login)). An
   untrusted TLS certificate shows its chain and fingerprints; "Trust this CA"
   stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
   point `caFile` at it).
@@ -223,6 +225,47 @@ connections:
     environment: prod # prod profiles are read-only by default
 ```
 
+### Signing in with your own username
+
+A profile with `bindDNTemplate` instead of `bindDN` asks each person for a
+username and password at connect, and binds as the template with `{user}`
+replaced by the username. The template contains `{user}` exactly once and
+cannot be combined with `bindDN`, `passwordEnv` or `passwordFile`. Both keys
+below are read from `connections.yaml` only; profiles saved in the UI cannot
+have them.
+
+```yaml
+connections:
+  - name: people # OpenLDAP: the full DN
+    url: ldap://ldap.example.org:389
+    startTLS: true
+    baseDN: dc=example,dc=org
+    bindDNTemplate: uid={user},ou=people,dc=example,dc=org
+  - name: corp-ad # Active Directory: a UPN (or a down-level name, CORP\{user})
+    url: ldaps://dc1.corp.example:636
+    baseDN: dc=corp,dc=example
+    bindDNTemplate: "{user}@corp.example"
+    identityUser: localpart
+```
+
+The username must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (ASCII letters,
+digits, `.`, `_` and `-`, starting with a letter or digit, at most 64
+characters), so it cannot change the structure of the DN; in a template that
+contains `=` it is also escaped as a DN value.
+
+`identityUser` (`exact` or `localpart`, needs `bindDNTemplate`) ties the
+username to the user an authenticating proxy verified (see
+`--identity-header` under [Logs and accountability](#logs-and-accountability)):
+a connect needs that identity, and the username must equal it, compared
+case-insensitively. `exact` takes the identity as is; `localpart` takes the
+part before the last `@` (`alice@corp.example` gives `alice`). `localpart`
+ignores the domain, so `alice@other.example` gives `alice` too: the proxy
+must admit only the directory's domain (oauth2-proxy `--email-domain
+corp.example`). `exact` needs a header that carries a bare username: an
+email address never matches the username pattern above. The connect dialog
+fills in the username and does not let it be changed. [Per-user
+login](#per-user-login) has the whole flow and its errors.
+
 ## Saved connections
 
 Profiles created in the UI are kept, without passwords, in `profiles.json`
@@ -260,9 +303,10 @@ writable; saving profiles will fail` with its `dir`.
 | `--auth-token-file` | `LDAPUI_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
 | `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
 | `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
+| `--session-max-age` | `LDAPUI_SESSION_MAX_AGE` | `8h` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
-| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
-| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is logged; required with `--identity-header` |
+| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)); for `identityUser` profiles it decides which username a person may sign in as (see [Per-user login](#per-user-login)) |
+| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
 | `--version` | | prints `ldapui <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
@@ -275,13 +319,50 @@ missing or holds an invalid token (at least 16 characters from
 `A-Z a-z 0-9 . _ ~ -`); the error names the file, never the token.
 
 A browser's open connections live in a session on the server, closed after
-`--session-idle` without use. Every successful connect moves the browser to a
-new session ID and keeps its connections, so an ID seen before a connect is
-worthless after it. A request from another tab at the same instant can
-find its session gone; that tab reconnects. A session holds at most 8
-connections: one more connect fails with 409 `too_many_connections` until one
-is disconnected. The server holds at most 1000 sessions; one more closes the
-connections of the least recently used.
+`--session-idle` without use. Each connection is also closed
+`--session-max-age` after it was connected, however active; connecting that
+profile again starts the count again, an automatic reconnect after a dropped
+connection does not. Every successful connect moves the browser to a new
+session ID and keeps its other connections, each with its own count, so an
+ID seen before a connect is worthless after it. A request from another tab
+at the same instant can find its session gone; that tab reconnects. A
+session holds at most 8 connections: one more connect fails with 409
+`too_many_connections` until one is disconnected. The server holds at most
+1000 sessions; one more closes the connections of the least recently used.
+
+Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
+within 60 seconds refuse further connects as that DN with 429
+`too_many_attempts` and a `Retry-After` header in seconds, until 60 seconds
+after the first of them. Connects as that DN still waiting for the server
+count too, so a burst of them at once gets no more than five tries: a connect
+refused before five have failed gets `Retry-After: 1`. A successful connect
+clears the count; other failures, such as a server that cannot be reached, do
+not count. The limit is per account on each server: it is keyed by the
+server and the bind DN (see below), not by client address, since behind a
+proxy every client has the same address. A successful connect as the same DN
+to another server does not clear the count. It applies to every connect with a typed password, on a `bindDN`
+profile as on a `bindDNTemplate` one. A connect with the configured password
+(`passwordEnv` or `passwordFile`) and an anonymous one are never refused, so a
+wrong service password cannot lock its DN for everyone. In return, anyone who
+can reach ldapui can keep one account from connecting through ldapui, a
+minute at a time; the directory's own lockout policy is separate and
+unaffected. The counts are kept in memory, per process, like sessions, for at
+most 10,000 bind DNs; past that the oldest are dropped.
+
+The count is per account as the bind DN names it, after normalizing spacing,
+case and escapes: `uid=alice,ou=people,dc=example,dc=org`,
+`UID=Alice, ou=People,dc=example,dc=org` and
+`uid=\61lice,ou=people,dc=example,dc=org` share one count, and so do
+`alice@corp.example` and `ALICE@corp.example`. The server is the URL's host,
+ignoring case, and port, 389 for `ldap://` and 636 for `ldaps://` when the
+URL has none: `ldap://Dc1` and `ldap://dc1:389` share one count. Attribute
+OIDs (`0.9.2342.19200300.100.1.1=alice` for `uid=alice`), Active Directory's
+other names for one account (its UPN, `DOMAIN\user` and its DN) and other
+names for one server (its IP address) still count separately, and a saved
+connection can name an account or a server any of those ways. So
+where guessing passwords through ldapui matters, run with fixed profiles
+only: `LDAPUI_DATA_DIR=""` disables saved connections, and the profiles in
+`connections.yaml` each name one form.
 
 The server runs at most 64 API requests at once, and at most 4 of one
 session; the others wait their turn. A request that waits more than 10
@@ -329,7 +410,10 @@ The lines:
 | Message | Fields |
 |---|---|
 | `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
+| `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts` |
+| `connect refused` | `profile`, `code`, `bindDN` (empty): a connect refused with 403 `identity_required` or `identity_mismatch` (see [Per-user login](#per-user-login)) |
 | `disconnected` | `profile`, `bindDN` |
+| `identity changed` | `profile`, `bindDN`: a request on an `identityUser` connection with another trusted identity or none; the connection is closed (see [Per-user login](#per-user-login)) |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
 | `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
 | `renamed` | `profile`, `dn`, `newDN`, `bindDN` |
@@ -339,7 +423,9 @@ The lines:
 | `profile saved` | `name`, `oldURL` (empty for a new profile), `url`, `readOnly`, `insecureSkipVerify` |
 | `auth failed` | `remote` only: a request refused with 401 for a missing or wrong token |
 
-`bindDN` is the profile's bind DN. Attribute values, passwords, tokens and
+`bindDN` is the DN the connection bound as: the profile's `bindDN`, or for a
+`bindDNTemplate` profile the template with the username filled in; empty for
+an anonymous bind. Attribute values, passwords, tokens and
 session IDs are never logged, and a DN that does not parse or has a secret
 attribute in an RDN is logged as `<redacted>`.
 
@@ -355,9 +441,9 @@ logs the warning `shutdown drain timed out` with `after`.
 The directory's own audit log sees only the bind DN. A profile bound as a
 shared service account (`passwordEnv` or `passwordFile`) makes every write
 that account's, and with one shared token only `session` and `remote` tell
-people apart. For per-person accountability, give each person a profile with
-their own bind DN and no configured password: they type their password at
-connect, and both the directory and ldapui log their DN.
+people apart. For per-person accountability, use [per-user
+login](#per-user-login): everyone binds as themselves with their own
+password, and both the directory and ldapui log their DN.
 
 Behind an authenticating proxy, ldapui can also log the user the proxy
 verified. For example, ingress-nginx asks oauth2-proxy (run with
@@ -366,24 +452,28 @@ verified. For example, ingress-nginx asks oauth2-proxy (run with
 `nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Email`:
 
 ```sh
-ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.42.0.0/16
+ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
 ```
 
-`10.42.0.0/16` is the pod network of a k3s cluster, so this trusts every
-pod in it: it assumes a NetworkPolicy that lets only the ingress controller
-reach ldapui, like the one under [Kubernetes](#kubernetes).
+`10.244.0.0/16` stands for the cluster's pod network, which differs between
+Kubernetes clusters: use yours. This trusts every pod in it, so it assumes a
+NetworkPolicy that lets only the ingress controller reach ldapui, like the one
+under [Kubernetes](#kubernetes).
 
 The value is logged as `user`, cut to 256 bytes, on the lines that carry
 `session`, and only for requests whose client address is in
-`--trusted-proxies`. It is a log field only: it grants nothing, and the token
-still applies. Any client can send any header, so the value means something
-only when the proxy replaces it on every request (ingress-nginx and nginx's
+`--trusted-proxies`. On its own it grants nothing, and the token still
+applies; on a profile with `identityUser` it decides which username a person
+may sign in as (see [Per-user login](#per-user-login)). Any client can send
+any header, so the value means something only when the proxy replaces it on
+every request (ingress-nginx and nginx's
 `proxy_set_header` do) and nothing else can reach ldapui from a trusted
 address: list only the proxy's addresses, and keep other clients off the
 ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
 `--identity-header` without `--trusted-proxies` is a startup error, and so
 is `Authorization`, `Proxy-Authorization` or `Cookie` as the header: they
-carry credentials.
+carry credentials. A profile in `connections.yaml` with `identityUser` is a
+startup error without `--identity-header`, since nobody could connect to it.
 
 ## Running for a team
 
@@ -395,9 +485,14 @@ one still holds the data dir, so the new pod exits (see [Saved
 connections](#saved-connections)) and the rollout stalls. Every restart
 ends all sessions, and users connect again.
 
-- **Fixed profiles only** is the recommended mode for a shared instance:
-  put every connection in `connections.yaml` and set `LDAPUI_DATA_DIR=""`.
-  Saving in the UI then fails with 409 `saving_disabled`, and connect opens
+- **Fixed profiles with per-user login** is the recommended setup for a
+  shared instance: put every connection in `connections.yaml` with a
+  `bindDNTemplate` (see [Per-user login](#per-user-login)), set
+  `LDAPUI_DATA_DIR=""`, and keep the token or an SSO proxy in front (with
+  `--identity-header` and `identityUser`, the proxy also decides which
+  username each person may sign in as). Everyone then works as themselves,
+  and no service account password is stored in the deployment. Saving in
+  the UI fails with 409 `saving_disabled`, and connect opens
   only the profiles from that file, so nobody can make the server open
   connections to other hosts and ports it reaches, or change a shared
   profile so that the next person's password goes to a server of their
@@ -429,6 +524,94 @@ ends all sessions, and users connect again.
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
 and accountability](#logs-and-accountability).
+
+### Per-user login
+
+A profile with `bindDNTemplate` (see [Signing in with your own
+username](#signing-in-with-your-own-username)) lets everyone sign in to the
+directory as themselves: one profile serves the whole team, and each person
+types their own username and password. It is the recommended mode for a
+team. The directory's access rules apply to each person rather than to a
+shared account, the directory's audit log and ldapui's logs name the person
+who made each change, and no service account password has to be stored in
+the deployment.
+
+A connect to such a profile goes like this:
+
+1. The browser sends the profile, the username and the password.
+2. ldapui checks, in this order, that there is a username; with
+   `identityUser`, that the request carries a trusted identity and that the
+   username is the one it maps to; that the username matches
+   `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; and that there is a password. Nothing
+   reaches the directory before every check has passed. An empty password
+   would be an unauthenticated bind (RFC 4513), which many servers accept as
+   anonymous, so it is refused here.
+3. ldapui binds as the template with the username filled in, for example
+   `uid=alice,ou=people,dc=example,dc=org`. A wrong password is 401
+   `invalid_credentials`, as on any profile. Five of them in 60 seconds
+   refuse that DN with 429 `too_many_attempts` until the 60 seconds are
+   over (see [Flags](#flags)).
+4. The connection's lines in the log (`connected`, `connect failed`, every
+   write and `disconnected`) carry that DN as `bindDN`.
+
+The connect dialog of such a profile has a visible Username field above the
+password, marked `autocomplete="username"` so that a password manager offers
+the accounts it saved; ldapui itself does not remember the username. With
+`identityUser`, when the request carries a trusted identity, the field is
+filled in with the username it maps to and is read-only; without one, the
+field is empty and connect fails with `identity_required`. Once connected, the
+workspace header shows `Signed in as` and the DN the connection bound as,
+for example `Signed in as uid=alice,ou=people,dc=example,dc=org`, or the UPN
+for a template like `{user}@corp.example`. Profiles with a fixed `bindDN`
+do not show this line. Two people signed in to the same profile from two
+browsers each have their own connection: one's disconnect or wrong password
+does not touch the other's.
+
+With `identityUser`, the username is tied to the user an authenticating
+proxy verified. With oauth2-proxy in front of ldapui, as under [Logs and
+accountability](#logs-and-accountability):
+
+```yaml
+connections:
+  - name: corp-ad
+    url: ldaps://dc1.corp.example:636
+    baseDN: dc=corp,dc=example
+    bindDNTemplate: "{user}@corp.example"
+    identityUser: localpart
+```
+
+```sh
+ldapui --config connections.yaml \
+  --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
+```
+
+Someone signed in to oauth2-proxy as `alice@corp.example` can connect to
+`corp-ad` only as `alice` (or `Alice`: the comparison ignores case, and the
+bind uses the username as typed), and the connect dialog fills that in. The
+password is still the directory's: the proxy decides who may sign in, the
+directory checks the password. A request without the header, or from an
+address outside `--trusted-proxies`, cannot connect to the profile. Every
+later request on that connection must carry the same identity: one with
+another identity or with none, for example from a shared browser after the
+proxy sign-in changed to someone else, closes the connection, and the UI
+asks to connect again.
+
+| Code | Status | When | The connect dialog says |
+|---|---|---|---|
+| `username_required` | 400 | no username | Enter your username. |
+| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity | Open ldapui through its sign-in proxy to use this connection. |
+| `identity_mismatch` | 403 | the username is not the one the identity maps to | Use the username you signed in to the proxy with. |
+| `invalid_username` | 400 | the username does not match the pattern above | A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long. |
+| `password_required` | 400 | no password | this profile needs a password |
+| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects to this DN that are still under way; `Retry-After` gives the seconds to wait | Too many failed sign-ins for this account. Wait a minute and try again. |
+
+The password a person typed stays in the server's memory, with their
+connection, so that ldapui can reconnect after a dropped connection without
+asking again. It is forgotten at disconnect, when the session expires after
+`--session-idle` without use, or `--session-max-age` after that connection
+was connected. If the directory stops accepting it (changed or reset),
+ldapui closes the connection at the next reconnect instead of retrying, and
+asks to sign in again.
 
 ### Behind a reverse proxy
 

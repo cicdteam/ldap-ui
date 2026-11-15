@@ -69,8 +69,24 @@ export function retryBusy(failureCount: number, e: unknown): boolean {
   return isApiError(e) && e.code === 'busy' && failureCount < 3
 }
 
+/** The UI's text for the per-user login refusals; other codes show the server's message. */
+const messages = new Map([
+  ['username_required', 'Enter your username.'],
+  [
+    'invalid_username',
+    'A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long.',
+  ],
+  ['identity_required', 'Open ldapui through its sign-in proxy to use this connection.'],
+  ['identity_mismatch', 'Use the username you signed in to the proxy with.'],
+  // ponytail: a fixed wait, not Retry-After; read the header into ApiError to show the seconds.
+  ['too_many_attempts', 'Too many failed sign-ins for this account. Wait a minute and try again.'],
+])
+
 export function errorMessage(e: unknown): string {
-  if (isApiError(e)) return e.body.reason ? `${e.body.message} (${e.body.reason})` : e.body.message
+  if (isApiError(e)) {
+    const m = messages.get(e.code) ?? e.body.message
+    return e.body.reason ? `${m} (${e.body.reason})` : m
+  }
   if (e instanceof Error) return e.message
   return String(e)
 }
@@ -153,8 +169,9 @@ const query = (params: Record<string, string>) => new URLSearchParams(params).to
 export const api = {
   profiles: () => request<Profile[]>('GET', 'api/profiles'),
   saveProfile: (p: ProfileInput) => request<Profile>('POST', 'api/profiles', p),
-  connect: (profile: string, password = '') =>
-    request<Info>('POST', 'api/connect', { profile, password }),
+  /** username is for a userLogin profile; without one the body has no username key. */
+  connect: (profile: string, password = '', username?: string) =>
+    request<Info>('POST', 'api/connect', { profile, password, username }),
   disconnect: (profile: string) => request<void>('POST', 'api/disconnect', { profile }),
   info: (c: string, signal?: AbortSignal) =>
     request<Info>('GET', `${conn(c)}/info`, undefined, signal),

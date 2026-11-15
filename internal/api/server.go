@@ -64,7 +64,9 @@ type Options struct {
 	SecureCookies bool
 	// IdentityHeader names a request header, such as X-Auth-Request-Email,
 	// that an authenticating proxy sets to the user it verified. Its value
-	// is logged as "user", only on requests from TrustedProxies.
+	// counts only on requests from TrustedProxies: it is logged as "user",
+	// and for identityUser profiles it decides which username a person may
+	// sign in as.
 	IdentityHeader string
 	// TrustedProxies are the addresses of the proxies that set
 	// IdentityHeader.
@@ -88,6 +90,7 @@ func New(opts Options) http.Handler {
 	s := &server{
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
 		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
+		attempts: newAttemptLimiter(5, time.Minute, 10000, time.Now),
 	}
 
 	app := http.NewServeMux()

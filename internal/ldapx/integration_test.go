@@ -192,6 +192,58 @@ func TestDialWrongPassword(t *testing.T) {
 	}
 }
 
+// asUser turns p into a profile with bindDNTemplate template and sets its
+// BindDN to what BindDNFor resolves for username, as the connect handler
+// does before it dials.
+func asUser(t *testing.T, p profile.Profile, template, username string) profile.Profile {
+	t.Helper()
+	p.BindDN, p.BindDNTemplate = "", template
+	dn, err := p.BindDNFor(username)
+	if err != nil {
+		t.Fatalf("BindDNFor(%q) error = %v", username, err)
+	}
+	p.BindDN = dn
+	return p
+}
+
+// TestTemplateBindOpenLDAP adds user001 of the demo data, as the seed
+// numbers its people differently, and signs in as it through a template.
+func TestTemplateBindOpenLDAP(t *testing.T) {
+	const dn = "uid=user001,ou=people,dc=example,dc=org"
+	admin := dialAdmin(t)
+	ctx := context.Background()
+	attrs := append(personAttrs("user001"), TextAttribute{Name: "userPassword", Values: []string{"secret001"}})
+	if err := admin.Add(ctx, dn, attrs); err != nil {
+		t.Fatalf("Add(%s) error = %v", dn, err)
+	}
+	t.Cleanup(func() { // runs before dialAdmin's Close
+		if err := admin.Delete(ctx, dn); err != nil {
+			t.Errorf("Delete(%s) error = %v", dn, err)
+		}
+	})
+	p := asUser(t, testProfile(), "uid={user},ou=people,dc=example,dc=org", "user001")
+
+	c, err := Dial(ctx, p, "secret001")
+	if err != nil {
+		t.Fatalf("Dial(as user001) error = %v", err)
+	}
+	defer c.Close()
+	if got := c.Info().BindDN; got != dn {
+		t.Errorf("Info().BindDN = %q, want %q", got, dn)
+	}
+	if _, err := Dial(ctx, p, "secret002"); !ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+		t.Errorf("Dial(as user001, wrong password) error = %v, want invalidCredentials", err)
+	}
+	// RFC 4513 treats a DN with an empty password as an unauthenticated
+	// bind; go-ldap refuses to send one.
+	if got, err := Dial(ctx, p, ""); got != nil || !ldap.IsErrorWithCode(err, ldap.ErrorEmptyPassword) {
+		if got != nil {
+			_ = got.Close()
+		}
+		t.Errorf("Dial(as user001, empty password) = %v, %v, want no connection and ErrorEmptyPassword", got, err)
+	}
+}
+
 func TestSchemaFromServer(t *testing.T) {
 	s, err := dialAdmin(t).Schema(context.Background())
 	if err != nil {

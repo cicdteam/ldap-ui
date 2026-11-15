@@ -22,14 +22,24 @@ const maxUser = 256
 // "user", the IdentityHeader value, only on a request from TrustedProxies.
 func (s *server) who(r *http.Request) []any {
 	kv := []any{"session", fingerprint(sessionID(r)), "remote", r.RemoteAddr}
-	if s.identityHeader == "" || !s.trusted(r.RemoteAddr) {
+	user, ok := s.identity(r)
+	if !ok {
 		return kv
 	}
-	user := r.Header.Get(s.identityHeader)
 	if len(user) > maxUser {
 		user = user[:maxUser]
 	}
 	return append(kv, "user", user)
+}
+
+// identity is the IdentityHeader value of a request from TrustedProxies,
+// empty when the proxy sent none. ok is false without IdentityHeader and for
+// every other request, whose header proves nothing.
+func (s *server) identity(r *http.Request) (user string, ok bool) {
+	if s.identityHeader == "" || !s.trusted(r.RemoteAddr) {
+		return "", false
+	}
+	return r.Header.Get(s.identityHeader), true
 }
 
 // fingerprint is the first 8 hex characters of the SHA-256 of a session ID,

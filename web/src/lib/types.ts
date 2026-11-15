@@ -23,6 +23,12 @@ export interface Profile {
   /** The server can bind without asking for a password. */
   hasPassword: boolean
   connected: boolean
+  /** A bindDNTemplate profile: each person signs in with a username. */
+  userLogin: boolean
+  /** The username the trusted identity allows, set when usernameLocked. */
+  username?: string
+  /** The username is fixed by the authenticating proxy's identity. */
+  usernameLocked: boolean
 }
 
 /** Body of POST /api/profiles; the server rejects unknown fields. */
@@ -42,6 +48,8 @@ export interface ProfileInput {
 /** A connection's info plus the profile settings its badges show. */
 export interface Info {
   baseDN: string
+  /** The DN the connection bound as (a UPN on an AD UPN template); absent for anonymous. */
+  bindDN?: string
   namingContexts?: string[]
   defaultNamingContext?: string
   subschemaSubentry?: string
