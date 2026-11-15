@@ -4,9 +4,13 @@
 package profile
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -20,6 +24,9 @@ func TestCatalogSaveAndReload(t *testing.T) {
 	}
 	if _, err := c.Save(Profile{Name: "lab", URL: "ldap://lab:389"}); err != nil {
 		t.Fatalf("Save() error = %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 	reloaded, err := NewCatalog(nil, dir)
 	if err != nil {
@@ -112,5 +119,190 @@ func TestCatalogFind(t *testing.T) {
 	}
 	if _, err := c.Find("nope"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Find(nope) error = %v, want ErrNotFound", err)
+	}
+}
+
+// newCatalog returns a catalog on dir that is closed when the test ends.
+func newCatalog(t *testing.T, dir string) *Catalog {
+	t.Helper()
+	c, err := NewCatalog(nil, dir)
+	if err != nil {
+		t.Fatalf("NewCatalog(nil, %q) error = %v", dir, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func writePath(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readProfiles decodes dir/profiles.json field by field, so that a field
+// the code no longer writes shows up in a diff.
+func readProfiles(t *testing.T, dir string) []map[string]any {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "profiles.json")) //nolint:gosec // dir is a test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode profiles.json %q: %v", b, err)
+	}
+	return out
+}
+
+func TestSaveLimit(t *testing.T) {
+	dir := t.TempDir()
+	full := make([]Profile, MaxSaved)
+	for i := range full {
+		full[i] = Profile{Name: fmt.Sprintf("p%d", i), URL: "ldap://h", Environment: Dev}
+	}
+	b, err := json.Marshal(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePath(t, filepath.Join(dir, "profiles.json"), string(b))
+	c := newCatalog(t, dir)
+
+	if _, err := c.Save(Profile{Name: "one-more", URL: "ldap://h"}); !errors.Is(err, ErrLimit) {
+		t.Errorf("Save(one-more) at %d profiles error = %v, want ErrLimit", MaxSaved, err)
+	}
+	if _, err := c.Save(Profile{Name: "p0", URL: "ldap://other"}); err != nil {
+		t.Errorf("Save(p0) replacing at %d profiles error = %v, want nil", MaxSaved, err)
+	}
+	if _, saved := c.All(); len(saved) != MaxSaved {
+		t.Errorf("All() saved %d profiles, want %d", len(saved), MaxSaved)
+	}
+}
+
+func TestSaveProfileTooLarge(t *testing.T) {
+	c := newCatalog(t, t.TempDir())
+	p := Profile{Name: "big", URL: "ldap://h", BaseDN: "dc=" + strings.Repeat("a", MaxProfileBytes)}
+	if _, err := c.Save(p); !errors.Is(err, ErrLimit) {
+		t.Errorf("Save(%d-byte baseDN) error = %v, want ErrLimit", len(p.BaseDN), err)
+	}
+}
+
+func TestNewCatalogQuarantinesBadFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "empty", content: ""},
+		{name: "truncated", content: `[{"name":"lab","url":"ldap://lab"`},
+		{name: "trailing garbage", content: `[{"name":"lab","url":"ldap://lab"}] x`},
+		{name: "invalid profile", content: `[{"name":"lab","url":"http://x"}]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bad := filepath.Join(dir, "profiles.json.bad")
+			writePath(t, bad, "older bad file")
+			writePath(t, filepath.Join(dir, "profiles.json"), tc.content)
+
+			c := newCatalog(t, dir)
+			if _, saved := c.All(); len(saved) != 0 {
+				t.Errorf("All() saved = %v, want none", saved)
+			}
+			if got := c.Quarantined(); got != bad {
+				t.Errorf("Quarantined() = %q, want %q", got, bad)
+			}
+			if got, err := os.ReadFile(bad); err != nil || string(got) != tc.content { //nolint:gosec // bad is in a test temp dir
+				t.Errorf("profiles.json.bad = %q, %v, want the old bytes %q", got, err, tc.content)
+			}
+
+			if _, err := c.Save(Profile{Name: "fresh", URL: "ldap://h"}); err != nil {
+				t.Fatalf("Save(fresh) error = %v", err)
+			}
+			got := readProfiles(t, dir)
+			if len(got) != 1 || got[0]["name"] != "fresh" {
+				t.Errorf("profiles.json after Save = %v, want only fresh", got)
+			}
+		})
+	}
+}
+
+func TestNewCatalogKeepsUnreadableFileError(t *testing.T) {
+	dir := t.TempDir()
+	// A directory in place of the file cannot be read: that is an operator
+	// problem to report, not a broken file to move aside.
+	if err := os.Mkdir(filepath.Join(dir, "profiles.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := NewCatalog(nil, dir); err == nil {
+		_ = c.Close()
+		t.Errorf("NewCatalog() with unreadable profiles.json error = nil, want an error")
+	}
+}
+
+func TestNewCatalogReadsOldFile(t *testing.T) {
+	// profiles.json as v1.1.0 wrote it.
+	const old = `[
+  {
+    "name": "lab",
+    "url": "ldap://lab:389",
+    "startTLS": true,
+    "baseDN": "dc=lab,dc=example",
+    "bindDN": "cn=admin,dc=lab,dc=example",
+    "insecureSkipVerify": false,
+    "environment": "dev"
+  },
+  {
+    "name": "corp",
+    "url": "ldaps://corp:636",
+    "startTLS": false,
+    "insecureSkipVerify": true,
+    "environment": "prod",
+    "color": "red",
+    "readOnly": false
+  }
+]`
+	dir := t.TempDir()
+	writePath(t, filepath.Join(dir, "profiles.json"), old)
+	want := readProfiles(t, dir)
+
+	c := newCatalog(t, dir)
+	if got := c.Quarantined(); got != "" {
+		t.Fatalf("Quarantined() = %q, want the v1.1.0 file accepted", got)
+	}
+	if _, err := c.Save(Profile{Name: "new", URL: "ldap://new"}); err != nil {
+		t.Fatalf("Save(new) error = %v", err)
+	}
+	want = append(want, map[string]any{
+		"name": "new", "url": "ldap://new", "startTLS": false,
+		"insecureSkipVerify": false, "environment": "dev",
+	})
+	if diff := cmp.Diff(want, readProfiles(t, dir)); diff != "" {
+		t.Errorf("profiles.json after Save mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestSaveLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	c := newCatalog(t, dir)
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			if _, err := c.Save(Profile{Name: fmt.Sprintf("p%d", i), URL: "ldap://h"}); err != nil {
+				t.Errorf("Save(p%d) error = %v", i, err)
+			}
+		})
+	}
+	wg.Wait()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "profiles.json" && e.Name() != ".lock" {
+			t.Errorf("data dir holds %s, want only profiles.json and .lock", e.Name())
+		}
+	}
+	if got := readProfiles(t, dir); len(got) != 20 {
+		t.Errorf("profiles.json holds %d profiles, want 20", len(got))
 	}
 }

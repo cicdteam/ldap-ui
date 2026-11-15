@@ -196,6 +196,10 @@ func runTo(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer catalog.Close()
+	if path := catalog.Quarantined(); path != "" {
+		logger.Warn("profiles file was invalid and was moved aside", "path", path)
+	}
 
 	generated := false
 	if cfg.authToken == "" && needsToken(cfg.listen, cfg.allowedHosts) {

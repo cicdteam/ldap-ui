@@ -151,6 +151,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
 	}
+	t.Cleanup(func() { _ = cat.Close() })
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
 	opts.Sessions = session.New[Directory](time.Hour)
@@ -439,6 +440,7 @@ func TestSaveProfile(t *testing.T) {
 		{name: "file reference", body: `{"name":"x","url":"ldap://h","passwordFile":"/etc/passwd"}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "fixed name", body: `{"name":"dev","url":"ldap://h"}`, wantStatus: http.StatusConflict, wantCode: "profile_fixed"},
 		{name: "invalid", body: `{"name":"x","url":"http://h"}`, wantStatus: http.StatusBadRequest, wantCode: "invalid_profile"},
+		{name: "too large", body: `{"name":"big","url":"ldap://h","baseDN":"dc=` + strings.Repeat("a", profile.MaxProfileBytes) + `"}`, wantStatus: http.StatusConflict, wantCode: "profile_limit"},
 	}
 	for _, tc := range tests {
 		rec := env.do(t, http.MethodPost, "/api/profiles", tc.body)

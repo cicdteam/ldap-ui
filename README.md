@@ -204,6 +204,25 @@ connections:
     environment: prod # prod profiles are read-only by default
 ```
 
+## Saved connections
+
+Profiles created in the UI are kept, without passwords, in `profiles.json`
+in `--data-dir`; without a data dir the UI cannot save profiles. At most 200
+profiles can be saved, each at most 4 KiB as JSON, `caPEM` included; saving
+one more, or a bigger one, fails with 409 `profile_limit`. Saves are
+written to a temporary file, synced and renamed, so a crash never leaves a
+partial file.
+
+A `profiles.json` that does not parse or holds an invalid profile does not
+stop the server: it is moved to `profiles.json.bad` (replacing an older one),
+the server starts with no saved profiles and logs the warning `profiles file
+was invalid and was moved aside` with its `path`. A file the server cannot
+read (permissions) is a startup error.
+
+Run one ldapui process per data dir. The directory must exist; the server
+locks `.lock` in it (Linux, macOS and the BSDs) and a second process on the
+same directory exits with `data dir ... is in use by another ldapui process`.
+
 ## Flags
 
 | Flag | Env | Default |
