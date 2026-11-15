@@ -249,19 +249,25 @@ func (s *server) userLogin(w http.ResponseWriter, r *http.Request, p profile.Pro
 		writeError(w, status, apiError{Code: code, Message: msg})
 		return profile.Profile{}, false
 	}
+	// forbid is refuse for the identity checks, which are logged: they are
+	// about who may sign in, not a typo.
+	forbid := func(code, msg string) (profile.Profile, bool) {
+		s.log.Info("connect refused", s.attributed(r, p, "profile", p.Name, "code", code)...)
+		return refuse(http.StatusForbidden, code, msg)
+	}
 	if req.Username == "" {
 		return refuse(http.StatusBadRequest, "username_required", "this profile needs a username")
 	}
 	if p.IdentityUser != "" {
 		identity, ok := s.identity(r)
 		if !ok || identity == "" {
-			return refuse(http.StatusForbidden, "identity_required", "this profile needs the user verified by the authenticating proxy")
+			return forbid("identity_required", "this profile needs the user verified by the authenticating proxy")
 		}
 		// Equal byte lengths keep EqualFold to ASCII: BindDNFor below takes
 		// only ASCII usernames, and every non-ASCII rune that folds to an
 		// ASCII letter (the Kelvin sign, the long s) is longer.
 		if mapped := p.IdentityUsername(identity); len(mapped) != len(req.Username) || !strings.EqualFold(mapped, req.Username) {
-			return refuse(http.StatusForbidden, "identity_mismatch", "the username must be the user the authenticating proxy verified")
+			return forbid("identity_mismatch", "the username must be the user the authenticating proxy verified")
 		}
 	}
 	dn, err := p.BindDNFor(req.Username)

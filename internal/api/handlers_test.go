@@ -946,6 +946,41 @@ func TestConnectIdentityLock(t *testing.T) {
 	}
 }
 
+// TestConnectIdentityRefusalLogged checks that a connect refused for the
+// trusted identity is logged with its code, without the username it asked
+// for.
+func TestConnectIdentityRefusalLogged(t *testing.T) {
+	var logs bytes.Buffer
+	opts := identityOptions
+	opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	env := newTestEnvWith(t, opts)
+	env.remote, env.header = "198.51.100.1:1234", http.Header{"X-User": {"alice@corp.example"}}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("connect from an untrusted remote = %d %s, want 403", rec.Code, rec.Body)
+	}
+	env.remote = ""
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("connect as mallory with X-User alice = %d %s, want 403", rec.Code, rec.Body)
+	}
+	var got []map[string]any
+	for _, l := range withMsg(jsonLogs(t, &logs), "connect refused") {
+		if _, ok := l["session"]; !ok {
+			t.Errorf("connect refused line = %v, want who made it", l)
+		}
+		got = append(got, map[string]any{"profile": l["profile"], "code": l["code"], "bindDN": l["bindDN"], "remote": l["remote"], "user": l["user"]})
+	}
+	want := []map[string]any{
+		{"profile": "self", "code": "identity_required", "bindDN": "", "remote": "198.51.100.1:1234", "user": nil},
+		{"profile": "self", "code": "identity_mismatch", "bindDN": "", "remote": "192.0.2.1:1234", "user": "alice@corp.example"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("connect refused lines mismatch (-want +got):\n%s", diff)
+	}
+	if strings.Contains(logs.String(), "mallory") {
+		t.Errorf("log contains the username:\n%s", logs.String())
+	}
+}
+
 func TestListProfilesIdentity(t *testing.T) {
 	type view struct {
 		UserLogin      bool   `json:"userLogin"`

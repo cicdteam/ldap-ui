@@ -407,6 +407,7 @@ The lines:
 |---|---|
 | `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
 | `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts` |
+| `connect refused` | `profile`, `code`, `bindDN` (empty): a connect refused with 403 `identity_required` or `identity_mismatch` (see [Per-user login](#per-user-login)) |
 | `disconnected` | `profile`, `bindDN` |
 | `identity changed` | `profile`, `bindDN`: a request on an `identityUser` connection with another trusted identity or none; the connection is closed (see [Per-user login](#per-user-login)) |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
