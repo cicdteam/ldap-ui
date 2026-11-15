@@ -189,8 +189,11 @@ func TestNormalizeTemplate(t *testing.T) {
 			p := tc.p
 			p.Name, p.URL = "x", "ldap://h"
 			err := p.normalize()
-			if got := errors.Is(err, ErrInvalid); got != tc.wantInvalid {
-				t.Errorf("normalize(%+v) = %v, want ErrInvalid %v", tc.p, err, tc.wantInvalid)
+			if tc.wantInvalid && !errors.Is(err, ErrInvalid) {
+				t.Errorf("normalize(%+v) = %v, want ErrInvalid", tc.p, err)
+			}
+			if !tc.wantInvalid && err != nil {
+				t.Errorf("normalize(%+v) = %v, want nil", tc.p, err)
 			}
 		})
 	}
@@ -202,6 +205,7 @@ func TestBindDNFor(t *testing.T) {
 	}{
 		{template: "uid={user},ou=people,dc=example,dc=org", username: "user001", want: "uid=user001,ou=people,dc=example,dc=org"},
 		{template: "{user}@corp.example", username: "user001", want: "user001@corp.example"},
+		{template: "{user}@corp.example", username: strings.Repeat("a", 64), want: strings.Repeat("a", 64) + "@corp.example"},
 	} {
 		got, err := Profile{BindDNTemplate: tc.template}.BindDNFor(tc.username)
 		if err != nil || got != tc.want {
@@ -210,7 +214,7 @@ func TestBindDNFor(t *testing.T) {
 	}
 
 	p := Profile{BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"}
-	for _, username := range []string{"", "a,ou=admins", "a+cn=x", " a", "#a", `a\`, "*", "a=b", strings.Repeat("a", 65)} {
+	for _, username := range []string{"", "a,ou=admins", "a+cn=x", " a", "#a", `a\`, "*", "a=b", strings.Repeat("a", 65), "user001\n"} {
 		_, err := p.BindDNFor(username)
 		if !errors.Is(err, ErrInvalidUsername) {
 			t.Errorf("BindDNFor(%q) error = %v, want ErrInvalidUsername", username, err)
