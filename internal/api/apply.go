@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -14,6 +15,16 @@ import (
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
 	"github.com/cicdteam/ldap-ui/internal/schema"
+)
+
+// Caps on one write request, which keep an Apply or an add a bounded amount
+// of LDAP work. Values count across all entries and changes of an Apply and
+// all attributes of an add.
+const (
+	maxApplyEntries    = 1000
+	maxChangesPerEntry = 1000
+	maxAddAttributes   = 1000
+	maxRequestValues   = 10000
 )
 
 // confirmation is part of every write request body.
@@ -101,9 +112,21 @@ func bad(attr, msg string) (apiError, bool) {
 	return apiError{Code: "bad_request", Message: msg, Attribute: attr}, false
 }
 
+// tooLarge is a 400 request_too_large; msg names the cap.
+func tooLarge(msg string) (apiError, bool) {
+	return apiError{Code: "request_too_large", Message: msg}, false
+}
+
+// tooManyValues is the refusal of a write with over maxRequestValues values.
+func tooManyValues() (apiError, bool) {
+	return tooLarge(fmt.Sprintf("a request holds at most %d values", maxRequestValues))
+}
+
 // apply runs a batch of modifies in order, one atomic LDAP modify per entry,
-// and stops at the first failure. A partial result is a 200: the client
-// drops the applied entries from its batch and keeps the failed one.
+// and stops at the first failure, or before the next entry once the request
+// ends (its deadline, or the client going away). A partial result is a 200:
+// the client drops the applied entries from its batch and keeps the failed
+// one.
 func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 	var req applyRequest
 	var sch *schema.Schema
@@ -116,12 +139,19 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	res := applyResult{Applied: []string{}}
 	for _, e := range req.Entries {
-		if err := d.Modify(r.Context(), e.DN, e.Changes); err != nil {
-			_, body := s.rejected("modify", p, sch, e.DN, err, changeAttrs(e.Changes), "changes", len(e.Changes))
+		// go-ldap's Modify takes no context, so a modify already sent
+		// finishes; only the ones after it are skipped.
+		err := r.Context().Err()
+		if err == nil {
+			err = d.Modify(r.Context(), e.DN, e.Changes)
+		}
+		attrs := changeAttrs(e.Changes)
+		if err != nil {
+			_, body := s.rejected(r, "modify", p, sch, e.DN, err, attrs, "changes", len(e.Changes), "attrs", attrs)
 			res.Failed = &applyFailure{DN: e.DN, Error: body}
 			break
 		}
-		s.log.Info("modified", "profile", p.Name, "dn", logDN(e.DN, sch), "changes", len(e.Changes))
+		s.log.Info("modified", s.attributed(r, p, "profile", p.Name, "dn", logDN(e.DN, sch), "changes", len(e.Changes), "attrs", attrs)...)
 		res.Applied = append(res.Applied, e.DN)
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -132,17 +162,17 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 // rejection names the one it was about, while a network error, a timeout or
 // a missing entry is about the whole entry. fields are extra slog key/value
 // pairs for both logs, never attribute values; a DN among them goes through
-// logDN first.
-func (s *server) rejected(op string, p profile.Profile, sch *schema.Schema, dn string, err error, names []string, fields ...any) (int, apiError) {
+// logDN first. Both logs end with attributed's fields.
+func (s *server) rejected(r *http.Request, op string, p profile.Profile, sch *schema.Schema, dn string, err error, names []string, fields ...any) (int, apiError) {
 	log := s.log.With(append([]any{"profile", p.Name, "dn", logDN(dn, sch)}, fields...)...)
 	status, body := errorResponse(err)
 	if status == http.StatusInternalServerError {
-		log.Error(op+" failed", "error", err)
+		log.Error(op+" failed", s.attributed(r, p, "error", err)...)
 	}
 	if body.Code == "conflict" || body.Code == "rejected" {
 		body.Attribute = blame(names, body.Diagnostic)
 	}
-	log.Info(op+" rejected", "code", body.Code, "ldapResultCode", body.LDAPResultCode)
+	log.Info(op+" rejected", s.attributed(r, p, "code", body.Code, "ldapResultCode", body.LDAPResultCode)...)
 	return status, body
 }
 
@@ -151,6 +181,10 @@ func validateApply(req applyRequest, sch *schema.Schema) (apiError, bool) {
 	if len(req.Entries) == 0 {
 		return bad("", "no entries to change")
 	}
+	if len(req.Entries) > maxApplyEntries {
+		return tooLarge(fmt.Sprintf("a request changes at most %d entries", maxApplyEntries))
+	}
+	values := 0
 	for _, e := range req.Entries {
 		if strings.TrimSpace(e.DN) == "" {
 			return bad("", "an entry has no DN")
@@ -158,7 +192,14 @@ func validateApply(req applyRequest, sch *schema.Schema) (apiError, bool) {
 		if len(e.Changes) == 0 {
 			return bad("", "entry "+e.DN+" has no changes")
 		}
+		if len(e.Changes) > maxChangesPerEntry {
+			return tooLarge(fmt.Sprintf("entry %s has more than %d changes", e.DN, maxChangesPerEntry))
+		}
 		for _, c := range e.Changes {
+			values += len(c.Values)
+			if values > maxRequestValues {
+				return tooManyValues()
+			}
 			switch {
 			case c.Attr == "":
 				return bad("", "a change in "+e.DN+" has no attribute")
@@ -196,7 +237,7 @@ func validateValues(attr string, values []string, b64 bool) (apiError, bool) {
 	return apiError{}, true
 }
 
-// changeAttrs lists the attribute of each change, for blame.
+// changeAttrs lists the attribute of each change, for blame and the log.
 func changeAttrs(changes []ldapx.Change) []string {
 	attrs := make([]string, len(changes))
 	for i, c := range changes {

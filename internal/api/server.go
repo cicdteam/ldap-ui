@@ -10,7 +10,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
@@ -60,6 +62,13 @@ type Options struct {
 	// SecureCookies is set when the UI is served over HTTPS, e.g. behind a
 	// TLS-terminating ingress.
 	SecureCookies bool
+	// IdentityHeader names a request header, such as X-Auth-Request-Email,
+	// that an authenticating proxy sets to the user it verified. Its value
+	// is logged as "user", only on requests from TrustedProxies.
+	IdentityHeader string
+	// TrustedProxies are the addresses of the proxies that set
+	// IdentityHeader.
+	TrustedProxies []netip.Prefix
 	// UI is the built web UI; nil serves a "not built" page.
 	UI     fs.FS
 	Logger *slog.Logger // nil discards logs
@@ -76,7 +85,10 @@ func New(opts Options) http.Handler {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	cookies := cookieOptions{Path: base + "/", Secure: opts.SecureCookies}
-	s := &server{catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger}
+	s := &server{
+		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
+		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
+	}
 
 	app := http.NewServeMux()
 	app.HandleFunc("GET /api/profiles", s.listProfiles)
@@ -96,17 +108,24 @@ func New(opts Options) http.Handler {
 	app.HandleFunc("POST /api/c/{conn}/entries/password", s.setPassword)
 	app.Handle("/", spaHandler(opts.UI, base))
 
-	var h http.Handler = app
+	// Inside the token check, so only authenticated requests take a slot.
+	h := admit(64, 4, 10*time.Second, withDeadline(2*time.Minute, 4*time.Minute, app))
 	h = requireJSON(h)
 	h = http.NewCrossOriginProtection().Handler(h)
-	h = requireToken(opts.AuthToken, cookies, h)
+	h = requireToken(opts.AuthToken, cookies, logger, h)
 	h = hostCheck(opts.AllowedHosts, h)
 
+	// Probes answer at the root as well as under the base path: a kubelet
+	// probing /healthz must not depend on --base-path.
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", health)
 	root.HandleFunc("GET /readyz", health)
-	root.Handle("/", h)
-	return securityHeaders(base, withBasePath(base, root))
+	if base != "" {
+		root.HandleFunc("GET "+base+"/healthz", health)
+		root.HandleFunc("GET "+base+"/readyz", health)
+	}
+	root.Handle("/", withBasePath(base, h))
+	return securityHeaders(base, root)
 }
 
 // health answers liveness and readiness probes. Probes bypass the host and

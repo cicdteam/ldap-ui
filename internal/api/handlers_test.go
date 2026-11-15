@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,8 @@ type directoryFake struct {
 	modified   []string
 	changes    map[string][]ldapx.Change
 	modifyErr  map[string]error
+	// onModify, when set, runs at the start of every Modify.
+	onModify func(ctx context.Context, dn string)
 	// writes records Add, Delete, Rename and SetPassword calls, one line each.
 	writes   []string
 	writeErr error
@@ -85,7 +88,10 @@ func (d *directoryFake) Members(_ context.Context, dn string, nested bool) (ldap
 	return ldapx.Membership{Refs: []ldapx.Ref{}, Truncated: true}, d.err
 }
 
-func (d *directoryFake) Modify(_ context.Context, dn string, changes []ldapx.Change) error {
+func (d *directoryFake) Modify(ctx context.Context, dn string, changes []ldapx.Change) error {
+	if d.onModify != nil {
+		d.onModify(ctx, dn)
+	}
 	if err := d.modifyErr[dn]; err != nil {
 		return err
 	}
@@ -151,6 +157,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
 	}
+	t.Cleanup(func() { _ = cat.Close() })
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
 	opts.Sessions = session.New[Directory](time.Hour)
@@ -166,14 +173,21 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 }
 
 // do sends a same-origin request to localhost, replaying cookies set by
-// earlier responses.
+// earlier responses. A cookie replaces an earlier one of the same name, as
+// in a browser.
 func (e *testEnv) do(t *testing.T, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return e.doContext(context.Background(), t, method, target, body)
+}
+
+// doContext is do with a request context.
+func (e *testEnv) doContext(ctx context.Context, t *testing.T, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
 	}
-	req := httptest.NewRequest(method, target, r)
+	req := httptest.NewRequestWithContext(ctx, method, target, r)
 	req.Host = "localhost:8080"
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -183,7 +197,10 @@ func (e *testEnv) do(t *testing.T, method, target, body string) *httptest.Respon
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
-	e.cookies = append(e.cookies, (&http.Response{Header: rec.Header()}).Cookies()...)
+	for _, c := range (&http.Response{Header: rec.Header()}).Cookies() {
+		e.cookies = slices.DeleteFunc(e.cookies, func(old *http.Cookie) bool { return old.Name == c.Name })
+		e.cookies = append(e.cookies, c)
+	}
 	return rec
 }
 
@@ -361,6 +378,15 @@ func TestSearchBadFilterIs400(t *testing.T) {
 	}
 }
 
+func TestSearchRejectsSecretFilter(t *testing.T) {
+	env := connected(t)
+	env.dir.err = fmt.Errorf("%w: userPassword", ldapx.ErrSecretFilter)
+	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(userPassword=x*)"}`)
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "secret_filter" {
+		t.Errorf("search secret filter = %d %s, want 400 secret_filter", rec.Code, rec.Body)
+	}
+}
+
 func TestMembership(t *testing.T) {
 	env := connected(t)
 	rec := env.do(t, http.MethodGet, "/api/c/dev/memberof?dn=uid%3Da&nested=true", "")
@@ -439,6 +465,7 @@ func TestSaveProfile(t *testing.T) {
 		{name: "file reference", body: `{"name":"x","url":"ldap://h","passwordFile":"/etc/passwd"}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "fixed name", body: `{"name":"dev","url":"ldap://h"}`, wantStatus: http.StatusConflict, wantCode: "profile_fixed"},
 		{name: "invalid", body: `{"name":"x","url":"http://h"}`, wantStatus: http.StatusBadRequest, wantCode: "invalid_profile"},
+		{name: "too large", body: `{"name":"big","url":"ldap://h","baseDN":"dc=` + strings.Repeat("a", profile.MaxProfileBytes) + `"}`, wantStatus: http.StatusConflict, wantCode: "profile_limit"},
 	}
 	for _, tc := range tests {
 		rec := env.do(t, http.MethodPost, "/api/profiles", tc.body)
@@ -523,5 +550,275 @@ func TestWiring(t *testing.T) {
 	env.h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("form POST = %d, want 415", rec.Code)
+	}
+}
+
+// jsonLogs decodes the lines a slog.JSONHandler wrote.
+func jsonLogs(t *testing.T, logs *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var lines []map[string]any
+	for line := range strings.Lines(logs.String()) {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		lines = append(lines, m)
+	}
+	return lines
+}
+
+// withMsg is the lines whose msg is msg.
+func withMsg(lines []map[string]any, msg string) []map[string]any {
+	var found []map[string]any
+	for _, l := range lines {
+		if l["msg"] == msg {
+			found = append(found, l)
+		}
+	}
+	return found
+}
+
+func TestWriteLogsAttribution(t *testing.T) {
+	const (
+		token    = "attribution-token-not-logged" //nolint:gosec // test value, not a credential
+		typedPW  = "typed-password-not-logged"
+		bindDN   = "cn=admin,dc=example,dc=org"
+		remote   = "192.0.2.1:1234" // httptest.NewRequest's RemoteAddr
+		applyOne = `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["secret-value"]}]}]}`
+	)
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{AuthToken: token, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	env.do(t, http.MethodGet, "/?token="+token, "")
+
+	env.dialErr = ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("data 52e"))
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"`+typedPW+`"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("connect with bad credentials = %d %s, want 401", rec.Code, rec.Body)
+	}
+	env.dialErr = nil
+	connectTo(t, env, `{"profile":"dev"}`)
+	for _, w := range []struct{ path, body string }{
+		{path: "/api/c/dev/changes/apply", body: applyOne},
+		{path: "/api/c/dev/entries/add", body: addBody},
+		{path: "/api/c/dev/entries/rename", body: renameBody},
+		{path: "/api/c/dev/entries/password", body: setBody},
+		{path: "/api/c/dev/entries/delete", body: deleteBody},
+	} {
+		if rec := env.do(t, http.MethodPost, w.path, w.body); rec.Code != http.StatusOK {
+			t.Fatalf("POST %s = %d %s, want 200", w.path, rec.Code, rec.Body)
+		}
+	}
+	env.dir.writeErr = ldap.NewError(ldap.LDAPResultNotAllowedOnNonLeaf, errors.New("subordinate objects must be deleted first"))
+	if rec := env.do(t, http.MethodPost, "/api/c/dev/entries/delete", deleteBody); rec.Code == http.StatusOK {
+		t.Fatalf("failing delete = %d %s, want an error", rec.Code, rec.Body)
+	}
+	env.dir.modifyErr = map[string]error{"uid=a,dc=example,dc=org": ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("no"))}
+	if rec := env.do(t, http.MethodPost, "/api/c/dev/changes/apply", applyOne); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"failed"`) {
+		t.Fatalf("failing apply = %d %s, want 200 with a failed entry", rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"dev"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", rec.Code, rec.Body)
+	}
+
+	lines := jsonLogs(t, &logs)
+	for _, msg := range []string{"connect failed", "connected", "modified", "added", "renamed", "password set", "deleted", "delete rejected", "modify rejected", "disconnected"} {
+		found := withMsg(lines, msg)
+		if len(found) == 0 {
+			t.Errorf("no %q log line in:\n%s", msg, logs.String())
+			continue
+		}
+		for _, l := range found {
+			if _, ok := l["session"].(string); !ok || l["remote"] != remote || l["bindDN"] != bindDN {
+				t.Errorf("%q line = %v, want session, remote %q and bindDN %q", msg, l, remote, bindDN)
+			}
+		}
+	}
+	// A connect starts a new session; its line carries the new ID's
+	// fingerprint, as the writes after it do.
+	if c, m := withMsg(lines, "connected"), withMsg(lines, "modified"); len(c) > 0 && len(m) > 0 && (c[0]["session"] == "" || c[0]["session"] != m[0]["session"]) {
+		t.Errorf("connected session = %q, want the modified line's %q", c[0]["session"], m[0]["session"])
+	}
+	for _, msg := range []string{"modified", "modify rejected"} {
+		for _, l := range withMsg(lines, msg) {
+			if diff := cmp.Diff([]any{"description"}, l["attrs"]); diff != "" {
+				t.Errorf("%q attrs mismatch (-want +got):\n%s", msg, diff)
+			}
+		}
+	}
+
+	var sessionID string
+	for _, c := range env.cookies {
+		if c.Name == sessionCookie {
+			sessionID = c.Value
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("no session cookie set")
+	}
+	for _, secret := range []string{sessionID, typedPW, "from-env", "secret-value", token} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("log contains %q:\n%s", secret, logs.String())
+		}
+	}
+}
+
+func TestSaveProfileLogged(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	for _, body := range []string{
+		`{"name":"lab","url":"ldap://lab:389","environment":"prod"}`,
+		`{"name":"lab","url":"ldap://evil.example:389","environment":"prod","readOnly":false,"insecureSkipVerify":true}`,
+	} {
+		if rec := env.do(t, http.MethodPost, "/api/profiles", body); rec.Code != http.StatusOK {
+			t.Fatalf("save %s = %d %s, want 200", body, rec.Code, rec.Body)
+		}
+	}
+	got := withMsg(jsonLogs(t, &logs), "profile saved")
+	for _, l := range got {
+		for _, k := range []string{"time", "level", "msg", "session", "remote"} {
+			delete(l, k)
+		}
+	}
+	want := []map[string]any{
+		{"name": "lab", "oldURL": "", "url": "ldap://lab:389", "readOnly": true, "insecureSkipVerify": false},
+		{"name": "lab", "oldURL": "ldap://lab:389", "url": "ldap://evil.example:389", "readOnly": false, "insecureSkipVerify": true},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("profile saved lines mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBadTokenLogged(t *testing.T) {
+	const token = "bad-token-test-real-token"
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{AuthToken: token, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	req.Host = "localhost:8080"
+	req.Header.Set("Authorization", "Bearer wrong-token-not-logged")
+	rec := httptest.NewRecorder()
+	env.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "unauthorized" {
+		t.Fatalf("bad token = %d %s, want 401 unauthorized", rec.Code, rec.Body)
+	}
+	got := withMsg(jsonLogs(t, &logs), "auth failed")
+	if len(got) != 1 || got[0]["remote"] != req.RemoteAddr {
+		t.Errorf("auth failed lines = %v, want one with remote %q", got, req.RemoteAddr)
+	}
+	for _, secret := range []string{token, "wrong-token-not-logged"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("log contains %q:\n%s", secret, logs.String())
+		}
+	}
+}
+
+// cookie is the value of the named cookie env replays, or "".
+func (e *testEnv) cookie(name string) string {
+	for _, c := range e.cookies {
+		if c.Name == name {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// connectedNames is the names /api/profiles reports as connected.
+func connectedNames(t *testing.T, env *testEnv) []string {
+	t.Helper()
+	rec := env.do(t, http.MethodGet, "/api/profiles", "")
+	var views []struct {
+		Name      string `json:"name"`
+		Connected bool   `json:"connected"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &views); err != nil {
+		t.Fatalf("decode profiles %q: %v", rec.Body, err)
+	}
+	var names []string
+	for _, v := range views {
+		if v.Connected {
+			names = append(names, v.Name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestConnectRotatesSession(t *testing.T) {
+	env := newTestEnv(t)
+	connectTo(t, env, `{"profile":"dev"}`)
+	first, firstCookies := env.cookie(sessionCookie), slices.Clone(env.cookies)
+	connectTo(t, env, `{"profile":"anon"}`)
+	second := env.cookie(sessionCookie)
+	if first == "" || second == "" || second == first {
+		t.Fatalf("session cookie after two connects = %q, then %q, want two different IDs", first, second)
+	}
+	if diff := cmp.Diff([]string{"anon", "dev"}, connectedNames(t, env)); diff != "" {
+		t.Errorf("connected profiles with the new cookie mismatch (-want +got):\n%s", diff)
+	}
+
+	env.cookies = firstCookies
+	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
+		t.Errorf("info with the first cookie = %d %s, want 401 not_connected", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectLogsPrevious checks that a connected line ties the new session
+// to the one the request came with.
+func TestConnectLogsPrevious(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	connectTo(t, env, `{"profile":"dev"}`)
+	connectTo(t, env, `{"profile":"anon"}`)
+	var got []map[string]any
+	for _, l := range withMsg(jsonLogs(t, &logs), "connected") {
+		got = append(got, map[string]any{"session": l["session"], "previous": l["previous"]})
+	}
+	if len(got) != 2 {
+		t.Fatalf("connected lines = %v, want 2", got)
+	}
+	first, second := got[0]["session"], got[1]["session"]
+	want := []map[string]any{
+		{"session": first, "previous": ""},
+		{"session": second, "previous": first},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("connected lines mismatch (-want +got):\n%s", diff)
+	}
+	if first == "" || first == second {
+		t.Errorf("connected sessions = %q, then %q, want two different fingerprints", first, second)
+	}
+}
+
+func TestConnectFailureCreatesNoSession(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = ldap.NewError(ldap.ErrorNetwork, errors.New("refused"))
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"dev"}`); rec.Code != http.StatusBadGateway {
+		t.Fatalf("connect with a failing dial = %d %s, want 502", rec.Code, rec.Body)
+	}
+	if id := env.cookie(sessionCookie); id != "" {
+		t.Errorf("connect with a failing dial set session cookie %q, want none", id)
+	}
+}
+
+func TestConnectTooManyConnections(t *testing.T) {
+	env := newTestEnv(t)
+	var want []string
+	for i := range session.MaxConns {
+		name := fmt.Sprintf("p%d", i)
+		if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"`+name+`","url":"ldap://`+name+`:389"}`); rec.Code != http.StatusOK {
+			t.Fatalf("save %s = %d %s", name, rec.Code, rec.Body)
+		}
+		connectTo(t, env, `{"profile":"`+name+`"}`)
+		want = append(want, name)
+	}
+
+	env.dir = &directoryFake{}
+	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"anon"}`)
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "too_many_connections" {
+		t.Errorf("connect %d = %d %s, want 409 too_many_connections", session.MaxConns+1, rec.Code, rec.Body)
+	}
+	if !env.dir.closed {
+		t.Error("refused connect did not close the dialed directory")
+	}
+	if diff := cmp.Diff(want, connectedNames(t, env)); diff != "" {
+		t.Errorf("connected profiles after the refused connect mismatch (-want +got):\n%s", diff)
 	}
 }

@@ -65,6 +65,7 @@ func TestErrorResponse(t *testing.T) {
 		{name: "timeout", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantCode: "timeout"},
 		{name: "not connected", err: session.ErrNotConnected, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
 		{name: "no session", err: session.ErrNoSession, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
+		{name: "too many connections", err: session.ErrTooManyConns, wantStatus: http.StatusConflict, wantCode: "too_many_connections"},
 		{name: "closed connection", err: net.ErrClosed, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
 		{
 			name: "untrusted cert", err: &ldapx.UntrustedCertError{Certificates: []*x509.Certificate{srv.Certificate()}, Err: x509.UnknownAuthorityError{}},

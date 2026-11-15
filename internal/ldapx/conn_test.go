@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -69,6 +70,21 @@ func readRequest(r io.Reader) (int64, error) {
 	}
 	id, _ := p.Children[0].Value.(int64)
 	return id, nil
+}
+
+// readSearch reads one search request and returns its message ID and base
+// DN.
+func readSearch(r io.Reader) (id int64, base string, err error) {
+	p, err := ber.ReadPacket(r)
+	if err != nil {
+		return 0, "", err
+	}
+	if len(p.Children) < 2 || len(p.Children[1].Children) == 0 {
+		return 0, "", errors.New("not a search request")
+	}
+	id, _ = p.Children[0].Value.(int64)
+	base, _ = p.Children[1].Children[0].Value.(string)
+	return id, base, nil
 }
 
 // writeResult writes an LDAPResult-shaped response of type op with the
@@ -460,6 +476,159 @@ func TestCloseIsFinal(t *testing.T) {
 	}
 }
 
+// returnsWithin reports whether f returns within d. A call that does not
+// is left running.
+func returnsWithin(d time.Duration, f func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+func TestRedialDoesNotHoldLock(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
+	c := fakeConn(t, url)
+	ctx := context.Background()
+	cursorConn, err := c.dial(ctx, "")
+	if err != nil {
+		t.Fatalf("dial() error = %v", err)
+	}
+	id, err := c.pin(cursorConn, []byte("cookie"))
+	if err != nil {
+		t.Fatalf("pin() error = %v", err)
+	}
+	_ = c.lc.Close() // the shared connection is lost
+	started, unblock := make(chan struct{}), make(chan struct{})
+	var dialed *ldap.Conn
+	c.dialFn = func(ctx context.Context, password string) (*ldap.Conn, error) {
+		close(started)
+		<-unblock
+		lc, err := c.dial(ctx, password)
+		dialed = lc
+		return lc, err
+	}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := c.current(ctx)
+		errc <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		t.Fatal("current(lost connection) did not redial")
+	}
+
+	const limit = 100 * time.Millisecond
+	var cur *cursor
+	if !returnsWithin(limit, func() { cur = c.unpin(id) }) {
+		t.Errorf("unpin() during a redial did not return within %v", limit)
+	} else if cur == nil {
+		t.Error("unpin(known cursor) = nil, want the cursor")
+	} else {
+		_ = cur.lc.Close()
+	}
+	if !returnsWithin(limit, c.expireCursors) {
+		t.Errorf("expireCursors() during a redial did not return within %v", limit)
+	}
+	if !returnsWithin(limit, func() { _ = c.Close() }) {
+		t.Errorf("Close() during a redial did not return within %v", limit)
+	}
+
+	close(unblock)
+	if err := <-errc; !errors.Is(err, net.ErrClosed) {
+		t.Errorf("current(closed during redial) error = %v, want net.ErrClosed", err)
+	}
+	if dialed == nil || !dialed.IsClosing() {
+		t.Error("connection dialed while closing is still open, want it closed")
+	}
+	c.mu.Lock()
+	installed := c.lc
+	c.mu.Unlock()
+	if installed != nil {
+		t.Error("Conn holds a shared connection after Close, want none")
+	}
+}
+
+func TestConcurrentRedialInstallsOne(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
+	c := fakeConn(t, url)
+	_ = c.lc.Close() // the shared connection is lost
+	arrived, gate := make(chan struct{}, 2), make(chan struct{})
+	var mu sync.Mutex
+	var dialed []*ldap.Conn
+	c.dialFn = func(ctx context.Context, password string) (*ldap.Conn, error) {
+		arrived <- struct{}{}
+		<-gate
+		lc, err := c.dial(ctx, password)
+		if err == nil {
+			mu.Lock()
+			dialed = append(dialed, lc)
+			mu.Unlock()
+		}
+		return lc, err
+	}
+	type result struct {
+		lc  *ldap.Conn
+		err error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			lc, err := c.current(context.Background())
+			results <- result{lc, err}
+		}()
+	}
+	for i := range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(time.Second):
+			t.Errorf("%d of 2 concurrent redials were in flight together, want 2", i)
+		}
+	}
+	close(gate)
+	var got [2]*ldap.Conn
+	for i := range got {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("current(lost connection) error = %v", r.err)
+		}
+		got[i] = r.lc
+	}
+
+	c.mu.Lock()
+	installed := c.lc
+	c.mu.Unlock()
+	if got[0] != installed || got[1] != installed {
+		t.Error("concurrent current() returned a connection other than the installed one")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialed) != 2 {
+		t.Fatalf("concurrent redials dialed %d connections, want 2", len(dialed))
+	}
+	if dialed[0] != installed && dialed[1] != installed {
+		t.Fatal("installed connection is neither of the two dialed, want one of them")
+	}
+	extra := dialed[0]
+	if extra == installed {
+		extra = dialed[1]
+	}
+	if installed.IsClosing() {
+		t.Error("installed connection is closed, want it open")
+	}
+	if !extra.IsClosing() {
+		t.Error("extra dialed connection is open, want it closed")
+	}
+}
+
 func TestSearchTimeLimit(t *testing.T) {
 	tests := []struct {
 		timeout time.Duration
@@ -625,5 +794,217 @@ func TestIsEncrypted(t *testing.T) {
 		if got := isEncrypted(profile.Profile{URL: tc.url, StartTLS: tc.startTLS}); got != tc.want {
 			t.Errorf("isEncrypted(%s, startTLS %v) = %v, want %v", tc.url, tc.startTLS, got, tc.want)
 		}
+	}
+}
+
+// TestSearchOnceCaps checks that a response with more than
+// maxResponseEntries entries or maxResponseBytes value bytes ends early as
+// truncated rather than as an error, and that the connection stays in use:
+// the rest of the response is dropped and the next search runs on it.
+func TestSearchOnceCaps(t *testing.T) {
+	tests := []struct {
+		name string
+		// entries is what the server sends before the next request; one
+		// more entry and the done message follow it.
+		entries     int
+		value       string
+		wantEntries int
+	}{
+		{name: "entries", entries: maxResponseEntries + 1, value: "x", wantEntries: maxResponseEntries},
+		// 2 MiB values: the 33rd would pass 64 MiB.
+		{name: "value bytes", entries: 33, value: strings.Repeat("x", 2<<20), wantEntries: 32},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var firstID atomic.Int64
+			url, accepts := fakeServer(t, func(n int32, conn net.Conn) {
+				id, err := readRequest(conn)
+				if err != nil || n > 1 {
+					return
+				}
+				firstID.Store(id)
+				for i := range tc.entries {
+					if writeEntry(conn, id, fmt.Sprintf("cn=%d", i), attr("description", tc.value)) != nil {
+						return
+					}
+				}
+				// The rest of the first response arrives once the client
+				// sent the next request, so after it let go of the first.
+				next, err := readRequest(conn)
+				if err != nil || writeEntry(conn, id, "cn=late", attr("description", tc.value)) != nil ||
+					writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil ||
+					writeResult(conn, next, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+				answerSearches(conn)
+			})
+			c := fakeConn(t, url)
+			// go-ldap's request timeout covers the whole response, which
+			// takes longer than the fake's 200ms under the race detector.
+			c.prof.SearchTimeout = time.Minute
+			c.lc.SetTimeout(time.Minute)
+			search := func() (*result, error) {
+				var res *result
+				err := c.read(context.Background(), func(lc *ldap.Conn) error {
+					var err error
+					res, err = searchOnce(context.Background(), lc, &ldap.SearchRequest{BaseDN: "dc=x", Filter: "(objectClass=*)"})
+					return err
+				})
+				return res, err
+			}
+			res, err := search()
+			if err != nil {
+				t.Fatalf("searchOnce(%d entries) error = %v, want none", tc.entries, err)
+			}
+			if len(res.entries) != tc.wantEntries || !res.truncated {
+				t.Errorf("searchOnce(%d entries) = %d entries, truncated %v; want %d, truncated", tc.entries, len(res.entries), res.truncated, tc.wantEntries)
+			}
+			res, err = search()
+			if err != nil || len(res.entries) != 0 || res.truncated {
+				t.Errorf("next searchOnce() = %+v, %v; want an empty complete result", res, err)
+			}
+			if n := accepts.Load(); n != 1 {
+				t.Errorf("searches opened %d connections, want 1 (no redial)", n)
+			}
+			// go-ldap notes a packet for a message it no longer tracks, and
+			// drops it: the late entry found no response channel.
+			c.mu.Lock()
+			lc := c.lc
+			c.mu.Unlock()
+			want := fmt.Sprintf("unexpected message %d", firstID.Load())
+			if err := lc.GetLastError(); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("GetLastError() = %v, want it to contain %q", err, want)
+			}
+		})
+	}
+}
+
+// TestPagedSearchCapClosesConnection checks that a page cut by a response
+// cap ends the listing without a cursor and closes the connection it ran
+// on, which no other request uses: the server is still sending that page
+// and keeps its paged state.
+func TestPagedSearchCapClosesConnection(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		for {
+			id, base, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			if base == "dc=x" {
+				for i := range maxResponseEntries + 1 {
+					if writeEntry(conn, id, fmt.Sprintf("cn=%d,dc=x", i)) != nil {
+						return
+					}
+				}
+			}
+			// Other bases (the schema) find nothing.
+			if writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+				return
+			}
+		}
+	})
+	c := fakeConn(t, url)
+	c.info.Paging = true
+	c.prof.SearchTimeout = time.Minute
+	c.lc.SetTimeout(time.Minute)
+	c.mu.Lock()
+	first := c.lc
+	c.mu.Unlock()
+	page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x"})
+	if err != nil {
+		t.Fatalf("Search(%d entries) error = %v", maxResponseEntries+1, err)
+	}
+	if len(page.Entries) != maxResponseEntries || !page.Truncated || page.Cursor != "" {
+		t.Errorf("Search(%d entries) = %d entries, truncated %v, cursor %q; want %d, truncated, no cursor",
+			maxResponseEntries+1, len(page.Entries), page.Truncated, page.Cursor, maxResponseEntries)
+	}
+	if !first.IsClosing() {
+		t.Error("Search(capped page) left its connection open, want it closed")
+	}
+}
+
+// TestMembersHardCap checks that a nested membership scan returns at most
+// maxRefs refs, marked truncated, even when the groups of one level bring
+// more than that together.
+func TestMembersHardCap(t *testing.T) {
+	// Members: cn=root holds cn=a and cn=b, which hold 6000 users each.
+	members := map[string][]string{"cn=root": {"cn=a", "cn=b"}}
+	for _, g := range members["cn=root"] {
+		for i := range 6000 {
+			members[g] = append(members[g], fmt.Sprintf("uid=%d,%s", i, g))
+		}
+	}
+	serveMembers := func(_ int32, conn net.Conn) {
+		for {
+			id, base, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			if base == "" { // the group index under the empty base DN
+				err = errors.Join(writeEntry(conn, id, "cn=a"), writeEntry(conn, id, "cn=b"))
+			} else {
+				err = writeEntry(conn, id, base, attr("member", members[base]...))
+			}
+			if err != nil || writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+				return
+			}
+		}
+	}
+	// MemberOf: the entry is in 4 groups, and each of them in 3000 more.
+	var scans atomic.Int32
+	serveMemberOf := func(_ int32, conn net.Conn) {
+		for {
+			id, base, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			if base == "" { // a scan for the groups listing a member
+				n := scans.Add(1)
+				count := 3000
+				if n == 1 {
+					count = 4
+				}
+				for i := range count {
+					if err = writeEntry(conn, id, fmt.Sprintf("cn=g%d-%d", n, i)); err != nil {
+						break
+					}
+				}
+			} else {
+				err = writeEntry(conn, id, base)
+			}
+			if err != nil || writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+				return
+			}
+		}
+	}
+	tests := []struct {
+		name  string
+		serve func(int32, net.Conn)
+		scan  func(*Conn) (Membership, error)
+	}{
+		{name: "Members", serve: serveMembers, scan: func(c *Conn) (Membership, error) {
+			return c.Members(context.Background(), "cn=root", true)
+		}},
+		{name: "MemberOf", serve: serveMemberOf, scan: func(c *Conn) (Membership, error) {
+			return c.MemberOf(context.Background(), "uid=u", true)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, _ := fakeServer(t, tc.serve)
+			m, err := tc.scan(fakeConn(t, url))
+			if err != nil {
+				t.Fatalf("%s(nested) error = %v", tc.name, err)
+			}
+			if len(m.Refs) != maxRefs || !m.Truncated {
+				t.Errorf("%s(nested) = %d refs, truncated %v; want %d, truncated", tc.name, len(m.Refs), m.Truncated, maxRefs)
+			}
+		})
+	}
+}
+
+func TestBERPacketCap(t *testing.T) {
+	if got, want := ber.MaxPacketLengthBytes, int64(64<<20); got != want {
+		t.Errorf("ber.MaxPacketLengthBytes = %d, want %d", got, want)
 	}
 }

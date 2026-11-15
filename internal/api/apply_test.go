@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
+	"github.com/cicdteam/ldap-ui/internal/schema"
 )
 
 const twoEntries = `{"entries":[
@@ -103,6 +105,58 @@ func TestApplyPartial(t *testing.T) {
 	}
 }
 
+func TestApplyStopsWhenContextEnds(t *testing.T) {
+	const (
+		a = "uid=a,dc=example,dc=org"
+		b = "uid=b,dc=example,dc=org"
+		c = "uid=c,dc=example,dc=org"
+	)
+	body := `{"entries":[
+ {"dn":"` + a + `","changes":[{"op":"add","attr":"description","values":["x"]}]},
+ {"dn":"` + b + `","changes":[{"op":"add","attr":"description","values":["x"]}]},
+ {"dn":"` + c + `","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		// cancel ends the request during the 2nd modify; otherwise its
+		// deadline does.
+		cancel bool
+		want   error
+	}{
+		{name: "client gone", timeout: time.Minute, cancel: true, want: context.Canceled},
+		{name: "deadline", timeout: 250 * time.Millisecond, want: context.DeadlineExceeded},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := connected(t)
+			ctx, cancel := context.WithTimeout(context.Background(), tc.timeout)
+			defer cancel()
+			env.dir.onModify = func(ctx context.Context, dn string) {
+				if dn != b {
+					return
+				}
+				if tc.cancel {
+					cancel()
+				}
+				// The modify was sent, so it finishes after the request ended.
+				<-ctx.Done()
+			}
+			rec := env.doContext(ctx, t, http.MethodPost, "/api/c/dev/changes/apply", body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("apply = %d %s, want 200", rec.Code, rec.Body)
+			}
+			_, wantErr := errorResponse(tc.want)
+			want := applyResult{Applied: []string{a, b}, Failed: &applyFailure{DN: c, Error: wantErr}}
+			if diff := cmp.Diff(want, applyResultOf(t, rec.Body.Bytes())); diff != "" {
+				t.Errorf("apply result (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]string{a, b}, env.dir.modified); diff != "" {
+				t.Errorf("modified (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestApplyRefusals(t *testing.T) {
 	// The largest value a write takes is 1 MiB once decoded; one byte more is refused.
 	big := base64.StdEncoding.EncodeToString(make([]byte, ldapx.MaxValue+1))
@@ -147,6 +201,56 @@ func TestApplyRefusals(t *testing.T) {
 				t.Errorf("modified = %v, want none", env.dir.modified)
 			}
 		})
+	}
+}
+
+// manyChanges is an entry with n changes of one value each, or one change
+// of n values when oneChange is set.
+func manyChanges(dn string, n int, oneChange bool) applyEntry {
+	e := applyEntry{DN: dn}
+	for i := range n {
+		v := "v" + strconv.Itoa(i)
+		if oneChange && i > 0 {
+			e.Changes[0].Values = append(e.Changes[0].Values, v)
+			continue
+		}
+		e.Changes = append(e.Changes, ldapx.Change{Op: "add", Attr: "description", Values: []string{v}})
+	}
+	return e
+}
+
+func TestValidateApplyCaps(t *testing.T) {
+	entries := func(n int) []applyEntry {
+		es := make([]applyEntry, n)
+		for i := range es {
+			es[i] = manyChanges("uid=u"+strconv.Itoa(i)+",dc=example,dc=org", 1, false)
+		}
+		return es
+	}
+	tests := []struct {
+		name    string
+		entries []applyEntry
+		// wantCap is the cap the refusal names, 0 when the request passes.
+		wantCap int
+	}{
+		{name: "1000 entries", entries: entries(1000)},
+		{name: "1001 entries", entries: entries(1001), wantCap: 1000},
+		{name: "1000 changes", entries: []applyEntry{manyChanges("uid=a", 1000, false)}},
+		{name: "1001 changes", entries: []applyEntry{manyChanges("uid=a", 1001, false)}, wantCap: 1000},
+		{name: "10000 values", entries: []applyEntry{manyChanges("uid=a", 5000, true), manyChanges("uid=b", 5000, true)}},
+		{name: "10001 values", entries: []applyEntry{manyChanges("uid=a", 5000, true), manyChanges("uid=b", 5001, true)}, wantCap: 10000},
+	}
+	for _, tc := range tests {
+		e, ok := validateApply(applyRequest{Entries: tc.entries}, schema.Parse(nil, nil, nil))
+		if tc.wantCap == 0 {
+			if !ok {
+				t.Errorf("%s: validateApply() = %+v, want OK", tc.name, e)
+			}
+			continue
+		}
+		if ok || e.Code != "request_too_large" || !strings.Contains(e.Message, strconv.Itoa(tc.wantCap)) {
+			t.Errorf("%s: validateApply() = %+v, %v, want request_too_large naming %d", tc.name, e, ok, tc.wantCap)
+		}
 	}
 }
 

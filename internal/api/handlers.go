@@ -9,6 +9,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"slices"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
@@ -23,6 +25,9 @@ type server struct {
 	sessions *session.Manager[Directory]
 	cookies  cookieOptions
 	log      *slog.Logger
+
+	identityHeader string
+	trustedProxies []netip.Prefix
 }
 
 // profileView is a profile as the UI sees it.
@@ -65,6 +70,9 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p, maxBody) {
 		return
 	}
+	// ponytail: read before Save, so two saves of one name at once may log a
+	// stale oldURL; have Save return the replaced profile if that matters.
+	old, _ := s.catalog.Find(p.Name) // the zero Profile, so oldURL "", for a new one
 	saved, err := s.catalog.Save(p)
 	switch {
 	case errors.Is(err, profile.ErrInvalid):
@@ -73,9 +81,15 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, apiError{Code: "profile_fixed", Message: err.Error()})
 	case errors.Is(err, profile.ErrSavingDisabled):
 		writeError(w, http.StatusConflict, apiError{Code: "saving_disabled", Message: err.Error()})
+	case errors.Is(err, profile.ErrLimit):
+		writeError(w, http.StatusConflict, apiError{Code: "profile_limit", Message: err.Error()})
 	case err != nil:
 		s.fail(w, err)
 	default:
+		s.log.Info("profile saved", slices.Concat([]any{
+			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
+			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
+		}, s.who(r))...)
 		writeJSON(w, http.StatusOK, s.view(saved, true, nil))
 	}
 }
@@ -138,16 +152,25 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	dir, err := s.dial(ctx, p, password)
 	if err != nil {
-		s.log.Info("connect failed", "profile", p.Name, "bindDN", p.BindDN, "error", err)
+		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
 		s.fail(w, err)
 		return
 	}
-	if err := s.sessions.Put(s.ensureSession(w, r), p.Name, dir); err != nil {
+	// Every connect moves the browser to a new session ID, so an ID that
+	// leaked before it reaches no connection. The cookie is set before Put:
+	// a refused Put leaves the session, under its new ID, as it was.
+	id := s.sessions.Rotate(sessionID(r))
+	http.SetCookie(w, s.cookies.cookie(sessionCookie, id, r))
+	if err := s.sessions.Put(id, p.Name, dir); err != nil {
 		_ = dir.Close()
 		s.fail(w, err)
 		return
 	}
-	s.log.Info("connected", "profile", p.Name, "bindDN", p.BindDN)
+	// Logged under the new ID, the one the browser's next lines carry, with
+	// the old one in previous to tie them to the lines before.
+	lr := r.Clone(r.Context())
+	lr.Header.Set("Cookie", sessionCookie+"="+id)
+	s.log.Info("connected", s.attributed(lr, p, "profile", p.Name, "previous", fingerprint(sessionID(r)))...)
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 
@@ -159,6 +182,8 @@ func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.Drop(sessionID(r), req.Profile)
+	p, _ := s.catalog.Find(req.Profile) // for the bind DN; "" for an unknown name
+	s.log.Info("disconnected", s.attributed(r, p, "profile", req.Profile)...)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -263,15 +288,6 @@ func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, b
 		return nil, false
 	}
 	return d, true
-}
-
-func (s *server) ensureSession(w http.ResponseWriter, r *http.Request) string {
-	if id := sessionID(r); id != "" && s.sessions.Exists(id) {
-		return id
-	}
-	id := s.sessions.Create()
-	http.SetCookie(w, s.cookies.cookie(sessionCookie, id, r))
-	return id
 }
 
 func (s *server) fail(w http.ResponseWriter, err error) {

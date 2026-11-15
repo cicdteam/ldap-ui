@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	openLDAPImage = "bitnamilegacy/openldap:2.6.6"
+	openLDAPImage = "bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985"
 	testBase      = "dc=example,dc=org"
 	testPeople    = "ou=people," + testBase
 	testGroups    = "ou=groups," + testBase
@@ -255,6 +255,19 @@ func TestSearchCanceled(t *testing.T) {
 	cancel()
 	if _, err := c.Search(ctx, SearchRequest{BaseDN: testPeople}); !errors.Is(err, context.Canceled) {
 		t.Errorf("Search(canceled) error = %v, want context.Canceled", err)
+	}
+}
+
+// TestSearchSecretFilter checks that Conn.Search refuses a filter matching
+// on a secret value before the server sees it, and lets presence through.
+func TestSearchSecretFilter(t *testing.T) {
+	c := dialAdmin(t)
+	_, err := c.Search(context.Background(), SearchRequest{BaseDN: testBase, Filter: "(userPassword=x*)"})
+	if !errors.Is(err, ErrSecretFilter) {
+		t.Errorf("Search((userPassword=x*)) error = %v, want ErrSecretFilter", err)
+	}
+	if _, err := c.Search(context.Background(), SearchRequest{BaseDN: testBase, Filter: "(userPassword=*)"}); err != nil {
+		t.Errorf("Search((userPassword=*)) error = %v, want nil", err)
 	}
 }
 

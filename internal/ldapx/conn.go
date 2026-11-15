@@ -93,13 +93,16 @@ type Conn struct {
 	closed  bool
 	cursors map[string]*cursor
 	schema  *schema.Schema
+
+	// dialFn replaces dial when set, so that tests can stall a redial.
+	dialFn func(ctx context.Context, password string) (*ldap.Conn, error)
 }
 
 // Dial connects to the profile's server, binds (anonymously when the
 // profile has no bind DN) and reads the root DSE.
 func Dial(ctx context.Context, p profile.Profile, password string) (*Conn, error) {
 	c := &Conn{prof: p, password: password}
-	lc, err := c.dial(ctx)
+	lc, err := c.dial(ctx, password)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +135,9 @@ func (c *Conn) Close() error {
 // Info returns what the server announced at connect time.
 func (c *Conn) Info() Info { return c.info }
 
-func (c *Conn) dial(ctx context.Context) (*ldap.Conn, error) {
+// dial opens and binds a new server connection. It takes the password
+// rather than reading it, because it runs outside mu and Close clears it.
+func (c *Conn) dial(ctx context.Context, password string) (*ldap.Conn, error) {
 	cfg, err := c.prof.TLSConfig()
 	if err != nil {
 		return nil, err
@@ -142,7 +147,7 @@ func (c *Conn) dial(ctx context.Context) (*ldap.Conn, error) {
 		return nil, err
 	}
 	if c.prof.BindDN != "" {
-		if err := lc.Bind(c.prof.BindDN, c.password); err != nil {
+		if err := lc.Bind(c.prof.BindDN, password); err != nil {
 			_ = lc.Close()
 			return nil, networkError(err)
 		}
@@ -340,39 +345,64 @@ func (c *Conn) loadInfo(ctx context.Context) error {
 }
 
 // current returns the shared connection, dialing a new one when there is
-// none or it was lost.
+// none or it was lost. The dial runs outside mu, so that a slow server
+// holds up neither Close nor the cursors. Of two concurrent dials, the
+// first to finish is installed and the other is closed.
 func (c *Conn) current(ctx context.Context) (*ldap.Conn, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.currentLocked(ctx)
-}
-
-// currentLocked is current for callers holding mu.
-// ponytail: dials while holding mu, so a slow dial stalls other callers for
-// up to the connect timeout; dial outside the lock if that ever matters.
-func (c *Conn) currentLocked(ctx context.Context) (*ldap.Conn, error) {
-	if c.closed {
+	lc, closed, password := c.lc, c.closed, c.password
+	c.mu.Unlock()
+	if closed {
 		return nil, net.ErrClosed
 	}
-	if c.lc == nil || c.lc.IsClosing() {
-		lc, err := c.dial(ctx)
-		if err != nil {
-			return nil, err
-		}
-		c.lc = lc
+	if lc != nil && !lc.IsClosing() {
+		return lc, nil
 	}
-	return c.lc, nil
+	dial := c.dial
+	if c.dialFn != nil {
+		dial = c.dialFn
+	}
+	lc, err := dial(ctx, password)
+	if err != nil {
+		return nil, err
+	}
+	extra := lc
+	c.mu.Lock()
+	switch {
+	case c.closed:
+		lc, err = nil, net.ErrClosed
+	case c.lc != nil && !c.lc.IsClosing():
+		lc = c.lc
+	default:
+		c.lc, extra = lc, nil
+	}
+	c.mu.Unlock()
+	if extra != nil {
+		_ = extra.Close()
+	}
+	return lc, err
 }
 
 // take removes the shared connection from its slot so that nobody else
 // starts a paged search on it; the next shared read dials a new one. The
-// caller hands it back with release or keeps it with pin.
+// caller hands it back with release or keeps it with pin. A connection
+// that left the slot meanwhile, taken or replaced, is not returned.
 func (c *Conn) take(ctx context.Context) (*ldap.Conn, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	lc, err := c.currentLocked(ctx)
-	c.lc = nil
-	return lc, err
+	for {
+		lc, err := c.current(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		taken := c.lc == lc
+		if taken {
+			c.lc = nil
+		}
+		c.mu.Unlock()
+		if taken {
+			return lc, nil
+		}
+	}
 }
 
 // release makes lc the shared connection again, or closes it when another

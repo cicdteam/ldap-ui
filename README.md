@@ -67,8 +67,18 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 - **Search** (center): RFC 4515 filter editor with highlighting, completion
   from the schema and inline errors, or a visual builder; base DN, scope and
   columns sit next to it. Results load 500 at a time; sorting by column and
-  export to CSV or LDIF act on the rows loaded so far. Recent and saved
-  searches are kept per connection in the browser.
+  export to CSV or LDIF act on the rows loaded so far. A page the server cut
+  with a size or time limit, or one past ldapui's caps on a single response
+  (5000 entries, 64 MiB of attribute values), shows what arrived and is
+  marked truncated ("The search stopped early"); a listing cut by a cap has
+  no further pages. One server message (an entry) over 64 MiB fails the
+  request instead. Recent and saved
+  searches are kept per connection in the browser. A filter can test a
+  password or secret attribute for presence (`(userPassword=*)`) but not
+  match on its values: equality, substring, ordering, approximate and
+  extensible matches on one, and extensible matches without an attribute
+  type (`(:octetStringMatch:=x)`, which test every attribute), are refused
+  with 400 `secret_filter`.
 - **Inspector** (right): attributes grouped as MUST, MAY and operational, with
   decoded AD values (SIDs, GUIDs, dates, `userAccountControl` flags), clickable
   DNs, photos, a Download button on binary values (on any profile), and a
@@ -83,8 +93,14 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   password and secret attributes never leave the server (their names and a
   count of hidden values are shown). Long value lists show the first 100
   values and grow by 1000 on request; the attribute filter also narrows the
-  values it matches. Member of searches `member`, `uniqueMember` and
-  `memberUid`; an equality index on each keeps it fast.
+  values it matches. An attribute with more than 10 000 values (the `member`
+  list of a huge group) arrives truncated to its first 10 000, noted
+  "Showing the first 10,000 values"; LDIF and CSV exports of such an entry
+  also hold only the first 10 000. Edit still adds and deletes single
+  values, and Apply touches only those. Member of searches `member`,
+  `uniqueMember` and `memberUid`; an equality index on each keeps it fast.
+  Member of and Members list at most 10 000 groups or members: a longer list
+  is truncated there and marked incomplete.
 - **Status bar** (bottom): the server address, whether the connection is
   encrypted (TLS, StartTLS, not encrypted, certificate not verified), the
   server type and the number of staged changes.
@@ -177,10 +193,13 @@ on non-Latin keyboard layouts.
   button; replacing one is a delete and an upload. Certificates are written
   as `userCertificate;binary` (RFC 4522). Apply, New child and Clone send at
   most 8 MiB in one request: a reverse proxy in front of ldapui must allow
-  that body size. Where the server cannot delete or add one value
-  (`jpegPhoto` has no equality rule), Apply reads the attribute and writes
-  back the values it will hold: a value someone else adds between the two is
-  lost.
+  that body size (see [Behind a reverse proxy](#behind-a-reverse-proxy)).
+  One Apply also takes at most 1000 entries and 1000 changes per entry, one New child or Clone at most 1000 attributes, and either at
+  most 10 000 values in all; a bigger request is refused with 400
+  `request_too_large`, naming the limit. Where the server cannot delete or
+  add one value (`jpegPhoto` has no equality rule), Apply reads the
+  attribute and writes back the values it will hold: a value someone else
+  adds between the two is lost.
 - **Attributes with options** (`cn;lang-de`, `description;lang-ru`) are
   attributes of their own, edited apart from `cn`. "+ attribute" takes a name
   with options (letters, digits and hyphens; not `range=`), suggests the
@@ -204,6 +223,31 @@ connections:
     environment: prod # prod profiles are read-only by default
 ```
 
+## Saved connections
+
+Profiles created in the UI are kept, without passwords, in `profiles.json`
+in `--data-dir`; without a data dir the UI cannot save profiles. At most 200
+profiles can be saved, each at most 4 KiB as JSON not counting `caPEM`, which
+has its own limit of 16 KiB; saving one more profile, or a bigger one, fails
+with 409 `profile_limit`. Saves are written to a temporary file, synced and
+renamed, so a crash never leaves a partial file.
+
+On a writable data dir, a `profiles.json` that does not parse or holds an
+invalid profile does not stop the server: it is moved to `profiles.json.bad`
+(replacing an older one), the server starts with no saved profiles and logs
+the warning `profiles file was invalid and was moved aside` with its `path`
+and the parse or validation `error`. On a read-only data dir it cannot be
+moved, so it is a startup error, and so is a file the server cannot read
+(permissions).
+
+Run one ldapui process per data dir. The server locks `.lock` in it (Linux,
+macOS and the BSDs), and a second process on the same directory exits with
+`data dir ... is in use by another ldapui process`. A data dir that does not
+exist is a startup error. One that is read-only or not writable for the
+server's user still starts: the saved profiles are listed, saving fails, and
+the server runs without the lock and logs the warning `data dir is not
+writable; saving profiles will fail` with its `dir`.
+
 ## Flags
 
 | Flag | Env | Default |
@@ -213,17 +257,608 @@ connections:
 | `--config` | `LDAPUI_CONFIG` | none |
 | `--data-dir` | `LDAPUI_DATA_DIR` | none (`/data` in the image) |
 | `--auth-token` | `LDAPUI_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
+| `--auth-token-file` | `LDAPUI_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
 | `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
-| `--session-idle` | | `30m` |
+| `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
+| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)) |
+| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is logged; required with `--identity-header` |
 | `--version` | | prints `ldapui <version>` and exits |
 
-Behind a reverse proxy, always set `--auth-token` or `LDAPUI_AUTH_TOKEN`: a
-proxy that forwards `Host: localhost` or `127.0.0.1` looks like a local
-browser, which needs no token when ldapui listens on loopback.
-`--allowed-hosts` without a token generates a new one on every restart, so
-set one explicitly to keep it stable. A request that runs longer than 5
-minutes is cut off.
+A flag beats its variable, and an empty variable counts as unset
+(`LDAPUI_DATA_DIR=""` disables saving). A variable that does not parse
+(`LDAPUI_SECURE_COOKIES=yes`, `LDAPUI_SESSION_IDLE=30`) is a startup error
+even when its flag is set. `--auth-token` or `--auth-token-file`
+on the command line overrides both token variables. Both flags at once, or
+both variables at once, are a startup error, and so is a token file that is
+missing or holds an invalid token (at least 16 characters from
+`A-Z a-z 0-9 . _ ~ -`); the error names the file, never the token.
+
+A browser's open connections live in a session on the server, closed after
+`--session-idle` without use. Every successful connect moves the browser to a
+new session ID and keeps its connections, so an ID seen before a connect is
+worthless after it. A request from another tab at the same instant can
+find its session gone; that tab reconnects. A session holds at most 8
+connections: one more connect fails with 409 `too_many_connections` until one
+is disconnected. The server holds at most 1000 sessions; one more closes the
+connections of the least recently used.
+
+The server runs at most 64 API requests at once, and at most 4 of one
+session; the others wait their turn. A request that waits more than 10
+seconds gets 503 `busy` with `Retry-After: 1`; the UI retries a read that
+gets it up to 3 times, a second apart, and never retries a write. Once
+running, an API request has 2 minutes before it ends with 504 `timeout`. An
+Apply has 4 minutes and stops between entries instead: when its time runs
+out or its browser goes away, a modify already sent to the server finishes,
+the entries before the stop stay applied, and the response is a 200 that
+lists them and names the next entry as failed with `timeout` (`canceled`
+when the browser went away).
+
+The probes `GET /healthz` and `GET /readyz` answer `ok` without the token or
+the Host check, so a kubelet can call them by pod IP. With `--base-path
+/ldap` they answer at both `/healthz` and `/ldap/healthz` (and the same for
+`/readyz`).
+
+On SIGTERM or Ctrl-C the server stops accepting connections and waits up to
+25 seconds for running requests. Then it closes the rest, logs `shutdown
+drain timed out` and exits 0. A second Ctrl-C exits at once. The drain fits
+the 30 second default grace period of a Kubernetes pod.
+
+`connections.yaml`, the `passwordEnv` variables, the token (also from
+`--auth-token-file`) and every other flag and variable are read at startup:
+restart after changing them. `passwordFile` and `caFile` are read at every
+connect, so a rotated Secret is used at the next connect. Mount ConfigMaps
+and Secrets as directories, not with `subPath`, which never sees an update.
+
+## Logs and accountability
+
+ldapui logs to stdout, one `key=value` line per event. The lines below,
+except `auth failed`, end with who made them:
+
+- `session`: the first 8 hex characters of the SHA-256 of the browser's
+  session cookie, empty without one. A connect gives the browser a new
+  session ID: its `connected` line carries the new one, and the one the
+  request came with in `previous`. It ties one browser's lines together
+  across connects; the session ID itself is never logged.
+- `remote`: the client address and port. Behind a proxy this is the proxy:
+  match it with the proxy's access log.
+- `user`: the `--identity-header` value, see below.
+
+The lines:
+
+| Message | Fields |
+|---|---|
+| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
+| `disconnected` | `profile`, `bindDN` |
+| `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
+| `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
+| `renamed` | `profile`, `dn`, `newDN`, `bindDN` |
+| `password set` | `profile`, `dn`, `method`, `bindDN` |
+| `deleted` | `profile`, `dn`, `bindDN` |
+| `modify rejected`, `add rejected`, `rename rejected`, `password rejected`, `delete rejected` | the fields of the write, `code`, `ldapResultCode`, `bindDN`; an unexpected error also logs `<op> failed` with `error` |
+| `profile saved` | `name`, `oldURL` (empty for a new profile), `url`, `readOnly`, `insecureSkipVerify` |
+| `auth failed` | `remote` only: a request refused with 401 for a missing or wrong token |
+
+`bindDN` is the profile's bind DN. Attribute values, passwords, tokens and
+session IDs are never logged, and a DN that does not parse or has a secret
+attribute in an RDN is logged as `<redacted>`.
+
+At startup the server logs `listening` with `version`, `addr`, `basePath`,
+`profiles` (how many from `connections.yaml`), `saved` (how many saved
+connections it loaded) and `dataDir` (empty when saving is disabled). A
+generated token adds the login link, and inside Kubernetes
+(`KUBERNETES_SERVICE_HOST` is set) a warning: a generated token changes on
+every restart and differs per replica, so set `LDAPUI_AUTH_TOKEN` or
+`LDAPUI_AUTH_TOKEN_FILE` from a Secret. A shutdown that runs out of time
+logs the warning `shutdown drain timed out` with `after`.
+
+The directory's own audit log sees only the bind DN. A profile bound as a
+shared service account (`passwordEnv` or `passwordFile`) makes every write
+that account's, and with one shared token only `session` and `remote` tell
+people apart. For per-person accountability, give each person a profile with
+their own bind DN and no configured password: they type their password at
+connect, and both the directory and ldapui log their DN.
+
+Behind an authenticating proxy, ldapui can also log the user the proxy
+verified. For example, ingress-nginx asks oauth2-proxy (run with
+`--set-xauthrequest`) about every request through
+`nginx.ingress.kubernetes.io/auth-url` and passes the user on with
+`nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Email`:
+
+```sh
+ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.42.0.0/16
+```
+
+`10.42.0.0/16` is the pod network of a k3s cluster, so this trusts every
+pod in it: it assumes a NetworkPolicy that lets only the ingress controller
+reach ldapui, like the one under [Kubernetes](#kubernetes).
+
+The value is logged as `user`, cut to 256 bytes, on the lines that carry
+`session`, and only for requests whose client address is in
+`--trusted-proxies`. It is a log field only: it grants nothing, and the token
+still applies. Any client can send any header, so the value means something
+only when the proxy replaces it on every request (ingress-nginx and nginx's
+`proxy_set_header` do) and nothing else can reach ldapui from a trusted
+address: list only the proxy's addresses, and keep other clients off the
+ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
+`--identity-header` without `--trusted-proxies` is a startup error, and so
+is `Authorization`, `Proxy-Authorization` or `Cookie` as the header: they
+carry credentials.
+
+## Running for a team
+
+ldapui keeps sessions in memory and saved connections in one file with one
+writer, so a shared instance is one process. In Kubernetes, run one replica
+with `strategy: Recreate`: a second replica does not know the first one's
+sessions, and the default rolling update starts the new pod while the old
+one still holds the data dir, so the new pod exits (see [Saved
+connections](#saved-connections)) and the rollout stalls. Every restart
+ends all sessions, and users connect again.
+
+- **Fixed profiles only** is the recommended mode for a shared instance:
+  put every connection in `connections.yaml` and set `LDAPUI_DATA_DIR=""`.
+  Saving in the UI then fails with 409 `saving_disabled`, and connect opens
+  only the profiles from that file, so nobody can make the server open
+  connections to other hosts and ports it reaches, or change a shared
+  profile so that the next person's password goes to a server of their
+  choosing. No volume is needed.
+- **With UI-saved profiles** anyone who has the token can do both; every
+  save is logged as `profile saved`, with the old and the new URL. Mount a
+  volume at `/data`: in Kubernetes a PVC with `securityContext.fsGroup:
+  65532`, which makes a root-owned volume writable for the image's user
+  (UID 65532). A `hostPath` ignores `fsGroup`, and the `restricted` policy
+  refuses it. An `emptyDir` forgets the profiles when the pod is replaced.
+  Without a volume, the image's `VOLUME /data` gets a directory that lives
+  only as long as the container, so saves are lost at its next restart.
+- **Back up `profiles.json`** (it holds no passwords), and always before an
+  upgrade: after a rollback, the older version drops the settings it does
+  not know at its next save.
+- **The token** comes from a Secret through `LDAPUI_AUTH_TOKEN_FILE` (or
+  `LDAPUI_AUTH_TOKEN`). A generated one changes at every restart, which
+  logs everyone out, and is printed only in the log. The token file is read
+  at startup: restart after rotating it.
+- **Memory**: ldapui uses about 10 MiB, plus about 55 MiB for each Apply of
+  4 MiB of photos in flight. A large read holds up to 64 MiB of values per
+  response, several times over while it is converted and encoded. Set a memory
+  limit and `GOMEMLIMIT` to about 80% of it, for example 512Mi and 400MiB.
+  Go does not read the container's limit by itself. `GOMEMLIMIT` makes the
+  garbage collector work harder near the limit, which makes an OOM kill
+  less likely, but it does not prevent one when live memory exceeds the
+  limit. An OOM kill ends everyone's session.
+
+What is read at startup and what at every connect, the probes and the
+shutdown drain are described under [Flags](#flags), who did what under [Logs
+and accountability](#logs-and-accountability).
+
+### Behind a reverse proxy
+
+Set up the proxy and ldapui together:
+
+- **A token**, from `LDAPUI_AUTH_TOKEN_FILE` or `LDAPUI_AUTH_TOKEN`.
+  `--allowed-hosts` makes ldapui generate one, but a new one at every
+  restart. Without `--allowed-hosts`, a proxy that forwards `Host:
+  localhost` or `127.0.0.1` to a loopback listener looks like a local
+  browser, which needs no token.
+- **The Host header**: set `--allowed-hosts` to the host name users open,
+  and have the proxy pass the browser's `Host` on (nginx: `proxy_set_header
+  Host $host`; Traefik and ingress-nginx do so by default). Any other Host
+  gets 403 `host_not_allowed`.
+- **`--secure-cookies`** when the proxy terminates TLS. ldapui does not
+  trust `X-Forwarded-Proto`, which any client that reaches it directly could
+  send, so without the flag its cookies lack `Secure` although the browser
+  uses HTTPS.
+- **Body size and read timeout**: Apply, New child and Clone send up to
+  8 MiB, and an Apply may run 4 minutes; ldapui cuts off any request after
+  5 minutes. nginx and ingress-nginx allow 1 MiB and wait 60 seconds by default: a
+  bigger body gets 413, and a longer Apply gets 504 from the proxy. When the
+  proxy closes the connection, ldapui stops before the next entry, so some
+  entries are written and the browser does not learn which.
+- **`Origin` and `Sec-Fetch-Site`** reach ldapui as the browser sent them.
+  Its cross-origin check reads them, and a proxy that clears or rewrites
+  them turns the check off.
+- **A sub-path**: run ldapui with `--base-path /ldap` and keep the prefix at
+  the proxy: no `rewrite-target` (ingress-nginx), `StripPrefix` (Traefik)
+  or URI after the address in `proxy_pass` (nginx). A prefix that only one
+  side knows serves a blank page.
+- **Only the app**: the probes `/healthz` and `/readyz` skip the token and
+  the Host check, for the kubelet. The nginx and Traefik examples do not
+  route them; an Ingress cannot leave a path out, and through it they tell
+  only that an ldapui runs there (they answer `ok`).
+- **Only through the proxy**: listen on loopback
+  (`LDAPUI_LISTEN=127.0.0.1:8080`) with the proxy on the same host, or let
+  only the ingress controller in with a NetworkPolicy (see
+  [Kubernetes](#kubernetes)). Otherwise a client that reaches the port
+  skips the proxy and what it checks, such as a single sign-on.
+- **The login link** (`/?token=...`) is meant for a local quick start:
+  through a proxy, the token lands in the proxy's access log, and it does
+  not expire. Before you give people the link, keep the query string out of
+  the access log (the nginx example does), or have an authenticating proxy
+  add `Authorization: Bearer <token>` to the requests it lets through, so
+  that nobody handles the token. With a token set, ldapui prints no link.
+
+nginx, terminating TLS, with ldapui on `127.0.0.1:8080`
+(`LDAPUI_ALLOWED_HOSTS=ldapui.corp.example`, `LDAPUI_SECURE_COOKIES=true`
+and a token):
+
+```nginx
+# The query string holds the login token, DNs and filters: log the path only.
+log_format ldapui '$remote_addr - [$time_local] "$request_method $uri $server_protocol" '
+                  '$status $body_bytes_sent';
+
+server {
+    listen 443 ssl;
+    server_name ldapui.corp.example;
+    ssl_certificate     /etc/ssl/ldapui.pem;
+    ssl_certificate_key /etc/ssl/ldapui.key;
+    access_log /var/log/nginx/ldapui.log ldapui;
+
+    client_max_body_size 8m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;   # no URI after the address: keeps the path
+        proxy_set_header Host $host;        # not the default $proxy_host
+        proxy_read_timeout 300s;
+        # Leave Origin and Sec-Fetch-Site alone, and do not cache.
+    }
+    location ~ ^/(healthz|readyz)$ {
+        return 404;
+    }
+}
+```
+
+Traefik (file provider) keeps the Host header and sets no body size limit
+or backend timeout by default:
+
+```yaml
+http:
+  routers:
+    ldapui:
+      rule: "Host(`ldapui.corp.example`) && !Path(`/healthz`) && !Path(`/readyz`)"
+      entryPoints: [websecure]
+      service: ldapui
+      tls: {}
+  services:
+    ldapui:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+```
+
+For a sub-path, match `PathPrefix(`/ldap`)` without a `StripPrefix`
+middleware and run ldapui with `--base-path /ldap`.
+
+ingress-nginx, for the Service in [Kubernetes](#kubernetes):
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ldapui
+  namespace: ldapui
+  annotations:
+    # Apply, New child and Clone send up to 8 MiB; the default is 1m.
+    nginx.ingress.kubernetes.io/proxy-body-size: 8m
+    # An Apply may run 4 minutes; the default is 60 seconds.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    # No rewrite-target. For a sub-path, set LDAPUI_BASE_PATH to it.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ldapui.corp.example]
+      secretName: ldapui-tls
+  rules:
+    - host: ldapui.corp.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: ldapui, port: {name: http}}
+```
+
+### Kubernetes
+
+The manifest below runs ldapui under the `restricted` Pod Security Standard
+(`runAsNonRoot`, `readOnlyRootFilesystem`, all capabilities dropped,
+`seccompProfile: RuntimeDefault`), with the token and a bind password in a
+Secret, `connections.yaml` and the directory's CA in a ConfigMap, a PVC for
+UI-saved profiles, and a NetworkPolicy that lets in only the ingress
+controller (ingress-nginx here: adjust the labels to yours). For fixed
+profiles only, uncomment `LDAPUI_DATA_DIR` and drop the PVC, the `data`
+volume and its mount. Pin the image by digest in production.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ldapui
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+# The placeholders fail closed: ldapui does not start until auth-token holds
+# a real token. Better, create the Secret with
+#   kubectl -n ldapui create secret generic ldapui \
+#     --from-literal=auth-token="$(openssl rand -hex 32)" \
+#     --from-file=corp-ad=./corp-ad.password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ldapui
+  namespace: ldapui
+type: Opaque
+stringData:
+  auth-token: "<openssl rand -hex 32>"
+  corp-ad: "<bind password of cn=reader>"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ldapui-connections
+  namespace: ldapui
+data:
+  connections.yaml: |
+    connections:
+      - name: corp-ad
+        url: ldaps://dc1.corp.example:636
+        baseDN: dc=corp,dc=example
+        bindDN: cn=reader,ou=svc,dc=corp,dc=example
+        # Read at every connect: a rotated Secret is used without a restart.
+        passwordFile: /etc/ldapui/secrets/corp-ad
+        caFile: /etc/ldapui/config/corp-ca.pem
+        environment: prod
+  corp-ca.pem: |
+    -----BEGIN CERTIFICATE-----
+    (the directory's CA certificate)
+    -----END CERTIFICATE-----
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ldapui-data
+  namespace: ldapui
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ldapui
+  namespace: ldapui
+spec:
+  # Sessions live in memory and the data dir has one writer: one replica,
+  # and Recreate, so that two pods never run at once.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: ldapui}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: ldapui}
+      annotations:
+        # connections.yaml and the token are read at startup: bump this (or
+        # use a Kustomize configMapGenerator or a Helm checksum) to roll out
+        # a change.
+        ldapui/config-revision: "1"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # ldapui waits up to 25 s for running requests after SIGTERM.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Makes a root-owned volume (EBS, PD, Azure Disk) writable for 65532.
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: ldapui
+          image: ghcr.io/cicdteam/ldap-ui:<version>
+          args: [--config=/etc/ldapui/config/connections.yaml]
+          env:
+            - {name: LDAPUI_AUTH_TOKEN_FILE, value: /etc/ldapui/secrets/auth-token}
+            # The host name users open; ldapui answers 403 to any other Host.
+            - {name: LDAPUI_ALLOWED_HOSTS, value: ldapui.corp.example}
+            - {name: LDAPUI_SECURE_COOKIES, value: "true"}
+            # About 80% of the memory limit: Go does not read the limit.
+            - {name: GOMEMLIMIT, value: 400MiB}
+            # Fixed profiles only: uncomment this, and drop the PVC and the
+            # data volume and its mount.
+            # - {name: LDAPUI_DATA_DIR, value: ""}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Directories, not subPath: a subPath file never sees an update.
+            - {name: config, mountPath: /etc/ldapui/config, readOnly: true}
+            - {name: secrets, mountPath: /etc/ldapui/secrets, readOnly: true}
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: config
+          configMap: {name: ldapui-connections}
+        - name: secrets
+          # 0440 is enough: fsGroup gives the group read access.
+          secret: {secretName: ldapui, defaultMode: 0440}
+        - name: data
+          persistentVolumeClaim: {claimName: ldapui-data}
+---
+# Only the ingress controller reaches ldapui. The kubelet's probes come from
+# the node, which a NetworkPolicy does not block.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ldapui
+  namespace: ldapui
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: ldapui}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: ingress-nginx}
+      ports:
+        - {protocol: TCP, port: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldapui
+  namespace: ldapui
+spec:
+  selector: {app.kubernetes.io/name: ldapui}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+```
+
+### systemd
+
+On a Linux server, run ldapui as a service on loopback behind a reverse
+proxy on the same host, such as the nginx example above. The binary is
+static: `make build` builds `bin/ldapui`, or copy `/ldapui` out of the
+image. The unit runs it as a dynamic user in a sandbox, with saved
+connections in `/var/lib/ldapui` (0700); for fixed profiles only, change
+its `LDAPUI_DATA_DIR` line to `Environment=LDAPUI_DATA_DIR=`.
+
+```ini
+# /etc/systemd/system/ldapui.service
+# Setup:
+#   install -m 0755 ldapui /usr/local/bin/ldapui
+#   groupadd --system ldapui-secrets
+#   install -d -m 0755 /etc/ldapui
+#   install -m 0644 connections.yaml /etc/ldapui/      # no secrets in it
+#   install -m 0600 ldapui.env /etc/ldapui/            # root only; systemd reads it
+#   install -d -m 0750 -g ldapui-secrets /etc/ldapui/secrets
+#   install -m 0640 -g ldapui-secrets corp-ad /etc/ldapui/secrets/   # passwordFile
+[Unit]
+Description=ldapui, a web UI for LDAP directories
+Documentation=https://github.com/cicdteam/ldap-ui
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/ldapui --config=/etc/ldapui/connections.yaml
+Environment=LDAPUI_LISTEN=127.0.0.1:8080
+Environment=LDAPUI_DATA_DIR=%S/ldapui
+Environment=LDAPUI_SECURE_COOKIES=true
+# About 80% of MemoryMax: the Go runtime does not read MemoryMax by itself.
+Environment=GOMEMLIMIT=400MiB
+# LDAPUI_AUTH_TOKEN, LDAPUI_ALLOWED_HOSTS and the passwordEnv variables.
+EnvironmentFile=/etc/ldapui/ldapui.env
+# Lets the service read the passwordFile files under /etc/ldapui/secrets.
+SupplementaryGroups=ldapui-secrets
+
+DynamicUser=yes
+StateDirectory=ldapui
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=2s
+# ldapui waits up to 25 s for running requests after SIGTERM.
+TimeoutStopSec=30s
+MemoryMax=512M
+TasksMax=256
+# Set here: the syscall filter below stops Go from raising the soft limit.
+LimitNOFILE=8192
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+PrivateIPC=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+DevicePolicy=closed
+KeyringMode=private
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/ldapui/ldapui.env` (root, 0600):
+
+```sh
+LDAPUI_AUTH_TOKEN=<openssl rand -hex 32>
+LDAPUI_ALLOWED_HOSTS=ldapui.corp.example
+```
+
+Without the token, ldapui generates one at every start, and journald keeps
+the login link. Passwords for `passwordFile` profiles go in
+`/etc/ldapui/secrets/` (`root:ldapui-secrets`, 0640).
+
+## Operations
+
+- **Logs** go to stdout, one `key=value` line per event (see [Logs and
+  accountability](#logs-and-accountability)): `kubectl -n ldapui logs
+  deploy/ldapui`, or `journalctl -u ldapui` for the systemd unit. A startup
+  error is one line on stderr that starts with `ldapui:`, and the process
+  exits with status 1; for a pod in CrashLoopBackOff, add `--previous` to
+  `kubectl logs`.
+- **A broken `profiles.json`** is moved to `profiles.json.bad` next to it
+  (`/data` in the image, `/var/lib/ldapui` with the unit), and ldapui starts
+  without saved profiles and logs `profiles file was invalid and was moved
+  aside` with its `path` and `error`. The next broken file replaces it. To
+  put a fixed copy back, stop ldapui first, because it rewrites the file
+  from its own list at the next save. In Kubernetes: scale the Deployment to
+  0, mount the PVC in a helper pod with the same `securityContext` (on the
+  same node for a ReadWriteOnce volume), copy the file in with `kubectl cp`,
+  delete the helper and scale back to 1.
+- **Debugging** the image, which has no shell: attach a debug container
+  that runs as the app's user. `--custom` sets that user even when the pod
+  sets none, because the `restricted` policy refuses busybox's root.
+
+  ```sh
+  echo '{"securityContext":{"runAsUser":65532,"runAsGroup":65532}}' > debug.json
+  kubectl -n ldapui debug -it <pod> --profile=restricted --target=ldapui \
+    --image=busybox --custom=debug.json
+  ```
+
+  The app's files are under `/proc/1/root/` there, for example
+  `/proc/1/root/data/profiles.json.bad`.
 
 ## Development
 

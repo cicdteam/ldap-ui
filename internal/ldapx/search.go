@@ -9,27 +9,61 @@ import (
 	"fmt"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/cicdteam/ldap-ui/internal/schema"
 )
+
+// Caps on one search response, so that a server cannot make ldapui hold an
+// unbounded result in memory. A response past one ends early as truncated.
+const (
+	maxResponseEntries = 5000
+	// maxResponseBytes counts attribute value bytes.
+	maxResponseBytes = 64 << 20
+)
+
+func init() {
+	// go-ldap reads each message whole; the default lets one claim 2 GiB.
+	// One entry needs no more than a whole response may carry.
+	ber.MaxPacketLengthBytes = maxResponseBytes
+}
 
 type result struct {
 	entries   []*ldap.Entry
 	referrals []string
 	controls  []ldap.Control
 	truncated bool
+	// capped is set when a response cap stopped the reading: the server
+	// may still be sending the rest, which go-ldap drops.
+	capped bool
 }
 
 // searchOnce sends one search request and collects its results. Size and
 // time limit errors are not failures: they set truncated and keep what
-// arrived. A connection that is closing yields an ErrorNetwork error so that
-// read can redial, and so does a lost one (see networkError).
+// arrived, and so does a response past maxResponseEntries entries or
+// maxResponseBytes value bytes (which also sets capped). A connection that
+// is closing yields an ErrorNetwork error so that read can redial, and so
+// does a lost one (see networkError).
 func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*result, error) {
-	resp := lc.SearchAsync(ctx, req, 64)
+	// Cancelling sctx on a cap stops go-ldap's reading for this search;
+	// only ctx ending is an error.
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// A small buffer: go-ldap parses entries into it ahead of the cap check
+	// below, and each one may be a packet of up to maxResponseBytes, so the
+	// buffer bounds what is held beyond the cap.
+	resp := lc.SearchAsync(sctx, req, 4)
 	res := &result{}
+	size := 0
 	for resp.Next() {
 		if e := resp.Entry(); e != nil {
+			n := valueBytes(e)
+			if len(res.entries) == maxResponseEntries || size+n > maxResponseBytes {
+				res.truncated, res.capped = true, true
+				break
+			}
+			size += n
 			res.entries = append(res.entries, e)
 		}
 		if r := resp.Referral(); r != "" {
@@ -38,6 +72,19 @@ func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*r
 		if ctls := resp.Controls(); len(ctls) > 0 {
 			res.controls = ctls
 		}
+	}
+	if res.capped {
+		// go-ldap's goroutine for this search returns on the cancel and
+		// finishes the message before the results close, so once they do,
+		// go-ldap no longer tracks it: it reads and drops the rest of the
+		// response packet by packet and lc stays usable.
+		// ponytail: go-ldap sends no Abandon, so the server still sends
+		// the rest and later requests on lc queue behind it; send an
+		// Abandon if go-ldap ever exposes the message ID.
+		cancel()
+		for resp.Next() {
+		}
+		return res, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -55,6 +102,16 @@ func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*r
 	return res, nil
 }
 
+func valueBytes(e *ldap.Entry) int {
+	n := 0
+	for _, a := range e.Attributes {
+		for _, v := range a.ByteValues {
+			n += len(v)
+		}
+	}
+	return n
+}
+
 // searchTimeLimit is the server-side time limit in seconds for a client
 // timeout of d. It stays below d so that a slow search ends with what was
 // found so far (timeLimitExceeded, reported as truncated) rather than with
@@ -66,11 +123,22 @@ func searchTimeLimit(d time.Duration) int {
 // Search runs one page of a search. On servers with paging, Page.Cursor is
 // an opaque ID for the next page. It works once and fails with
 // ErrCursorExpired after cursorIdle without use or when more than
-// maxCursors listings are open on c.
+// maxCursors listings are open on c. A filter that matches on a secret
+// attribute's value fails with ErrSecretFilter before the search is sent.
 func (c *Conn) Search(ctx context.Context, r SearchRequest) (Page, error) {
 	req, err := buildRequest(r, c.info.Paging)
 	if err != nil {
 		return Page{}, err
+	}
+	s := c.schemaOrEmpty(ctx)
+	// ponytail: compiles the filter a second time after buildRequest;
+	// maxFilterLength bounds the cost.
+	attr, err := secretFilterAttr(req.Filter, s)
+	if err != nil {
+		return Page{}, err
+	}
+	if attr != "" {
+		return Page{}, fmt.Errorf("%w: %s", ErrSecretFilter, attr)
 	}
 	req.TimeLimit = searchTimeLimit(c.prof.SearchTimeout)
 	c.expireCursors()
@@ -88,7 +156,6 @@ func (c *Conn) Search(ctx context.Context, r SearchRequest) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	s := c.schemaOrEmpty(ctx)
 	page := Page{Entries: make([]Entry, 0, len(res.entries)), Cursor: cursor, Truncated: res.truncated, Referrals: res.referrals}
 	for _, e := range res.entries {
 		page.Entries = append(page.Entries, convertEntry(e, s, c.info.ActiveDirectory))
@@ -140,6 +207,14 @@ func (c *Conn) pagedSearch(ctx context.Context, id string, req *ldap.SearchReque
 			}
 			return nil, "", err
 		}
+	}
+	if res.capped {
+		// The rest of a half-read page cannot be fetched, so the listing
+		// ends here, truncated. The server is still sending that page and
+		// keeps its paged state for a cookie nobody reads; lc is this
+		// listing's own, so close it rather than share it.
+		_ = lc.Close()
+		return res, "", nil
 	}
 	ctl, ok := ldap.FindControl(res.controls, ldap.ControlTypePaging).(*ldap.ControlPaging)
 	if !ok || len(ctl.Cookie) == 0 {
