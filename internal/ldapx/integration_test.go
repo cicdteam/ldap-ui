@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	openLDAPImage = "bitnamilegacy/openldap:2.6.6"
+	openLDAPImage = "bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985"
 	testBase      = "dc=example,dc=org"
 	testPeople    = "ou=people," + testBase
 	testGroups    = "ou=groups," + testBase

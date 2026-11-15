@@ -4,7 +4,7 @@
 name: ldapui-e2e
 services:
   openldap:
-    image: bitnamilegacy/openldap:2.6.6
+    image: bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985
     ports:
       - "127.0.0.1:1390:1389"
     environment:
