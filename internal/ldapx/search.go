@@ -50,7 +50,10 @@ func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*r
 	// only ctx ending is an error.
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	resp := lc.SearchAsync(sctx, req, 64)
+	// A small buffer: go-ldap parses entries into it ahead of the cap check
+	// below, and each one may be a packet of up to maxResponseBytes, so the
+	// buffer bounds what is held beyond the cap.
+	resp := lc.SearchAsync(sctx, req, 4)
 	res := &result{}
 	size := 0
 	for resp.Next() {

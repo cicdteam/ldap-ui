@@ -418,10 +418,13 @@ ends all sessions, and users connect again.
   logs everyone out, and is printed only in the log. The token file is read
   at startup: restart after rotating it.
 - **Memory**: ldapui uses about 10 MiB, plus about 55 MiB for each Apply of
-  4 MiB of photos in flight. Set a memory limit and `GOMEMLIMIT` to about
-  80% of it, for example 512Mi and 400MiB. Go does not read the container's
-  limit by itself, and without `GOMEMLIMIT` a burst of uploads gets the
-  process OOM-killed, which ends everyone's session.
+  4 MiB of photos in flight. A large read holds up to 64 MiB of values per
+  response, several times over while it is converted and encoded. Set a memory
+  limit and `GOMEMLIMIT` to about 80% of it, for example 512Mi and 400MiB.
+  Go does not read the container's limit by itself. `GOMEMLIMIT` makes the
+  garbage collector work harder near the limit, which makes an OOM kill
+  less likely, but it does not prevent one when live memory exceeds the
+  limit. An OOM kill ends everyone's session.
 
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
@@ -447,9 +450,9 @@ Set up the proxy and ldapui together:
 - **Body size and read timeout**: Apply, New child and Clone send up to
   8 MiB, and an Apply may run 4 minutes; ldapui cuts off any request after
   5 minutes. nginx and ingress-nginx allow 1 MiB and wait 60 seconds by default: a
-  bigger body gets 413, and a longer Apply gets 504 from the proxy while
-  ldapui finishes it, so the browser does not learn which entries were
-  written.
+  bigger body gets 413, and a longer Apply gets 504 from the proxy. When the
+  proxy closes the connection, ldapui stops before the next entry, so some
+  entries are written and the browser does not learn which.
 - **`Origin` and `Sec-Fetch-Site`** reach ldapui as the browser sent them.
   Its cross-origin check reads them, and a proxy that clears or rewrites
   them turns the check off.

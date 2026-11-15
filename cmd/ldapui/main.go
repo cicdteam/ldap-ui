@@ -363,7 +363,8 @@ func serve(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Du
 		defer cancel()
 		err := srv.Shutdown(shutdownCtx)
 		if errors.Is(err, context.DeadlineExceeded) {
-			err = srv.Close()
+			_ = srv.Close() // cutting the slow connections is no failure either
+			err = nil
 			logger.Warn("shutdown drain timed out", "after", drain)
 		}
 		shutdown <- err
