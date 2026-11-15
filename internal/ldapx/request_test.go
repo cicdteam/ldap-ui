@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/cicdteam/ldap-ui/internal/schema"
 )
 
 func pagingOf(t *testing.T, req *ldap.SearchRequest) *ldap.ControlPaging {
@@ -89,6 +91,35 @@ func TestBuildRequest(t *testing.T) {
 		}
 		if got := ldap.IsErrorWithCode(err, ldap.ErrorFilterCompile); got != tc.wantFilterErr {
 			t.Errorf("%s: filter compile error = %v (%v), want %v", tc.name, got, err, tc.wantFilterErr)
+		}
+	}
+}
+
+func TestSecretFilterAttr(t *testing.T) {
+	tests := []struct {
+		filter string
+		want   string
+	}{
+		{filter: "(userPassword=x*)", want: "userPassword"},
+		{filter: "(&(uid=a)(|(unicodePwd=x)))", want: "unicodePwd"},
+		{filter: "(!(2.5.4.35>=a))", want: "2.5.4.35"},
+		{filter: "(userPassword~=a)", want: "userPassword"},
+		{filter: "(userPassword:caseExactMatch:=a)", want: "userPassword"},
+		// Without a type the rule applies to every attribute it fits, so
+		// (:octetStringMatch:=guess) tests userPassword on OpenLDAP.
+		{filter: "(:octetStringMatch:=a)", want: typelessMatch},
+		{filter: "(&(cn=a)(:dn:2.5.13.5:=a))", want: typelessMatch},
+		// Presence is allowed: the inspector shows the masked value count.
+		{filter: "(userPassword=*)", want: ""},
+		{filter: "(cn=userPassword)", want: ""},
+		{filter: "(cn:caseExactMatch:=a)", want: ""},
+		{filter: "(uid=*)", want: ""},
+	}
+	s := schema.Parse(nil, nil, nil)
+	for _, tc := range tests {
+		got, err := secretFilterAttr(tc.filter, s)
+		if err != nil || got != tc.want {
+			t.Errorf("secretFilterAttr(%q) = %q, %v, want %q, nil", tc.filter, got, err, tc.want)
 		}
 	}
 }

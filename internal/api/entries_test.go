@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
@@ -420,21 +419,45 @@ func TestSetPasswordOnActiveDirectory(t *testing.T) {
 	}
 }
 
-// TestValidateAddManyAttributes bounds validateAdd on an add with 50 000
-// attributes, which an 8 MiB body allows: a scan per attribute made it
-// quadratic.
-func TestValidateAddManyAttributes(t *testing.T) {
-	attrs := []ldapx.TextAttribute{{Name: "objectClass", Values: []string{"top"}}}
-	for i := range 50000 {
-		attrs = append(attrs, ldapx.TextAttribute{Name: "a" + strconv.Itoa(i), Values: []string{"v"}})
+func TestValidateAddCaps(t *testing.T) {
+	// attrs is objectClass plus n-1 attributes of one value each.
+	attrs := func(n int) []ldapx.TextAttribute {
+		as := []ldapx.TextAttribute{{Name: "objectClass", Values: []string{"top"}}}
+		for i := range n - 1 {
+			as = append(as, ldapx.TextAttribute{Name: "a" + strconv.Itoa(i), Values: []string{"v"}})
+		}
+		return as
 	}
-	req := addRequest{DN: "cn=n,dc=example,dc=org", Attributes: attrs}
-	start := time.Now()
-	e, ok := validateAdd(req, schema.Parse(nil, nil, nil))
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("validateAdd(50000 attributes) took %v, want at most 5s", elapsed)
+	// values is objectClass plus description with n-1 values.
+	values := func(n int) []ldapx.TextAttribute {
+		d := ldapx.TextAttribute{Name: "description"}
+		for i := range n - 1 {
+			d.Values = append(d.Values, "v"+strconv.Itoa(i))
+		}
+		return []ldapx.TextAttribute{{Name: "objectClass", Values: []string{"top"}}, d}
 	}
-	if !ok {
-		t.Errorf("validateAdd(50000 attributes) = %+v, want OK", e)
+	tests := []struct {
+		name  string
+		attrs []ldapx.TextAttribute
+		// wantCap is the cap the refusal names, 0 when the add passes.
+		wantCap int
+	}{
+		{name: "1000 attributes", attrs: attrs(1000)},
+		{name: "1001 attributes", attrs: attrs(1001), wantCap: 1000},
+		{name: "10000 values", attrs: values(10000)},
+		{name: "10001 values", attrs: values(10001), wantCap: 10000},
+	}
+	for _, tc := range tests {
+		req := addRequest{DN: "cn=n,dc=example,dc=org", Attributes: tc.attrs}
+		e, ok := validateAdd(req, schema.Parse(nil, nil, nil))
+		if tc.wantCap == 0 {
+			if !ok {
+				t.Errorf("%s: validateAdd() = %+v, want OK", tc.name, e)
+			}
+			continue
+		}
+		if ok || e.Code != "request_too_large" || !strings.Contains(e.Message, strconv.Itoa(tc.wantCap)) {
+			t.Errorf("%s: validateAdd() = %+v, %v, want request_too_large naming %d", tc.name, e, ok, tc.wantCap)
+		}
 	}
 }

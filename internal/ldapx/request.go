@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
+
+	"github.com/cicdteam/ldap-ui/internal/schema"
 )
 
 // Search scopes accepted in SearchRequest.Scope. Empty means ScopeSub.
@@ -29,6 +32,10 @@ const (
 
 // ErrInvalidRequest marks search parameters rejected before reaching the server.
 var ErrInvalidRequest = errors.New("invalid request")
+
+// ErrSecretFilter marks a filter that matches on the value of a secret
+// attribute: its results would let a search guess the secret.
+var ErrSecretFilter = errors.New("filter tests a secret attribute")
 
 // SearchRequest describes one page of a search. Cursor is Page.Cursor from
 // the previous page of the same search on the same Conn; the other fields
@@ -126,4 +133,56 @@ func filterDepth(f string) int {
 		}
 	}
 	return deepest
+}
+
+// typelessMatch is what secretFilterAttr names for an extensible match
+// without an attribute type, such as (:octetStringMatch:=guess): the server
+// applies its rule to every attribute it fits, secret ones included.
+const typelessMatch = "an extensible match without an attribute type"
+
+// secretFilterAttr is the first secret attribute that filter matches on by
+// value (equality, substrings, ordering, approximate or extensible), or "".
+// Presence, as in (userPassword=*), is allowed: the inspector shows how many
+// values are masked anyway. An extensible match without a type is named
+// typelessMatch.
+func secretFilterAttr(filter string, s *schema.Schema) (string, error) {
+	p, err := ldap.CompileFilter(filter)
+	if err != nil {
+		return "", err
+	}
+	return secretPacketAttr(p, s), nil
+}
+
+// secretPacketAttr is secretFilterAttr on a compiled filter.
+func secretPacketAttr(p *ber.Packet, s *schema.Schema) string {
+	switch p.Tag {
+	case ldap.FilterAnd, ldap.FilterOr, ldap.FilterNot:
+		for _, c := range p.Children {
+			if a := secretPacketAttr(c, s); a != "" {
+				return a
+			}
+		}
+	case ldap.FilterEqualityMatch, ldap.FilterSubstrings, ldap.FilterGreaterOrEqual,
+		ldap.FilterLessOrEqual, ldap.FilterApproxMatch:
+		if len(p.Children) == 0 {
+			return ""
+		}
+		if a := p.Children[0].Data.String(); IsSecret(a, s) {
+			return a
+		}
+	case ldap.FilterExtensibleMatch:
+		for _, c := range p.Children {
+			if c.Tag == ldap.MatchingRuleAssertionType {
+				if IsSecret(c.Data.String(), s) {
+					return c.Data.String()
+				}
+				return ""
+			}
+		}
+		// ponytail: refuses every typeless match, also one whose rule fits
+		// no secret attribute; compare the rule with the secret types'
+		// rules in the schema if someone needs those.
+		return typelessMatch
+	}
+	return ""
 }

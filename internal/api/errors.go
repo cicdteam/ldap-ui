@@ -72,6 +72,8 @@ func errorResponse(err error) (int, apiError) {
 		return http.StatusGone, apiError{Code: "cursor_expired", Message: "the listing expired, restart it from the first page"}
 	case errors.Is(err, ldapx.ErrInvalidRequest):
 		return http.StatusBadRequest, apiError{Code: "bad_request", Message: err.Error()}
+	case errors.Is(err, ldapx.ErrSecretFilter):
+		return http.StatusBadRequest, apiError{Code: "secret_filter", Message: err.Error()}
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, apiError{Code: "timeout", Message: "the LDAP server did not answer in time"}
 	case errors.Is(err, context.Canceled):

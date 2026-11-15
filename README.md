@@ -68,7 +68,12 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   from the schema and inline errors, or a visual builder; base DN, scope and
   columns sit next to it. Results load 500 at a time; sorting by column and
   export to CSV or LDIF act on the rows loaded so far. Recent and saved
-  searches are kept per connection in the browser.
+  searches are kept per connection in the browser. A filter can test a
+  password or secret attribute for presence (`(userPassword=*)`) but not
+  match on its values: equality, substring, ordering, approximate and
+  extensible matches on one, and extensible matches without an attribute
+  type (`(:octetStringMatch:=x)`, which test every attribute), are refused
+  with 400 `secret_filter`.
 - **Inspector** (right): attributes grouped as MUST, MAY and operational, with
   decoded AD values (SIDs, GUIDs, dates, `userAccountControl` flags), clickable
   DNs, photos, a Download button on binary values (on any profile), and a
@@ -177,10 +182,13 @@ on non-Latin keyboard layouts.
   button; replacing one is a delete and an upload. Certificates are written
   as `userCertificate;binary` (RFC 4522). Apply, New child and Clone send at
   most 8 MiB in one request: a reverse proxy in front of ldapui must allow
-  that body size. Where the server cannot delete or add one value
-  (`jpegPhoto` has no equality rule), Apply reads the attribute and writes
-  back the values it will hold: a value someone else adds between the two is
-  lost.
+  that body size. One Apply also takes at most 1000 entries and 1000 changes
+  per entry, one New child or Clone at most 1000 attributes, and either at
+  most 10 000 values in all; a bigger request is refused with 400
+  `request_too_large`, naming the limit. Where the server cannot delete or
+  add one value (`jpegPhoto` has no equality rule), Apply reads the
+  attribute and writes back the values it will hold: a value someone else
+  adds between the two is lost.
 - **Attributes with options** (`cn;lang-de`, `description;lang-ru`) are
   attributes of their own, edited apart from `cn`. "+ attribute" takes a name
   with options (letters, digits and hyphens; not `range=`), suggests the

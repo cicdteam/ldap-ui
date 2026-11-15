@@ -161,8 +161,16 @@ func validateAdd(req addRequest, sch *schema.Schema) (apiError, bool) {
 	if len(req.Attributes) == 0 {
 		return bad("", "a new entry needs attributes")
 	}
+	if len(req.Attributes) > maxAddAttributes {
+		return tooLarge(fmt.Sprintf("a new entry takes at most %d attributes", maxAddAttributes))
+	}
+	values := 0
 	seen := make(map[string]bool, len(req.Attributes))
 	for _, a := range req.Attributes {
+		values += len(a.Values)
+		if values > maxRequestValues {
+			return tooManyValues()
+		}
 		key := foldKey(a.Name)
 		switch {
 		case a.Name == "":

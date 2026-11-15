@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
+	"github.com/cicdteam/ldap-ui/internal/schema"
 )
 
 const twoEntries = `{"entries":[
@@ -200,6 +201,56 @@ func TestApplyRefusals(t *testing.T) {
 				t.Errorf("modified = %v, want none", env.dir.modified)
 			}
 		})
+	}
+}
+
+// manyChanges is an entry with n changes of one value each, or one change
+// of n values when oneChange is set.
+func manyChanges(dn string, n int, oneChange bool) applyEntry {
+	e := applyEntry{DN: dn}
+	for i := range n {
+		v := "v" + strconv.Itoa(i)
+		if oneChange && i > 0 {
+			e.Changes[0].Values = append(e.Changes[0].Values, v)
+			continue
+		}
+		e.Changes = append(e.Changes, ldapx.Change{Op: "add", Attr: "description", Values: []string{v}})
+	}
+	return e
+}
+
+func TestValidateApplyCaps(t *testing.T) {
+	entries := func(n int) []applyEntry {
+		es := make([]applyEntry, n)
+		for i := range es {
+			es[i] = manyChanges("uid=u"+strconv.Itoa(i)+",dc=example,dc=org", 1, false)
+		}
+		return es
+	}
+	tests := []struct {
+		name    string
+		entries []applyEntry
+		// wantCap is the cap the refusal names, 0 when the request passes.
+		wantCap int
+	}{
+		{name: "1000 entries", entries: entries(1000)},
+		{name: "1001 entries", entries: entries(1001), wantCap: 1000},
+		{name: "1000 changes", entries: []applyEntry{manyChanges("uid=a", 1000, false)}},
+		{name: "1001 changes", entries: []applyEntry{manyChanges("uid=a", 1001, false)}, wantCap: 1000},
+		{name: "10000 values", entries: []applyEntry{manyChanges("uid=a", 5000, true), manyChanges("uid=b", 5000, true)}},
+		{name: "10001 values", entries: []applyEntry{manyChanges("uid=a", 5000, true), manyChanges("uid=b", 5001, true)}, wantCap: 10000},
+	}
+	for _, tc := range tests {
+		e, ok := validateApply(applyRequest{Entries: tc.entries}, schema.Parse(nil, nil, nil))
+		if tc.wantCap == 0 {
+			if !ok {
+				t.Errorf("%s: validateApply() = %+v, want OK", tc.name, e)
+			}
+			continue
+		}
+		if ok || e.Code != "request_too_large" || !strings.Contains(e.Message, strconv.Itoa(tc.wantCap)) {
+			t.Errorf("%s: validateApply() = %+v, %v, want request_too_large naming %d", tc.name, e, ok, tc.wantCap)
+		}
 	}
 }
 

@@ -66,11 +66,22 @@ func searchTimeLimit(d time.Duration) int {
 // Search runs one page of a search. On servers with paging, Page.Cursor is
 // an opaque ID for the next page. It works once and fails with
 // ErrCursorExpired after cursorIdle without use or when more than
-// maxCursors listings are open on c.
+// maxCursors listings are open on c. A filter that matches on a secret
+// attribute's value fails with ErrSecretFilter before the search is sent.
 func (c *Conn) Search(ctx context.Context, r SearchRequest) (Page, error) {
 	req, err := buildRequest(r, c.info.Paging)
 	if err != nil {
 		return Page{}, err
+	}
+	s := c.schemaOrEmpty(ctx)
+	// ponytail: compiles the filter a second time after buildRequest;
+	// maxFilterLength bounds the cost.
+	attr, err := secretFilterAttr(req.Filter, s)
+	if err != nil {
+		return Page{}, err
+	}
+	if attr != "" {
+		return Page{}, fmt.Errorf("%w: %s", ErrSecretFilter, attr)
 	}
 	req.TimeLimit = searchTimeLimit(c.prof.SearchTimeout)
 	c.expireCursors()
@@ -88,7 +99,6 @@ func (c *Conn) Search(ctx context.Context, r SearchRequest) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	s := c.schemaOrEmpty(ctx)
 	page := Page{Entries: make([]Entry, 0, len(res.entries)), Cursor: cursor, Truncated: res.truncated, Referrals: res.referrals}
 	for _, e := range res.entries {
 		page.Entries = append(page.Entries, convertEntry(e, s, c.info.ActiveDirectory))

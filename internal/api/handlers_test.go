@@ -378,6 +378,15 @@ func TestSearchBadFilterIs400(t *testing.T) {
 	}
 }
 
+func TestSearchRejectsSecretFilter(t *testing.T) {
+	env := connected(t)
+	env.dir.err = fmt.Errorf("%w: userPassword", ldapx.ErrSecretFilter)
+	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(userPassword=x*)"}`)
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "secret_filter" {
+		t.Errorf("search secret filter = %d %s, want 400 secret_filter", rec.Code, rec.Body)
+	}
+}
+
 func TestMembership(t *testing.T) {
 	env := connected(t)
 	rec := env.do(t, http.MethodGet, "/api/c/dev/memberof?dn=uid%3Da&nested=true", "")

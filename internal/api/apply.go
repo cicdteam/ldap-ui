@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -14,6 +15,16 @@ import (
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
 	"github.com/cicdteam/ldap-ui/internal/schema"
+)
+
+// Caps on one write request, which keep an Apply or an add a bounded amount
+// of LDAP work. Values count across all entries and changes of an Apply and
+// all attributes of an add.
+const (
+	maxApplyEntries    = 1000
+	maxChangesPerEntry = 1000
+	maxAddAttributes   = 1000
+	maxRequestValues   = 10000
 )
 
 // confirmation is part of every write request body.
@@ -101,6 +112,16 @@ func bad(attr, msg string) (apiError, bool) {
 	return apiError{Code: "bad_request", Message: msg, Attribute: attr}, false
 }
 
+// tooLarge is a 400 request_too_large; msg names the cap.
+func tooLarge(msg string) (apiError, bool) {
+	return apiError{Code: "request_too_large", Message: msg}, false
+}
+
+// tooManyValues is the refusal of a write with over maxRequestValues values.
+func tooManyValues() (apiError, bool) {
+	return tooLarge(fmt.Sprintf("a request holds at most %d values", maxRequestValues))
+}
+
 // apply runs a batch of modifies in order, one atomic LDAP modify per entry,
 // and stops at the first failure, or before the next entry once the request
 // ends (its deadline, or the client going away). A partial result is a 200:
@@ -159,6 +180,10 @@ func validateApply(req applyRequest, sch *schema.Schema) (apiError, bool) {
 	if len(req.Entries) == 0 {
 		return bad("", "no entries to change")
 	}
+	if len(req.Entries) > maxApplyEntries {
+		return tooLarge(fmt.Sprintf("a request changes at most %d entries", maxApplyEntries))
+	}
+	values := 0
 	for _, e := range req.Entries {
 		if strings.TrimSpace(e.DN) == "" {
 			return bad("", "an entry has no DN")
@@ -166,7 +191,14 @@ func validateApply(req applyRequest, sch *schema.Schema) (apiError, bool) {
 		if len(e.Changes) == 0 {
 			return bad("", "entry "+e.DN+" has no changes")
 		}
+		if len(e.Changes) > maxChangesPerEntry {
+			return tooLarge(fmt.Sprintf("entry %s has more than %d changes", e.DN, maxChangesPerEntry))
+		}
 		for _, c := range e.Changes {
+			values += len(c.Values)
+			if values > maxRequestValues {
+				return tooManyValues()
+			}
 			switch {
 			case c.Attr == "":
 				return bad("", "a change in "+e.DN+" has no attribute")

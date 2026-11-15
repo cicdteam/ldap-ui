@@ -258,6 +258,19 @@ func TestSearchCanceled(t *testing.T) {
 	}
 }
 
+// TestSearchSecretFilter checks that Conn.Search refuses a filter matching
+// on a secret value before the server sees it, and lets presence through.
+func TestSearchSecretFilter(t *testing.T) {
+	c := dialAdmin(t)
+	_, err := c.Search(context.Background(), SearchRequest{BaseDN: testBase, Filter: "(userPassword=x*)"})
+	if !errors.Is(err, ErrSecretFilter) {
+		t.Errorf("Search((userPassword=x*)) error = %v, want ErrSecretFilter", err)
+	}
+	if _, err := c.Search(context.Background(), SearchRequest{BaseDN: testBase, Filter: "(userPassword=*)"}); err != nil {
+		t.Errorf("Search((userPassword=*)) error = %v, want nil", err)
+	}
+}
+
 func TestEntry(t *testing.T) {
 	e, err := dialAdmin(t).Entry(context.Background(), userDN(0))
 	if err != nil {
