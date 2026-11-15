@@ -320,6 +320,22 @@ connections: one more connect fails with 409 `too_many_connections` until one
 is disconnected. The server holds at most 1000 sessions; one more closes the
 connections of the least recently used.
 
+Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
+within 60 seconds refuse further connects as that DN with 429
+`too_many_attempts` and a `Retry-After` header in seconds, until 60 seconds
+after the first of them. A successful connect clears the count; other
+failures, such as a server that cannot be reached, do not count. The limit
+is per account: it is keyed by the bind DN, ignoring case, not by client
+address, since behind a proxy every client has the same address. It applies
+to every connect with a typed password, on a `bindDN` profile as on a
+`bindDNTemplate` one. A connect with the configured password (`passwordEnv`
+or `passwordFile`) and an anonymous one are never refused, so a wrong service
+password cannot lock its DN for everyone. In return, anyone who can reach
+ldapui can keep one account from connecting through ldapui, a minute at a
+time; the directory's own lockout policy is separate and unaffected. The
+counts are kept in memory, per process, like sessions, for at most 10,000
+bind DNs; past that the oldest are dropped.
+
 The server runs at most 64 API requests at once, and at most 4 of one
 session; the others wait their turn. A request that waits more than 10
 seconds gets 503 `busy` with `Retry-After: 1`; the UI retries a read that
@@ -366,6 +382,7 @@ The lines:
 | Message | Fields |
 |---|---|
 | `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
+| `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts` |
 | `disconnected` | `profile`, `bindDN` |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
 | `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
@@ -495,7 +512,9 @@ A connect to such a profile goes like this:
    anonymous, so it is refused here.
 3. ldapui binds as the template with the username filled in, for example
    `uid=alice,ou=people,dc=example,dc=org`. A wrong password is 401
-   `invalid_credentials`, as on any profile.
+   `invalid_credentials`, as on any profile. Five of them in 60 seconds
+   refuse that DN with 429 `too_many_attempts` until the 60 seconds are
+   over (see [Flags](#flags)).
 4. The connection's lines in the log (`connected`, `connect failed`, every
    write and `disconnected`) carry that DN as `bindDN`.
 
@@ -531,6 +550,7 @@ address outside `--trusted-proxies`, cannot connect to the profile.
 | `identity_mismatch` | 403 | the username is not the one the identity maps to |
 | `invalid_username` | 400 | the username does not match the pattern above |
 | `password_required` | 400 | no password |
+| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds; `Retry-After` gives the seconds left |
 
 The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without

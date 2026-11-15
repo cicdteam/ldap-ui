@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1003,5 +1004,116 @@ func TestWriteLogsResolvedBindDN(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "secret001") {
 		t.Errorf("log contains the password:\n%s", logs.String())
+	}
+}
+
+// invalidCredentials is the error ldapx.Dial returns for a wrong password:
+// go-ldap's *ldap.Error as the server sent it, here Active Directory's.
+var invalidCredentials = ldap.NewError(ldap.LDAPResultInvalidCredentials,
+	errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 52e, v4563"))
+
+// retryAfter is rec's Retry-After header in seconds, or -1 if it is not a
+// whole number.
+func retryAfter(rec *httptest.ResponseRecorder) int {
+	n, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// TestConnectThrottled checks that 5 wrong passwords for one bind DN refuse
+// the 6th connect without dialing, for every connect with a typed password
+// and only for those.
+func TestConnectThrottled(t *testing.T) {
+	const people = `{"profile":"people","username":"user001","password":"wrong"}`
+	tests := []struct {
+		name          string
+		body          string
+		dialErr       error
+		wantThrottled bool
+	}{
+		{name: "template", body: people, dialErr: invalidCredentials, wantThrottled: true},
+		{name: "wrapped error", body: people, dialErr: fmt.Errorf("connect: %w", invalidCredentials), wantThrottled: true},
+		{name: "fixed bindDN, typed password", body: `{"profile":"manual","password":"wrong"}`, dialErr: invalidCredentials, wantThrottled: true},
+		{name: "network error", body: people, dialErr: ldap.NewError(ldap.ErrorNetwork, errors.New("connection refused"))},
+		{name: "configured password", body: `{"profile":"dev"}`, dialErr: invalidCredentials},
+		{name: "anonymous", body: `{"profile":"anon","password":"wrong"}`, dialErr: invalidCredentials},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.dialErr = tc.dialErr
+			for i := range 5 {
+				if rec := env.do(t, http.MethodPost, "/api/connect", tc.body); rec.Code == http.StatusTooManyRequests {
+					t.Fatalf("connect %d of %s = %d %s, want a dial", i+1, tc.body, rec.Code, rec.Body)
+				}
+			}
+			rec := env.do(t, http.MethodPost, "/api/connect", tc.body)
+			if !tc.wantThrottled {
+				if rec.Code == http.StatusTooManyRequests || env.dials != 6 {
+					t.Errorf("6th connect of %s = %d %s after %d dials, want 6 dials and no 429", tc.body, rec.Code, rec.Body, env.dials)
+				}
+				return
+			}
+			if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+				t.Errorf("6th connect of %s = %d %s, want 429 too_many_attempts", tc.body, rec.Code, rec.Body)
+			}
+			if got := retryAfter(rec); got < 1 || got > 60 {
+				t.Errorf("6th connect of %s Retry-After = %q, want whole seconds in 1..60", tc.body, rec.Header().Get("Retry-After"))
+			}
+			if env.dials != 5 {
+				t.Errorf("6th connect of %s: %d dials, want 5", tc.body, env.dials)
+			}
+		})
+	}
+}
+
+// TestConnectThrottlePerAccount checks that the limit is per bind DN,
+// ignoring case, and that a refused connect is logged.
+func TestConnectThrottlePerAccount(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	env.dialErr = invalidCredentials
+	for range 5 {
+		env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"secret-not-logged"}`)
+	}
+	for _, username := range []string{"user001", "USER001"} {
+		if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"`+username+`","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+			t.Errorf("connect as %s after 5 failures of user001 = %d %s, want 429", username, rec.Code, rec.Body)
+		}
+	}
+	env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user002","password":"pw"}`)
+	if env.dials != 6 || env.dialed.BindDN != "uid=user002,ou=people,dc=example,dc=org" {
+		t.Errorf("connect as user002: %d dials, last as %q, want 6, the last as user002", env.dials, env.dialed.BindDN)
+	}
+	found := withMsg(jsonLogs(t, &logs), "connect throttled")
+	if len(found) != 2 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1:1234" {
+		t.Errorf(`"connect throttled" lines = %v, want 2, the first with bindDN %q and remote 192.0.2.1:1234`, found, userDN)
+	}
+	if strings.Contains(logs.String(), "secret-not-logged") {
+		t.Errorf("log contains the password:\n%s", logs.String())
+	}
+}
+
+// TestConnectSuccessResetsThrottle checks that a successful connect clears
+// the failures before it.
+func TestConnectSuccessResetsThrottle(t *testing.T) {
+	const body = `{"profile":"people","username":"user001","password":"pw"}`
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for range 4 {
+		env.do(t, http.MethodPost, "/api/connect", body)
+	}
+	env.dialErr = nil
+	if rec := env.do(t, http.MethodPost, "/api/connect", body); rec.Code != http.StatusOK {
+		t.Fatalf("5th connect = %d %s, want 200", rec.Code, rec.Body)
+	}
+	env.dialErr = invalidCredentials
+	for range 4 {
+		env.do(t, http.MethodPost, "/api/connect", body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", body); rec.Code == http.StatusTooManyRequests {
+		t.Errorf("connect after 4 failures, a success and 4 failures = %d %s, want a dial", rec.Code, rec.Body)
 	}
 }

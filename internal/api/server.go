@@ -88,6 +88,7 @@ func New(opts Options) http.Handler {
 	s := &server{
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
 		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
+		attempts: newAttemptLimiter(5, time.Minute, 10000, time.Now),
 	}
 
 	app := http.NewServeMux()
