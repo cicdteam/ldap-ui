@@ -333,9 +333,10 @@ after the first of them. Connects as that DN still waiting for the server
 count too, so a burst of them at once gets no more than five tries: a connect
 refused before five have failed gets `Retry-After: 1`. A successful connect
 clears the count; other failures, such as a server that cannot be reached, do
-not count. The limit is per account: it is keyed by the bind DN (see below),
-not by client address, since behind a proxy every client has the same
-address. It applies to every connect with a typed password, on a `bindDN`
+not count. The limit is per account on each server: it is keyed by the
+server and the bind DN (see below), not by client address, since behind a
+proxy every client has the same address. A successful connect as the same DN
+to another server does not clear the count. It applies to every connect with a typed password, on a `bindDN`
 profile as on a `bindDNTemplate` one. A connect with the configured password
 (`passwordEnv` or `passwordFile`) and an anonymous one are never refused, so a
 wrong service password cannot lock its DN for everyone. In return, anyone who
@@ -348,10 +349,13 @@ The count is per account as the bind DN names it, after normalizing spacing,
 case and escapes: `uid=alice,ou=people,dc=example,dc=org`,
 `UID=Alice, ou=People,dc=example,dc=org` and
 `uid=\61lice,ou=people,dc=example,dc=org` share one count, and so do
-`alice@corp.example` and `ALICE@corp.example`. Attribute OIDs
-(`0.9.2342.19200300.100.1.1=alice` for `uid=alice`) and Active Directory's
-other names for one account (its UPN, `DOMAIN\user` and its DN) still count
-separately, and a saved connection can name an account any of those ways. So
+`alice@corp.example` and `ALICE@corp.example`. The server is the URL's host,
+ignoring case, and port, 389 for `ldap://` and 636 for `ldaps://` when the
+URL has none: `ldap://Dc1` and `ldap://dc1:389` share one count. Attribute
+OIDs (`0.9.2342.19200300.100.1.1=alice` for `uid=alice`), Active Directory's
+other names for one account (its UPN, `DOMAIN\user` and its DN) and other
+names for one server (its IP address) still count separately, and a saved
+connection can name an account or a server any of those ways. So
 where guessing passwords through ldapui matters, run with fixed profiles
 only: `LDAPUI_DATA_DIR=""` disables saved connections, and the profiles in
 `connections.yaml` each name one form.

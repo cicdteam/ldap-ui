@@ -4,6 +4,8 @@
 package api
 
 import (
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -137,11 +139,10 @@ func (l *attemptLimiter) prune(now time.Time) {
 }
 
 // limiterKey is the key that counts logins as bindDN, the same for every
-// spelling of one DN: types and values folded to lower case, spacing and
-// escapes taken out, RDNs and their values kept in order. Anything that is
-// not a DN, such as a UPN or DOMAIN\user, is folded and trimmed. Values are
-// not escaped again, so two DNs may share a key: that only makes the limit
-// stricter.
+// spelling of one DN: types and values folded to lower case, spacing taken
+// out, values escaped one way and the values of a multi-valued RDN sorted,
+// as ldap.DN.String writes them. Anything that is not a DN, such as a UPN or
+// DOMAIN\user, is folded and trimmed.
 //
 // ponytail: an attribute OID and its name (0.9.2342.19200300.100.1.1 and
 // uid) stay two keys; map OIDs through the schema if that matters.
@@ -150,17 +151,31 @@ func limiterKey(bindDN string) string {
 	if err != nil || len(dn.RDNs) == 0 {
 		return strings.ToLower(strings.TrimSpace(bindDN))
 	}
-	var b strings.Builder
-	for i, rdn := range dn.RDNs {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		for j, ava := range rdn.Attributes {
-			if j > 0 {
-				b.WriteByte('+')
-			}
-			b.WriteString(ava.Type + "=" + ava.Value)
+	// Values are folded before String, which hex-escapes non-ASCII bytes
+	// and sorts the values of an RDN, so that both see the folded value.
+	for _, rdn := range dn.RDNs {
+		for _, ava := range rdn.Attributes {
+			ava.Value = strings.ToLower(ava.Value)
 		}
 	}
-	return strings.ToLower(b.String())
+	return dn.String()
+}
+
+// serverKey is the server rawURL points at, as the limiter counts it: the
+// host in lower case and the port, 389 for ldap:// and 636 for ldaps://
+// when the URL has none. Profiles are validated, so rawURL parses.
+func serverKey(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.ToLower(rawURL)
+	}
+	port := u.Port()
+	switch {
+	case port != "":
+	case u.Scheme == "ldaps":
+		port = ldap.DefaultLdapsPort
+	default:
+		port = ldap.DefaultLdapPort
+	}
+	return net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }

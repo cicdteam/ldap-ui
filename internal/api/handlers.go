@@ -31,7 +31,8 @@ type server struct {
 	sessions *session.Manager[Directory]
 	cookies  cookieOptions
 	log      *slog.Logger
-	// attempts counts wrong passwords per bind DN, keyed by limiterKey.
+	// attempts counts wrong passwords per server and bind DN, keyed by
+	// serverKey and limiterKey.
 	attempts *attemptLimiter
 
 	identityHeader string
@@ -184,7 +185,9 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	// on every path, a panic included.
 	end := s.attempts.done
 	if req.Password != "" && p.BindDN != "" {
-		key := limiterKey(p.BindDN)
+		// Per server, so that a success elsewhere, as on a server a saved
+		// profile points at, cannot clear this server's count.
+		key := serverKey(p.URL) + "|" + limiterKey(p.BindDN)
 		wait, ok := s.attempts.begin(key)
 		if !ok {
 			secs := int((wait + time.Second - 1) / time.Second) // rounded up

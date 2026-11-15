@@ -1163,6 +1163,35 @@ func TestConnectThrottlePerAccount(t *testing.T) {
 	}
 }
 
+// TestConnectThrottlePerServer checks that the limit counts one bind DN per
+// server, however the profile's URL spells it, and that a success on another
+// server, such as one a saved profile points at, does not clear the count.
+func TestConnectThrottlePerServer(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for range 5 {
+		env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"wrong"}`)
+	}
+	for _, p := range []string{
+		`{"name":"same","url":"ldap://PEOPLE","bindDN":"` + userDN + `"}`,
+		`{"name":"other","url":"ldap://other:389","bindDN":"` + userDN + `"}`,
+	} {
+		if rec := env.do(t, http.MethodPost, "/api/profiles", p); rec.Code != http.StatusOK {
+			t.Fatalf("save %s = %d %s, want 200", p, rec.Code, rec.Body)
+		}
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"same","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect as %s to ldap://PEOPLE after 5 failures on ldap://people:389 = %d %s, want 429", userDN, rec.Code, rec.Body)
+	}
+	env.dialErr = nil
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"other","password":"pw"}`); rec.Code != http.StatusOK {
+		t.Errorf("connect as %s to ldap://other:389 after 5 failures on ldap://people:389 = %d %s, want 200", userDN, rec.Code, rec.Body)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect as user001 to ldap://people:389 after a success on ldap://other:389 = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
 // TestConnectSuccessResetsThrottle checks that a successful connect clears
 // the failures before it.
 func TestConnectSuccessResetsThrottle(t *testing.T) {

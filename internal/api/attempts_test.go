@@ -137,7 +137,8 @@ func TestLimiterKey(t *testing.T) {
 		},
 		{"alice@corp.example", "ALICE@corp.example", " alice@corp.example"},
 		{`CORP\alice`, `corp\ALICE`},
-		{"cn=a+uid=b,dc=org", "CN=A + UID=B,DC=org"},
+		{"cn=a+uid=b,dc=org", "CN=A + UID=B,DC=org", "uid=b+cn=a,dc=org"},
+		{"cn=Émile,dc=org", "CN=émile,dc=org"},
 	}
 	for _, group := range same {
 		want := limiterKey(group[0])
@@ -152,9 +153,28 @@ func TestLimiterKey(t *testing.T) {
 		{"uid=alice,ou=people,dc=example,dc=org", "uid=alice,ou=staff,dc=example,dc=org"},
 		{"alice@corp.example", "bob@corp.example"},
 		{`CORP\alice`, `CORP\bob`},
+		// One RDN whose value holds a comma, and three RDNs.
+		{`cn=a\,dc=x,dc=org`, "cn=a,dc=x,dc=org"},
 	} {
 		if a, b := limiterKey(pair[0]), limiterKey(pair[1]); a == b {
 			t.Errorf("limiterKey(%q) = limiterKey(%q) = %q, want different keys", pair[0], pair[1], a)
+		}
+	}
+}
+
+func TestServerKey(t *testing.T) {
+	tests := []struct {
+		url, want string
+	}{
+		{url: "ldap://Host", want: "host:389"},
+		{url: "ldap://host:389", want: "host:389"},
+		{url: "LDAPS://dc1.corp.example", want: "dc1.corp.example:636"},
+		{url: "ldaps://dc1.corp.example:3269", want: "dc1.corp.example:3269"},
+		{url: "ldap://[2001:DB8::1]", want: "[2001:db8::1]:389"},
+	}
+	for _, tc := range tests {
+		if got := serverKey(tc.url); got != tc.want {
+			t.Errorf("serverKey(%q) = %q, want %q", tc.url, got, tc.want)
 		}
 	}
 }
