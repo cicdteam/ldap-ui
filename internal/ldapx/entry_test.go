@@ -6,6 +6,7 @@ package ldapx
 import (
 	"testing"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/cicdteam/ldap-ui/internal/schema"
@@ -132,5 +133,44 @@ func TestConvertAttribute(t *testing.T) {
 		if diff := cmp.Diff(tc.want, got); diff != "" {
 			t.Errorf("%s: convertAttribute(%q) mismatch (-want +got):\n%s", tc.name, tc.attr, diff)
 		}
+	}
+}
+
+func TestValidAttrName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{name: "cn", want: true},
+		{name: "cn;lang-de", want: true},
+		{name: "userCertificate;binary", want: true},
+		{name: "member;range=0-1499", want: true},
+		{name: "member;range=1500-*", want: true},
+		{name: "2.5.4.3", want: true},
+		{name: "msDS-KeyCredentialLink", want: true},
+		{name: "", want: false},
+		{name: "description\n\ndn: cn=admin", want: false},
+		{name: "a b", want: false},
+		{name: "cn:", want: false},
+		{name: "1cn", want: false},
+		{name: "cn;", want: false},
+		{name: "cn\r", want: false},
+	}
+	for _, tc := range tests {
+		if got := validAttrName(tc.name); got != tc.want {
+			t.Errorf("validAttrName(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestConvertEntryDropsInvalidNames(t *testing.T) {
+	e := &ldap.Entry{DN: "uid=mallory,dc=example,dc=com", Attributes: []*ldap.EntryAttribute{
+		{Name: "cn", Values: []string{"Mallory"}, ByteValues: [][]byte{[]byte("Mallory")}},
+		{Name: "description\n\ndn: cn=admin", Values: []string{"x"}, ByteValues: [][]byte{[]byte("x")}},
+	}}
+	got := convertEntry(e, schema.Parse(nil, nil, nil), false)
+	want := Entry{DN: e.DN, Attributes: []Attribute{{Name: "cn", Values: []Value{{Text: "Mallory"}}}}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("convertEntry(%v) mismatch (-want +got):\n%s", e.DN, diff)
 	}
 }

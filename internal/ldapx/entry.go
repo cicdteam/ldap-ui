@@ -8,6 +8,7 @@ package ldapx
 import (
 	"bytes"
 	"encoding/base64"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -91,11 +92,25 @@ func isSecret(name, base string, s *schema.Schema) bool {
 	return false
 }
 
+// attrName is an RFC 4512 attribute description: a name or numeric OID,
+// then options such as ";lang-de", ";binary" or AD's ";range=0-1499".
+var attrName = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)(;[A-Za-z0-9=*-]+)*$`)
+
+// validAttrName reports whether name is an attribute description. go-ldap
+// accepts any octet string, and a name with a line break would inject
+// records into the LDIF the UI exports.
+func validAttrName(name string) bool {
+	return attrName.MatchString(name)
+}
+
 // convertEntry and convertAttribute make empty lists non-nil, so the UI gets
-// [] rather than null.
+// [] rather than null. convertEntry drops attributes whose name is not valid.
 func convertEntry(e *ldap.Entry, s *schema.Schema, isAD bool) Entry {
 	out := Entry{DN: e.DN, Attributes: make([]Attribute, 0, len(e.Attributes))}
 	for _, a := range e.Attributes {
+		if !validAttrName(a.Name) {
+			continue
+		}
 		out.Attributes = append(out.Attributes, convertAttribute(a.Name, a.ByteValues, s, isAD))
 	}
 	return out

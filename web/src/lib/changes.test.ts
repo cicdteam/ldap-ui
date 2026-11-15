@@ -123,6 +123,19 @@ describe('toLDIF', () => {
   it('is empty for an empty batch', () => {
     expect(toLDIF([])).toBe('')
   })
+  it('skips an attribute name that would inject records', () => {
+    const attr = 'description: exported\n\ndn: cn=admin,dc=example,dc=com\nchangetype: delete\n'
+    const out = toLDIF(stage([], DN, { kind: 'add', attr, value: 'x' }))
+    const lines = out.split('\n')
+    const dn = lines.findIndex((l) => l.startsWith('dn'))
+    expect(lines.filter((l) => l.startsWith('dn'))).toHaveLength(1)
+    // The record's own changetype is the only one.
+    expect(lines.filter((l) => l.startsWith('changetype'))).toEqual(['changetype: modify'])
+    expect(lines.slice(dn, -1)).not.toContain('')
+    expect(out).toContain('# invalid attribute name skipped')
+    // A '-' without its operation line makes ldapmodify reject the record.
+    expect(lines).not.toContain('-')
+  })
   it('writes delete and add blocks, base64 where unsafe, folded', () => {
     let b = stage([], DN, { kind: 'replace', attr: 'mail', from: 'a@x', to: 'ü@x' })
     b = stage(b, 'uid=b,dc=x', { kind: 'add', attr: 'description', value: ' lead' })

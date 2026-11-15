@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { base64UTF8, entriesToLDIF, entryToLDIF, fold, isSafe, ldifPreview } from './ldif'
+import {
+  base64UTF8,
+  entriesToLDIF,
+  entryToLDIF,
+  fold,
+  isAttrDescription,
+  isSafe,
+  ldifPreview,
+} from './ldif'
 
 describe('isSafe', () => {
   it.each([
@@ -13,6 +21,27 @@ describe('isSafe', () => {
     ['Jürgen', false],
   ])('%j', (s, want) => {
     expect(isSafe(s)).toBe(want)
+  })
+})
+
+describe('isAttrDescription', () => {
+  it.each([
+    ['cn', true],
+    ['cn;lang-de', true],
+    ['userCertificate;binary', true],
+    ['member;range=0-1499', true],
+    ['member;range=1500-*', true],
+    ['2.5.4.3', true],
+    ['msDS-KeyCredentialLink', true],
+    ['', false],
+    ['description\n\ndn: cn=admin', false],
+    ['a b', false],
+    ['cn:', false],
+    ['1cn', false],
+    ['cn;', false],
+    ['cn\r', false],
+  ])('%j', (name, want) => {
+    expect(isAttrDescription(name)).toBe(want)
   })
 })
 
@@ -55,6 +84,26 @@ describe('entryToLDIF', () => {
         '',
       ].join('\n'),
     )
+  })
+
+  it('skips an attribute name that would inject records', () => {
+    const name = 'description: exported\n\ndn: cn=admin,dc=example,dc=com\nchangetype: delete\n'
+    const out = entriesToLDIF([
+      {
+        dn: 'uid=mallory,dc=example,dc=com',
+        attributes: [
+          { name: 'cn', values: [{ text: 'Mallory' }] },
+          { name, values: [{ text: 'x' }] },
+          { name, values: [], masked: 1 },
+        ],
+      },
+    ])
+    const lines = out.split('\n')
+    const dn = lines.findIndex((l) => l.startsWith('dn'))
+    expect(lines.filter((l) => l.startsWith('dn'))).toHaveLength(1)
+    expect(lines.filter((l) => l.startsWith('changetype'))).toEqual([])
+    expect(lines.slice(dn, -1)).not.toContain('')
+    expect(out).toContain('# invalid attribute name skipped')
   })
 
   it('separates entries and adds the version line', () => {

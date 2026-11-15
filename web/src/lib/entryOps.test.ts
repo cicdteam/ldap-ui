@@ -612,6 +612,20 @@ describe('rename', () => {
 })
 
 describe('LDIF', () => {
+  it('add, skipping an attribute name that would inject records', () => {
+    const name = 'description: exported\n\ndn: cn=admin,dc=example,dc=com\nchangetype: delete\n'
+    const out = addLDIF('uid=p,dc=x', [
+      { name: 'cn', values: ['P'] },
+      { name, values: ['x'] },
+    ])
+    const lines = out.split('\n')
+    const dn = lines.findIndex((l) => l.startsWith('dn'))
+    expect(lines.filter((l) => l.startsWith('dn'))).toHaveLength(1)
+    // The record's own changetype is the only one.
+    expect(lines.filter((l) => l.startsWith('changetype'))).toEqual(['changetype: add'])
+    expect(lines.slice(dn, -1)).not.toContain('')
+    expect(out).toContain('# invalid attribute name skipped')
+  })
   it('add, with binary values as attr::', () => {
     expect(addLDIF('uid=p,dc=x', [{ name: 'jpegPhoto', values: ['/9j/AAEC'], base64: true }])).toBe(
       'version: 1\n\ndn: uid=p,dc=x\nchangetype: add\njpegPhoto:: /9j/AAEC\n',
