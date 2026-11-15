@@ -21,6 +21,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,8 +152,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, Options{})
 }
 
-// newTestEnvWith is newTestEnv with extra options. It always sets Catalog,
-// Sessions and Dial.
+// newTestEnvWith is newTestEnv with extra options. It always sets Catalog
+// and Sessions, and Dial unless opts has one; the testEnv fields about the
+// last dial are then unused.
 func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Helper()
 	t.Setenv("LDAPUI_TEST_PW", "from-env")
@@ -171,14 +174,16 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
 	opts.Sessions = session.New[Directory](time.Hour)
-	opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
-		env.password, env.dialed = password, p
-		env.dials++
-		if env.dialErr != nil {
-			return nil, env.dialErr
+	if opts.Dial == nil {
+		opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
+			env.password, env.dialed = password, p
+			env.dials++
+			if env.dialErr != nil {
+				return nil, env.dialErr
+			}
+			env.dir.info.BindDN = p.BindDN // as ldapx.Dial reports it
+			return env.dir, nil
 		}
-		env.dir.info.BindDN = p.BindDN // as ldapx.Dial reports it
-		return env.dir, nil
 	}
 	env.h = New(opts)
 	return env
@@ -1115,5 +1120,59 @@ func TestConnectSuccessResetsThrottle(t *testing.T) {
 	}
 	if rec := env.do(t, http.MethodPost, "/api/connect", body); rec.Code == http.StatusTooManyRequests {
 		t.Errorf("connect after 4 failures, a success and 4 failures = %d %s, want a dial", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectConcurrentBurst checks that connects in flight count against
+// the limit: of 10 connects at once as one DN, whose binds all wait and
+// then fail, at most 5 reach the server and the rest get 429.
+func TestConnectConcurrentBurst(t *testing.T) {
+	const body = `{"profile":"people","username":"user001","password":"wrong"}`
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	defer releaseAll() // unblocks the dials if the test fails early
+	var dials atomic.Int32
+	dialed := make(chan struct{}, 10)
+	env := newTestEnvWith(t, Options{Dial: func(context.Context, profile.Profile, string) (Directory, error) {
+		dials.Add(1)
+		dialed <- struct{}{}
+		<-release
+		return nil, invalidCredentials
+	}})
+	// post is env.do without cookies, which is not safe for concurrent use.
+	post := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(body))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		env.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	codes := make(chan int, 10)
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() { codes <- post() })
+	}
+	// Every connect either waits in a dial or has been refused before any
+	// dial ends.
+	throttled := 0
+	for range 10 {
+		select {
+		case <-dialed:
+		case code := <-codes:
+			if code == http.StatusTooManyRequests {
+				throttled++
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("10 connects at once: %d dials and %d 429s after 10 s, want all 10 settled", dials.Load(), throttled)
+		}
+	}
+	releaseAll()
+	wg.Wait()
+	if got := dials.Load(); got > 5 || int(got)+throttled != 10 {
+		t.Errorf("10 connects at once: %d dials, %d 429s before any dial ended, want at most 5 dials and 429 for the rest", got, throttled)
+	}
+	if code := post(); code != http.StatusTooManyRequests {
+		t.Errorf("connect after the burst failed = %d, want 429", code)
 	}
 }

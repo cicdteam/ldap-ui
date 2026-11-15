@@ -323,11 +323,13 @@ connections of the least recently used.
 Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
 within 60 seconds refuse further connects as that DN with 429
 `too_many_attempts` and a `Retry-After` header in seconds, until 60 seconds
-after the first of them. A successful connect clears the count; other
-failures, such as a server that cannot be reached, do not count. The limit
-is per account: it is keyed by the bind DN, ignoring case, not by client
-address, since behind a proxy every client has the same address. It applies
-to every connect with a typed password, on a `bindDN` profile as on a
+after the first of them. Connects as that DN still waiting for the server
+count too, so a burst of them at once gets no more than five tries: a connect
+refused only for those gets `Retry-After: 1`. A successful connect clears the
+count; other failures, such as a server that cannot be reached, do not count.
+The limit is per account: it is keyed by the bind DN, ignoring case, not by
+client address, since behind a proxy every client has the same address. It
+applies to every connect with a typed password, on a `bindDN` profile as on a
 `bindDNTemplate` one. A connect with the configured password (`passwordEnv`
 or `passwordFile`) and an anonymous one are never refused, so a wrong service
 password cannot lock its DN for everyone. In return, anyone who can reach
@@ -550,7 +552,7 @@ address outside `--trusted-proxies`, cannot connect to the profile.
 | `identity_mismatch` | 403 | the username is not the one the identity maps to |
 | `invalid_username` | 400 | the username does not match the pattern above |
 | `password_required` | 400 | no password |
-| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds; `Retry-After` gives the seconds left |
+| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects as it still under way; `Retry-After` gives the seconds to wait |
 
 The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without

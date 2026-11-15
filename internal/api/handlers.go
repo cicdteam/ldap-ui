@@ -179,35 +179,37 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		password = configured
 	}
 	// Only a typed password is limited: a wrong configured one would lock
-	// its DN for everyone.
-	limited := req.Password != "" && p.BindDN != ""
-	key := strings.ToLower(p.BindDN)
-	if limited {
-		if wait, ok := s.attempts.blocked(key); ok {
+	// its DN for everyone. end is how a limited attempt ends, set from the
+	// dial: fail for a wrong password, succeed, else done. The defer ends it
+	// on every path, a panic included.
+	end := s.attempts.done
+	if req.Password != "" && p.BindDN != "" {
+		key := strings.ToLower(p.BindDN)
+		wait, ok := s.attempts.begin(key)
+		if !ok {
 			secs := int((wait + time.Second - 1) / time.Second) // rounded up
 			s.log.Info("connect throttled", s.attributed(r, p, "profile", p.Name)...)
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			writeError(w, http.StatusTooManyRequests, apiError{
 				Code:    "too_many_attempts",
-				Message: fmt.Sprintf("too many wrong passwords for this account; try again in %d s", secs),
+				Message: fmt.Sprintf("too many sign-in attempts for this account; try again in %d s", secs),
 			})
 			return
 		}
+		defer func() { end(key) }()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), p.ConnectTimeout+p.SearchTimeout)
 	defer cancel()
 	dir, err := s.dial(ctx, p, password)
 	if err != nil {
-		if limited && ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			s.attempts.fail(key)
+		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+			end = s.attempts.fail
 		}
 		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
 		s.fail(w, err)
 		return
 	}
-	if limited {
-		s.attempts.succeed(key)
-	}
+	end = s.attempts.succeed
 	// Every connect moves the browser to a new session ID, so an ID that
 	// leaked before it reaches no connection. The cookie is set before Put:
 	// a refused Put leaves the session, under its new ID, as it was.
