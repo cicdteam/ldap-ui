@@ -34,14 +34,17 @@ type result struct {
 	referrals []string
 	controls  []ldap.Control
 	truncated bool
+	// capped is set when a response cap stopped the reading: the server
+	// may still be sending the rest, which go-ldap drops.
+	capped bool
 }
 
 // searchOnce sends one search request and collects its results. Size and
 // time limit errors are not failures: they set truncated and keep what
 // arrived, and so does a response past maxResponseEntries entries or
-// maxResponseBytes value bytes, which also closes lc. A connection that is
-// closing yields an ErrorNetwork error so that read can redial, and so does
-// a lost one (see networkError).
+// maxResponseBytes value bytes (which also sets capped). A connection that
+// is closing yields an ErrorNetwork error so that read can redial, and so
+// does a lost one (see networkError).
 func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*result, error) {
 	// Cancelling sctx on a cap stops go-ldap's reading for this search;
 	// only ctx ending is an error.
@@ -54,15 +57,8 @@ func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*r
 		if e := resp.Entry(); e != nil {
 			n := valueBytes(e)
 			if len(res.entries) == maxResponseEntries || size+n > maxResponseBytes {
-				// ponytail: go-ldap sends no Abandon, so the server would
-				// go on sending the rest; closing lc stops it and the next
-				// read redials. Other requests in flight on lc fail with
-				// it (reads are retried, a write is not); send an Abandon
-				// instead if go-ldap ever exposes the message ID.
-				cancel()
-				_ = lc.Close()
-				res.truncated = true
-				return res, nil
+				res.truncated, res.capped = true, true
+				break
 			}
 			size += n
 			res.entries = append(res.entries, e)
@@ -73,6 +69,19 @@ func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*r
 		if ctls := resp.Controls(); len(ctls) > 0 {
 			res.controls = ctls
 		}
+	}
+	if res.capped {
+		// go-ldap's goroutine for this search returns on the cancel and
+		// finishes the message before the results close, so once they do,
+		// go-ldap no longer tracks it: it reads and drops the rest of the
+		// response packet by packet and lc stays usable.
+		// ponytail: go-ldap sends no Abandon, so the server still sends
+		// the rest and later requests on lc queue behind it; send an
+		// Abandon if go-ldap ever exposes the message ID.
+		cancel()
+		for resp.Next() {
+		}
+		return res, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -196,9 +205,14 @@ func (c *Conn) pagedSearch(ctx context.Context, id string, req *ldap.SearchReque
 			return nil, "", err
 		}
 	}
-	// A page cut short by a response cap has no cookie, and searchOnce
-	// closed lc: the rest of a half-read page cannot be fetched, so the
-	// listing ends there truncated and release drops lc.
+	if res.capped {
+		// The rest of a half-read page cannot be fetched, so the listing
+		// ends here, truncated. The server is still sending that page and
+		// keeps its paged state for a cookie nobody reads; lc is this
+		// listing's own, so close it rather than share it.
+		_ = lc.Close()
+		return res, "", nil
+	}
 	ctl, ok := ldap.FindControl(res.controls, ldap.ControlTypePaging).(*ldap.ControlPaging)
 	if !ok || len(ctl.Cookie) == 0 {
 		c.release(lc)

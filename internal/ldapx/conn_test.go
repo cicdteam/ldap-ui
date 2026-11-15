@@ -646,39 +646,44 @@ func TestIsEncrypted(t *testing.T) {
 
 // TestSearchOnceCaps checks that a response with more than
 // maxResponseEntries entries or maxResponseBytes value bytes ends early as
-// truncated rather than as an error, and that the next search still works.
+// truncated rather than as an error, and that the connection stays in use:
+// the rest of the response is dropped and the next search runs on it.
 func TestSearchOnceCaps(t *testing.T) {
 	tests := []struct {
-		name        string
+		name string
+		// entries is what the server sends before the next request; one
+		// more entry and the done message follow it.
 		entries     int
 		value       string
 		wantEntries int
 	}{
 		{name: "entries", entries: maxResponseEntries + 1, value: "x", wantEntries: maxResponseEntries},
-		// 70 MiB in 2 MiB values: the 33rd would pass 64 MiB.
-		{name: "value bytes", entries: 35, value: strings.Repeat("x", 2<<20), wantEntries: 32},
+		// 2 MiB values: the 33rd would pass 64 MiB.
+		{name: "value bytes", entries: 33, value: strings.Repeat("x", 2<<20), wantEntries: 32},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var searches atomic.Int32
-			url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
-				for {
-					id, err := readRequest(conn)
-					if err != nil {
-						return
-					}
-					// Only the first search is big; the next one is empty.
-					if searches.Add(1) == 1 {
-						for i := range tc.entries {
-							if writeEntry(conn, id, fmt.Sprintf("cn=%d", i), attr("description", tc.value)) != nil {
-								return
-							}
-						}
-					}
-					if writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+			var firstID atomic.Int64
+			url, accepts := fakeServer(t, func(n int32, conn net.Conn) {
+				id, err := readRequest(conn)
+				if err != nil || n > 1 {
+					return
+				}
+				firstID.Store(id)
+				for i := range tc.entries {
+					if writeEntry(conn, id, fmt.Sprintf("cn=%d", i), attr("description", tc.value)) != nil {
 						return
 					}
 				}
+				// The rest of the first response arrives once the client
+				// sent the next request, so after it let go of the first.
+				next, err := readRequest(conn)
+				if err != nil || writeEntry(conn, id, "cn=late", attr("description", tc.value)) != nil ||
+					writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil ||
+					writeResult(conn, next, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+				answerSearches(conn)
 			})
 			c := fakeConn(t, url)
 			// go-ldap's request timeout covers the whole response, which
@@ -705,7 +710,63 @@ func TestSearchOnceCaps(t *testing.T) {
 			if err != nil || len(res.entries) != 0 || res.truncated {
 				t.Errorf("next searchOnce() = %+v, %v; want an empty complete result", res, err)
 			}
+			if n := accepts.Load(); n != 1 {
+				t.Errorf("searches opened %d connections, want 1 (no redial)", n)
+			}
+			// go-ldap notes a packet for a message it no longer tracks, and
+			// drops it: the late entry found no response channel.
+			c.mu.Lock()
+			lc := c.lc
+			c.mu.Unlock()
+			want := fmt.Sprintf("unexpected message %d", firstID.Load())
+			if err := lc.GetLastError(); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("GetLastError() = %v, want it to contain %q", err, want)
+			}
 		})
+	}
+}
+
+// TestPagedSearchCapClosesConnection checks that a page cut by a response
+// cap ends the listing without a cursor and closes the connection it ran
+// on, which no other request uses: the server is still sending that page
+// and keeps its paged state.
+func TestPagedSearchCapClosesConnection(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		for {
+			id, base, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			if base == "dc=x" {
+				for i := range maxResponseEntries + 1 {
+					if writeEntry(conn, id, fmt.Sprintf("cn=%d,dc=x", i)) != nil {
+						return
+					}
+				}
+			}
+			// Other bases (the schema) find nothing.
+			if writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+				return
+			}
+		}
+	})
+	c := fakeConn(t, url)
+	c.info.Paging = true
+	c.prof.SearchTimeout = time.Minute
+	c.lc.SetTimeout(time.Minute)
+	c.mu.Lock()
+	first := c.lc
+	c.mu.Unlock()
+	page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x"})
+	if err != nil {
+		t.Fatalf("Search(%d entries) error = %v", maxResponseEntries+1, err)
+	}
+	if len(page.Entries) != maxResponseEntries || !page.Truncated || page.Cursor != "" {
+		t.Errorf("Search(%d entries) = %d entries, truncated %v, cursor %q; want %d, truncated, no cursor",
+			maxResponseEntries+1, len(page.Entries), page.Truncated, page.Cursor, maxResponseEntries)
+	}
+	if !first.IsClosing() {
+		t.Error("Search(capped page) left its connection open, want it closed")
 	}
 }
 
