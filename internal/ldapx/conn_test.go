@@ -458,6 +458,62 @@ func TestReadRetriesDroppedConnection(t *testing.T) {
 	}
 }
 
+// TestRedialInvalidCredentialsCloses checks that a redial whose bind the
+// directory refuses with invalid credentials, as after a password change,
+// closes the Conn: the password is never sent again, so ldapui cannot lock
+// the account under a lockout policy. Any other failed bind leaves the Conn
+// open, and the next read redials.
+func TestRedialInvalidCredentialsCloses(t *testing.T) {
+	tests := []struct {
+		name       string
+		bindCode   int64 // the redial's bind result; -1 hangs up instead
+		wantClosed bool
+	}{
+		{name: "invalid credentials", bindCode: ldap.LDAPResultInvalidCredentials, wantClosed: true},
+		{name: "unavailable", bindCode: ldap.LDAPResultUnavailable},
+		{name: "network error", bindCode: -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var binds atomic.Int32
+			url, _ := fakeServer(t, func(n int32, conn net.Conn) {
+				if n == 1 {
+					_, _ = readRequest(conn) // drop the connection mid-request
+					return
+				}
+				id, err := readRequest(conn) // the bind
+				if err != nil {
+					return
+				}
+				binds.Add(1)
+				if tc.bindCode >= 0 {
+					_ = writeResult(conn, id, ldap.ApplicationBindResponse, tc.bindCode)
+				}
+			})
+			c := fakeConn(t, url)
+			c.prof.BindDN, c.password = "uid=user001,ou=people,dc=example,dc=org", "old-password"
+			for i := range 4 {
+				_, err := c.rawEntry(context.Background(), "dc=x", nil)
+				switch {
+				case !tc.wantClosed && (err == nil || errors.Is(err, net.ErrClosed)):
+					t.Errorf("rawEntry() %d after the drop error = %v, want the bind's error", i+1, err)
+				case tc.wantClosed && i == 0 && !ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials):
+					t.Errorf("rawEntry() 1 after the drop error = %v, want invalid credentials", err)
+				case tc.wantClosed && i > 0 && !errors.Is(err, net.ErrClosed):
+					t.Errorf("rawEntry() %d after the drop error = %v, want net.ErrClosed", i+1, err)
+				}
+			}
+			wantBinds := int32(4)
+			if tc.wantClosed {
+				wantBinds = 1
+			}
+			if n := binds.Load(); n != wantBinds {
+				t.Errorf("4 reads after the drop made %d binds, want %d", n, wantBinds)
+			}
+		})
+	}
+}
+
 func TestCloseIsFinal(t *testing.T) {
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
 	c := fakeConn(t, url)

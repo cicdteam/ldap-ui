@@ -594,7 +594,9 @@ The password a person typed stays in the server's memory, with their
 connection, so that ldapui can reconnect after a dropped connection without
 asking again. It is forgotten at disconnect, when the session expires after
 `--session-idle` without use, or `--session-max-age` after that connection
-was connected.
+was connected. If the directory stops accepting it (changed or reset),
+ldapui closes the connection at the next reconnect instead of retrying, and
+asks to sign in again.
 
 ### Behind a reverse proxy
 

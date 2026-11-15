@@ -352,7 +352,11 @@ func (c *Conn) loadInfo(ctx context.Context) error {
 // current returns the shared connection, dialing a new one when there is
 // none or it was lost. The dial runs outside mu, so that a slow server
 // holds up neither Close nor the cursors. Of two concurrent dials, the
-// first to finish is installed and the other is closed.
+// first to finish is installed and the other is closed. A dial whose bind
+// fails with invalid credentials closes c: the password was changed or
+// reset since connect, and sending it again at every request could lock
+// the account under a lockout policy. Other failures, such as a server
+// that cannot be reached, leave c open for the next request to redial.
 func (c *Conn) current(ctx context.Context) (*ldap.Conn, error) {
 	c.mu.Lock()
 	lc, closed, password := c.lc, c.closed, c.password
@@ -369,6 +373,9 @@ func (c *Conn) current(ctx context.Context) (*ldap.Conn, error) {
 	}
 	lc, err := dial(ctx, password)
 	if err != nil {
+		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+			_ = c.Close()
+		}
 		return nil, err
 	}
 	extra := lc
