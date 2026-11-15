@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 const tokenCookie = "ldapui_token" //nolint:gosec // cookie name, not a credential
@@ -168,4 +171,111 @@ func withBasePath(base string, h http.Handler) http.Handler {
 		http.Redirect(w, r, target, http.StatusMovedPermanently) //nolint:gosec // the path is always base+"/"; the query cannot change it
 	})
 	return mux
+}
+
+// admit queues requests under /api/: at most global run at once
+// server-wide, and at most perSession with one session cookie. A request
+// without the cookie, like a first connect, takes only a global slot. One
+// that waits longer than wait in all gets 503 busy with Retry-After: 1.
+func admit(global, perSession int, wait time.Duration, next http.Handler) http.Handler {
+	all := make(chan struct{}, global)
+	sessions := newSessionSlots(perSession)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		expired := time.After(wait)
+		// The session slot comes first, so that a session's queued requests
+		// hold no global slot.
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			sem := sessions.join(c.Value)
+			defer sessions.leave(c.Value)
+			if !acquire(w, r, sem, expired) {
+				return
+			}
+			defer func() { <-sem }()
+		}
+		if !acquire(w, r, all, expired) {
+			return
+		}
+		defer func() { <-all }()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// acquire takes a slot of sem. It writes 503 busy when expired fires first,
+// and the cancellation when the client goes away first; that write fails if
+// the client is gone.
+func acquire(w http.ResponseWriter, r *http.Request, sem chan<- struct{}, expired <-chan time.Time) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	case <-expired:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, apiError{Code: "busy", Message: "too many requests at once; try again"})
+	case <-r.Context().Done():
+		status, body := errorResponse(r.Context().Err())
+		writeError(w, status, body)
+	}
+	return false
+}
+
+// sessionSlots holds a semaphore for each session cookie value with a
+// request running or waiting.
+type sessionSlots struct {
+	size int
+	mu   sync.Mutex
+	m    map[string]*sessionSlot
+}
+
+type sessionSlot struct {
+	sem   chan struct{}
+	users int
+}
+
+func newSessionSlots(size int) *sessionSlots {
+	return &sessionSlots{size: size, m: make(map[string]*sessionSlot)}
+}
+
+// join returns id's semaphore. Every join needs a leave.
+func (q *sessionSlots) join(id string) chan struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	s := q.m[id]
+	if s == nil {
+		s = &sessionSlot{sem: make(chan struct{}, q.size)}
+		q.m[id] = s
+	}
+	s.users++
+	return s.sem
+}
+
+// leave drops id's semaphore after its last user.
+func (q *sessionSlots) leave(id string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	s := q.m[id]
+	s.users--
+	if s.users == 0 {
+		delete(q.m, id)
+	}
+}
+
+// withDeadline bounds requests under /api/ to read, and changes/apply, which
+// writes entry after entry, to apply.
+func withDeadline(read, apply time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		d := read
+		if strings.HasSuffix(r.URL.Path, "/changes/apply") {
+			d = apply
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -100,6 +101,58 @@ func TestApplyPartial(t *testing.T) {
 	got := applyResultOf(t, env.do(t, http.MethodPost, "/api/c/dev/changes/apply", twoEntries).Body.Bytes())
 	if diff := cmp.Diff([]string{"uid=a,dc=example,dc=org"}, got.Applied); diff != "" || got.Failed == nil || got.Failed.Error.Code != "insufficient_access" {
 		t.Errorf("apply result = %+v, want uid=a applied and uid=b insufficient_access", got)
+	}
+}
+
+func TestApplyStopsWhenContextEnds(t *testing.T) {
+	const (
+		a = "uid=a,dc=example,dc=org"
+		b = "uid=b,dc=example,dc=org"
+		c = "uid=c,dc=example,dc=org"
+	)
+	body := `{"entries":[
+ {"dn":"` + a + `","changes":[{"op":"add","attr":"description","values":["x"]}]},
+ {"dn":"` + b + `","changes":[{"op":"add","attr":"description","values":["x"]}]},
+ {"dn":"` + c + `","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		// cancel ends the request during the 2nd modify; otherwise its
+		// deadline does.
+		cancel bool
+		want   error
+	}{
+		{name: "client gone", timeout: time.Minute, cancel: true, want: context.Canceled},
+		{name: "deadline", timeout: 250 * time.Millisecond, want: context.DeadlineExceeded},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := connected(t)
+			ctx, cancel := context.WithTimeout(context.Background(), tc.timeout)
+			defer cancel()
+			env.dir.onModify = func(ctx context.Context, dn string) {
+				if dn != b {
+					return
+				}
+				if tc.cancel {
+					cancel()
+				}
+				// The modify was sent, so it finishes after the request ended.
+				<-ctx.Done()
+			}
+			rec := env.doContext(ctx, t, http.MethodPost, "/api/c/dev/changes/apply", body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("apply = %d %s, want 200", rec.Code, rec.Body)
+			}
+			_, wantErr := errorResponse(tc.want)
+			want := applyResult{Applied: []string{a, b}, Failed: &applyFailure{DN: c, Error: wantErr}}
+			if diff := cmp.Diff(want, applyResultOf(t, rec.Body.Bytes())); diff != "" {
+				t.Errorf("apply result (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]string{a, b}, env.dir.modified); diff != "" {
+				t.Errorf("modified (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

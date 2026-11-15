@@ -259,6 +259,15 @@ connections: one more connect fails with 409 `too_many_connections` until one
 is disconnected. The server holds at most 1000 sessions; one more closes the
 connections of the least recently used.
 
+The server runs at most 64 API requests at once, and at most 4 of one
+session; the others wait their turn. A request that waits more than 10
+seconds gets 503 `busy` with `Retry-After: 1`. Once running, an API request
+has 2 minutes and an Apply 4 minutes before it ends with `timeout` (504). An
+Apply whose time runs out, or whose browser goes away, stops between entries:
+a modify already sent to the server finishes, the entries before the stop
+stay applied, and the response lists them and names the next entry as failed
+with `timeout`.
+
 ## Logs and accountability
 
 ldapui logs to stdout, one `key=value` line per event. The lines below,

@@ -45,6 +45,8 @@ type directoryFake struct {
 	modified   []string
 	changes    map[string][]ldapx.Change
 	modifyErr  map[string]error
+	// onModify, when set, runs at the start of every Modify.
+	onModify func(ctx context.Context, dn string)
 	// writes records Add, Delete, Rename and SetPassword calls, one line each.
 	writes   []string
 	writeErr error
@@ -86,7 +88,10 @@ func (d *directoryFake) Members(_ context.Context, dn string, nested bool) (ldap
 	return ldapx.Membership{Refs: []ldapx.Ref{}, Truncated: true}, d.err
 }
 
-func (d *directoryFake) Modify(_ context.Context, dn string, changes []ldapx.Change) error {
+func (d *directoryFake) Modify(ctx context.Context, dn string, changes []ldapx.Change) error {
+	if d.onModify != nil {
+		d.onModify(ctx, dn)
+	}
 	if err := d.modifyErr[dn]; err != nil {
 		return err
 	}
@@ -172,11 +177,17 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 // in a browser.
 func (e *testEnv) do(t *testing.T, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	return e.doContext(context.Background(), t, method, target, body)
+}
+
+// doContext is do with a request context.
+func (e *testEnv) doContext(ctx context.Context, t *testing.T, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
 	}
-	req := httptest.NewRequest(method, target, r)
+	req := httptest.NewRequestWithContext(ctx, method, target, r)
 	req.Host = "localhost:8080"
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")

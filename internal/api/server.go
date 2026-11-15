@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/cicdteam/ldap-ui/internal/ldapx"
 	"github.com/cicdteam/ldap-ui/internal/profile"
@@ -107,7 +108,8 @@ func New(opts Options) http.Handler {
 	app.HandleFunc("POST /api/c/{conn}/entries/password", s.setPassword)
 	app.Handle("/", spaHandler(opts.UI, base))
 
-	var h http.Handler = app
+	// Inside the token check, so only authenticated requests take a slot.
+	h := admit(64, 4, 10*time.Second, withDeadline(2*time.Minute, 4*time.Minute, app))
 	h = requireJSON(h)
 	h = http.NewCrossOriginProtection().Handler(h)
 	h = requireToken(opts.AuthToken, cookies, logger, h)

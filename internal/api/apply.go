@@ -102,8 +102,10 @@ func bad(attr, msg string) (apiError, bool) {
 }
 
 // apply runs a batch of modifies in order, one atomic LDAP modify per entry,
-// and stops at the first failure. A partial result is a 200: the client
-// drops the applied entries from its batch and keeps the failed one.
+// and stops at the first failure, or before the next entry once the request
+// ends (its deadline, or the client going away). A partial result is a 200:
+// the client drops the applied entries from its batch and keeps the failed
+// one.
 func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 	var req applyRequest
 	var sch *schema.Schema
@@ -116,7 +118,13 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	res := applyResult{Applied: []string{}}
 	for _, e := range req.Entries {
-		if err := d.Modify(r.Context(), e.DN, e.Changes); err != nil {
+		// go-ldap's Modify takes no context, so a modify already sent
+		// finishes; only the ones after it are skipped.
+		err := r.Context().Err()
+		if err == nil {
+			err = d.Modify(r.Context(), e.DN, e.Changes)
+		}
+		if err != nil {
 			_, body := s.rejected(r, "modify", p, sch, e.DN, err, changeAttrs(e.Changes), "changes", len(e.Changes))
 			res.Failed = &applyFailure{DN: e.DN, Error: body}
 			break
