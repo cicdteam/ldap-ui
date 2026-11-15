@@ -36,6 +36,7 @@ To run your own build instead, `make image` builds `ldapui:dev`; use that name
 in place of the published one.
 
 The UI's hashed assets are served gzipped and cached for a year, so no ingress compression or caching setup is needed.
+`/api` responses are never cached (`Cache-Control: no-store`), and the UI refuses to be framed by other pages.
 
 `make image-multiarch` builds `ldapui:dev-amd64` and `ldapui:dev-arm64` with
 buildx and checks each (architecture, `--version`, `/healthz`, unpacked size
@@ -216,6 +217,13 @@ connections:
 | `--session-idle` | | `30m` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
 | `--version` | | prints `ldapui <version>` and exits |
+
+Behind a reverse proxy, always set `--auth-token` or `LDAPUI_AUTH_TOKEN`: a
+proxy that forwards `Host: localhost` or `127.0.0.1` looks like a local
+browser, which needs no token when ldapui listens on loopback.
+`--allowed-hosts` without a token generates a new one on every restart, so
+set one explicitly to keep it stable. A request that runs longer than 5
+minutes is cut off.
 
 ## Development
 
