@@ -211,7 +211,7 @@ connections:
 | `--base-path` | `LDAPUI_BASE_PATH` | none |
 | `--config` | `LDAPUI_CONFIG` | none |
 | `--data-dir` | `LDAPUI_DATA_DIR` | none (`/data` in the image) |
-| `--auth-token` | `LDAPUI_AUTH_TOKEN` | generated when not on loopback |
+| `--auth-token` | `LDAPUI_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
 | `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
 | `--session-idle` | | `30m` |
 | `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
