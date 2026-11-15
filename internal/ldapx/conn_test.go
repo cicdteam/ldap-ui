@@ -476,6 +476,159 @@ func TestCloseIsFinal(t *testing.T) {
 	}
 }
 
+// returnsWithin reports whether f returns within d. A call that does not
+// is left running.
+func returnsWithin(d time.Duration, f func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+func TestRedialDoesNotHoldLock(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
+	c := fakeConn(t, url)
+	ctx := context.Background()
+	cursorConn, err := c.dial(ctx, "")
+	if err != nil {
+		t.Fatalf("dial() error = %v", err)
+	}
+	id, err := c.pin(cursorConn, []byte("cookie"))
+	if err != nil {
+		t.Fatalf("pin() error = %v", err)
+	}
+	_ = c.lc.Close() // the shared connection is lost
+	started, unblock := make(chan struct{}), make(chan struct{})
+	var dialed *ldap.Conn
+	c.dialFn = func(ctx context.Context, password string) (*ldap.Conn, error) {
+		close(started)
+		<-unblock
+		lc, err := c.dial(ctx, password)
+		dialed = lc
+		return lc, err
+	}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := c.current(ctx)
+		errc <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		t.Fatal("current(lost connection) did not redial")
+	}
+
+	const limit = 100 * time.Millisecond
+	var cur *cursor
+	if !returnsWithin(limit, func() { cur = c.unpin(id) }) {
+		t.Errorf("unpin() during a redial did not return within %v", limit)
+	} else if cur == nil {
+		t.Error("unpin(known cursor) = nil, want the cursor")
+	} else {
+		_ = cur.lc.Close()
+	}
+	if !returnsWithin(limit, c.expireCursors) {
+		t.Errorf("expireCursors() during a redial did not return within %v", limit)
+	}
+	if !returnsWithin(limit, func() { _ = c.Close() }) {
+		t.Errorf("Close() during a redial did not return within %v", limit)
+	}
+
+	close(unblock)
+	if err := <-errc; !errors.Is(err, net.ErrClosed) {
+		t.Errorf("current(closed during redial) error = %v, want net.ErrClosed", err)
+	}
+	if dialed == nil || !dialed.IsClosing() {
+		t.Error("connection dialed while closing is still open, want it closed")
+	}
+	c.mu.Lock()
+	installed := c.lc
+	c.mu.Unlock()
+	if installed != nil {
+		t.Error("Conn holds a shared connection after Close, want none")
+	}
+}
+
+func TestConcurrentRedialInstallsOne(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
+	c := fakeConn(t, url)
+	_ = c.lc.Close() // the shared connection is lost
+	arrived, gate := make(chan struct{}, 2), make(chan struct{})
+	var mu sync.Mutex
+	var dialed []*ldap.Conn
+	c.dialFn = func(ctx context.Context, password string) (*ldap.Conn, error) {
+		arrived <- struct{}{}
+		<-gate
+		lc, err := c.dial(ctx, password)
+		if err == nil {
+			mu.Lock()
+			dialed = append(dialed, lc)
+			mu.Unlock()
+		}
+		return lc, err
+	}
+	type result struct {
+		lc  *ldap.Conn
+		err error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			lc, err := c.current(context.Background())
+			results <- result{lc, err}
+		}()
+	}
+	for i := range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(time.Second):
+			t.Errorf("%d of 2 concurrent redials were in flight together, want 2", i)
+		}
+	}
+	close(gate)
+	var got [2]*ldap.Conn
+	for i := range got {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("current(lost connection) error = %v", r.err)
+		}
+		got[i] = r.lc
+	}
+
+	c.mu.Lock()
+	installed := c.lc
+	c.mu.Unlock()
+	if got[0] != installed || got[1] != installed {
+		t.Error("concurrent current() returned a connection other than the installed one")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialed) != 2 {
+		t.Fatalf("concurrent redials dialed %d connections, want 2", len(dialed))
+	}
+	if dialed[0] != installed && dialed[1] != installed {
+		t.Fatal("installed connection is neither of the two dialed, want one of them")
+	}
+	extra := dialed[0]
+	if extra == installed {
+		extra = dialed[1]
+	}
+	if installed.IsClosing() {
+		t.Error("installed connection is closed, want it open")
+	}
+	if !extra.IsClosing() {
+		t.Error("extra dialed connection is open, want it closed")
+	}
+}
+
 func TestSearchTimeLimit(t *testing.T) {
 	tests := []struct {
 		timeout time.Duration
