@@ -8,15 +8,20 @@ package profile
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
 )
 
 // lockDir takes an exclusive lock on dir/.lock, so that two processes never
-// write the same profiles.json. Closing the returned file releases it.
+// write the same profiles.json. Closing the returned file releases it. It
+// returns errNotWritable when dir is read-only or not writable for us.
 func lockDir(dir string) (*os.File, error) {
 	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // dir is the operator's --data-dir
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS) {
+		return nil, errNotWritable
+	}
 	if err != nil {
 		return nil, err
 	}

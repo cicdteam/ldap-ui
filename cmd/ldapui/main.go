@@ -200,6 +200,9 @@ func runTo(args []string, stdout io.Writer) error {
 	if path := catalog.Quarantined(); path != "" {
 		logger.Warn("profiles file was invalid and was moved aside", "path", path)
 	}
+	if catalog.Unlocked() {
+		logger.Warn("data dir is not writable; saving profiles will fail", "dir", cfg.dataDir)
+	}
 
 	generated := false
 	if cfg.authToken == "" && needsToken(cfg.listen, cfg.allowedHosts) {

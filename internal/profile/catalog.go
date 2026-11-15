@@ -16,8 +16,9 @@ import (
 
 // Limits on the profiles saved from the UI.
 const (
-	MaxSaved        = 200     // saved profiles
-	MaxProfileBytes = 4 << 10 // one profile as JSON
+	MaxSaved        = 200      // saved profiles
+	MaxProfileBytes = 4 << 10  // one profile as JSON, without caPEM
+	MaxCAPEMBytes   = 16 << 10 // one profile's caPEM
 )
 
 // Errors returned by Catalog.
@@ -26,6 +27,9 @@ var (
 	ErrFixed          = errors.New("profile is defined in the config file and cannot be changed here")
 	ErrSavingDisabled = errors.New("saving profiles needs --data-dir")
 	ErrLimit          = errors.New("profile limit reached")
+
+	// errNotWritable is returned by lockDir for a data dir it cannot write.
+	errNotWritable = errors.New("data dir is not writable")
 )
 
 // Catalog combines profiles from the config file ("fixed") with profiles
@@ -34,6 +38,7 @@ type Catalog struct {
 	fixed       []Profile
 	path        string   // JSON file for saved profiles; empty disables saving
 	lock        *os.File // holds the data dir lock; nil without one
+	unlocked    bool
 	quarantined string
 
 	mu    sync.Mutex
@@ -48,7 +53,7 @@ type Catalog struct {
 // A profiles.json that does not parse or holds an invalid profile is moved
 // to profiles.json.bad, and the catalog starts with no saved profiles; see
 // Quarantined. The catalog locks dataDir against other processes until
-// Close.
+// Close; a dataDir it cannot write is used without the lock, see Unlocked.
 func NewCatalog(fixed []Profile, dataDir string) (*Catalog, error) {
 	fixed = slices.Clone(fixed)
 	if err := normalizeAll(fixed); err != nil {
@@ -59,7 +64,11 @@ func NewCatalog(fixed []Profile, dataDir string) (*Catalog, error) {
 		return c, nil
 	}
 	lock, err := lockDir(dataDir)
-	if err != nil {
+	switch {
+	case errors.Is(err, errNotWritable):
+		// The saved profiles can still be read; Save fails.
+		c.unlocked = true
+	case err != nil:
 		return nil, err
 	}
 	c.lock = lock
@@ -112,6 +121,12 @@ func (c *Catalog) Quarantined() string {
 	return c.quarantined
 }
 
+// Unlocked reports whether the data dir was not writable when the catalog
+// was created, so it runs without the lock and Save fails.
+func (c *Catalog) Unlocked() bool {
+	return c.unlocked
+}
+
 // Close releases the lock on the data dir. Call it once, when the catalog
 // is no longer used.
 func (c *Catalog) Close() error {
@@ -143,7 +158,8 @@ func (c *Catalog) Find(name string) (Profile, error) {
 // Save validates p, creates or replaces the saved profile with the same
 // name, and writes all saved profiles to disk. Saved profiles never refer
 // to local files or environment variables. It returns ErrLimit for a new
-// profile when MaxSaved are saved, or for one over MaxProfileBytes.
+// profile when MaxSaved are saved, for a caPEM over MaxCAPEMBytes, or for a
+// profile over MaxProfileBytes without its caPEM.
 func (c *Catalog) Save(p Profile) (Profile, error) {
 	p.PasswordEnv, p.PasswordFile, p.CAFile = "", "", ""
 	if err := p.normalize(); err != nil {
@@ -157,12 +173,17 @@ func (c *Catalog) Save(p Profile) (Profile, error) {
 	if slices.ContainsFunc(c.fixed, func(f Profile) bool { return f.Name == p.Name }) {
 		return Profile{}, fmt.Errorf("%w: %s", ErrFixed, p.Name)
 	}
-	b, err := json.Marshal(p)
+	if len(p.CAPEM) > MaxCAPEMBytes {
+		return Profile{}, fmt.Errorf("%w: %s: caPEM is over %d bytes", ErrLimit, p.Name, MaxCAPEMBytes)
+	}
+	rest := p
+	rest.CAPEM = ""
+	b, err := json.Marshal(rest)
 	if err != nil {
 		return Profile{}, err
 	}
 	if len(b) > MaxProfileBytes {
-		return Profile{}, fmt.Errorf("%w: %s is over %d bytes", ErrLimit, p.Name, MaxProfileBytes)
+		return Profile{}, fmt.Errorf("%w: %s is over %d bytes without caPEM", ErrLimit, p.Name, MaxProfileBytes)
 	}
 	next := slices.Clone(c.saved)
 	switch i := slices.IndexFunc(next, func(s Profile) bool { return s.Name == p.Name }); {

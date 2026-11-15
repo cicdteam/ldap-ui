@@ -180,10 +180,23 @@ func TestSaveLimit(t *testing.T) {
 }
 
 func TestSaveProfileTooLarge(t *testing.T) {
+	long := "dc=" + strings.Repeat("a", MaxProfileBytes)
+	tests := []struct {
+		name string
+		p    Profile
+		want error
+	}{
+		{name: "10 KiB caPEM", p: Profile{CAPEM: strings.Repeat("a", 10<<10)}},
+		{name: "17 KiB caPEM", p: Profile{CAPEM: strings.Repeat("a", 17<<10)}, want: ErrLimit},
+		{name: "long baseDN", p: Profile{BaseDN: long}, want: ErrLimit},
+		{name: "long baseDN and small caPEM", p: Profile{BaseDN: long, CAPEM: "pem"}, want: ErrLimit},
+	}
 	c := newCatalog(t, t.TempDir())
-	p := Profile{Name: "big", URL: "ldap://h", BaseDN: "dc=" + strings.Repeat("a", MaxProfileBytes)}
-	if _, err := c.Save(p); !errors.Is(err, ErrLimit) {
-		t.Errorf("Save(%d-byte baseDN) error = %v, want ErrLimit", len(p.BaseDN), err)
+	for _, tc := range tests {
+		tc.p.Name, tc.p.URL = "big", "ldap://h"
+		if _, err := c.Save(tc.p); !errors.Is(err, tc.want) {
+			t.Errorf("%s: Save() error = %v, want %v", tc.name, err, tc.want)
+		}
 	}
 }
 
