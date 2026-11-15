@@ -188,7 +188,8 @@ test('the connections page scrolls on its own when it is taller than the window'
   const view = page.locator('main').locator('..')
   await expect.poll(() => view.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true)
   await view.evaluate((e) => e.scrollTo(0, e.scrollHeight))
-  await expect(page.getByRole('button', { name: /^prod-rw(?![\w-])/ })).toBeInViewport()
+  // The last row, not a named one: the list grows with every profile in connections.yaml.
+  await expect(page.locator('main li').last()).toBeInViewport()
 })
 
 test('a button tip shows right away on hover and on keyboard focus', async ({ page }) => {

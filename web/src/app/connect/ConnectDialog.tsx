@@ -128,6 +128,7 @@ export function ConnectDialog({
                 type="password"
                 autoFocus={!profile.userLogin || profile.usernameLocked}
                 autoComplete="current-password"
+                required={profile.userLogin}
                 aria-describedby={needsPassword ? undefined : hintId}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

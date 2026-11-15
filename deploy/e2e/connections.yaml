@@ -44,6 +44,12 @@ connections:
     baseDN: dc=example,dc=org
     bindDNTemplate: uid={user},ou=people,dc=example,dc=org
     environment: dev
+  - name: people-sso # people, locked to the X-User identity (serve.sh)
+    url: ldap://127.0.0.1:1390
+    baseDN: dc=example,dc=org
+    bindDNTemplate: uid={user},ou=people,dc=example,dc=org
+    identityUser: exact
+    environment: dev
   - name: ad-people
     url: ldaps://127.0.0.1:1637
     baseDN: DC=corp,DC=example,DC=test

@@ -546,7 +546,9 @@ A connect to such a profile goes like this:
 The connect dialog of such a profile has a visible Username field above the
 password, marked `autocomplete="username"` so that a password manager offers
 the accounts it saved; ldapui itself does not remember the username. With
-`identityUser` the field is filled in and read-only. Once connected, the
+`identityUser`, when the request carries a trusted identity, the field is
+filled in with the username it maps to and is read-only; without one, the
+field is empty and connect fails with `identity_required`. Once connected, the
 workspace header shows `Signed in as` and the DN the connection bound as,
 for example `Signed in as uid=alice,ou=people,dc=example,dc=org`, or the UPN
 for a template like `{user}@corp.example`. Profiles with a fixed `bindDN`
