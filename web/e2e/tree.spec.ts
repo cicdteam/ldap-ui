@@ -27,6 +27,13 @@ test('the filter narrows the loaded rows to the matches and their parents', asyn
   await filterField(page).fill('doe')
   // The demo's cn=Doe\, John under ou=Sales\, EMEA is not loaded, so it is not there.
   await expect(rows(page)).toHaveText([BASE, /^ou=e2e/, /^uid=jane\.doe/, /^uid=jdoe/])
+  // A click selects and collapses ou=e2e, which was there only for its matches: as the
+  // selected entry it stays, so the tree does not go empty.
+  await row(page, 'ou=e2e').click()
+  await expect(rows(page)).toHaveText([BASE, /^ou=e2e/])
+  await expect(row(page, 'ou=e2e')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tree')).toHaveAttribute('aria-activedescendant', /^tree-/)
+  await row(page, 'ou=e2e').click()
   await filterField(page).fill('')
   await expect(row(page, 'cn=join-team')).toBeVisible()
 })
@@ -57,7 +64,9 @@ test('one click on a container selects and expands it; Left and Right also toggl
 test('a container row lists its children from its List children icon', async ({ page }) => {
   await connect(page, 'demo')
   const people = row(page, 'ou=people')
-  const icon = people.getByTitle('List children of ou=people in the list pane')
+  const icon = people.getByTitle('List children of ou=people in the list pane (Shift+Enter)', {
+    exact: true,
+  })
   await expect(icon).toBeHidden()
   await people.hover()
   await icon.click()
@@ -71,14 +80,38 @@ test('a container row lists its children from its List children icon', async ({ 
   await page.getByRole('tree').focus()
   await page.keyboard.press('Home')
   await page.keyboard.press('ArrowDown')
-  await expect(
-    row(page, 'ou=e2e').getByTitle('List children of ou=e2e in the list pane'),
-  ).toBeVisible()
+  await expect(row(page, 'ou=e2e').getByTitle(/^List children of ou=e2e/)).toBeVisible()
   await expect(icon).toBeHidden()
+  // Shift+Enter does what the icon does.
+  await page.keyboard.press('Shift+Enter')
+  await expect(page.getByRole('grid', exact('Search results'))).toContainText('E2E layout')
+  expect(new URL(page.url()).searchParams.get('base')).toBe(`ou=e2e,${BASE}`)
   // Leaves have none.
   await openEntry(page, 'demo', e2eDN('jdoe'))
   await row(page, 'uid=jdoe').hover()
   await expect(row(page, 'uid=jdoe').getByTitle(/^List children/)).toHaveCount(0)
+})
+
+test('in a narrow tree an account row fits: the name gives way first, then the RDN', async ({
+  page,
+}) => {
+  // The tree takes 18% of 600 px.
+  await page.setViewportSize({ width: 600, height: 900 })
+  await openEntry(page, 'demo', e2eDN('jdoe'))
+  const jdoe = row(page, 'uid=jdoe')
+  await expect(jdoe).toBeVisible()
+  const widths = await jdoe.evaluate((el) => {
+    const label = el.querySelector('[title]')!
+    const hint = [...el.querySelectorAll('span')].find((s) => s.textContent === 'John Doe')!
+    return {
+      overflow: el.scrollWidth - el.clientWidth,
+      labelCut: label.scrollWidth > label.clientWidth,
+      hint: hint.clientWidth,
+    }
+  })
+  expect(widths.overflow).toBe(0)
+  // The RDN is cut only once the name has no room left.
+  if (widths.labelCut) expect(widths.hint).toBe(0)
 })
 
 // OU=Bulk in the AD demo (deploy/demo-ldif/ad-demo.ldif) holds 1600 users: one tree page.

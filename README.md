@@ -171,9 +171,10 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   container selects it and expands or collapses it; the chevron only expands
   or collapses it, and so do Right and Left. A container shows its List
   children icon while the pointer is over its row, and on the row with
-  keyboard focus. "Filter loaded entries" above the tree keeps the rows whose
-  RDN value or name holds the text (any case), with their parents; it narrows
-  only the rows already loaded and never asks the server (the search bar
+  keyboard focus; Shift+Enter on the row does the same. "Filter loaded
+  entries" above the tree narrows the rows of open branches to the ones whose
+  RDN value or name holds the text (any case), with their parents; the
+  selected entry always stays. It never asks the server (the search bar
   does). Next to it, Reload the tree from the server and Collapse the tree
   (the header's tree button opens it again). A container shows its first
   2000 children; a bigger one ends with "More entries…", which lists its
@@ -263,6 +264,7 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 | ⇧⌥F / Shift+Alt+F | Format the filter (in the search bar) |
 | ↑ / ↓, Page Up / Page Down, Home / End | Move through the rows; the card follows (in the results list) |
 | Esc | Close the list (with focus in the list); the entry in the card and staged changes stay |
+| ⇧↵ / Shift+Enter | List the children of the focused container (in the tree) |
 | ⌘C / Ctrl+C | Copy the DN of the selected row (in the results list, with no text selected) |
 | `E` | Edit mode in the inspector (ignored while focus is in a text field, the tree, the results list or a dialog) |
 | ⌘S / Ctrl+S | Review the staged changes |

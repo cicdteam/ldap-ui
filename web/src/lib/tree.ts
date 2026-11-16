@@ -1,4 +1,4 @@
-import { normDN, rdnType, rdnValue, splitDN } from './dn'
+import { normDN, rdnType, rdnValue, sameDN, splitDN } from './dn'
 import { asText, nameOf } from './results'
 import type { Page } from './types'
 
@@ -90,13 +90,15 @@ interface Root {
 
 /**
  * Flattens the visible tree. children(dn) returns the load state of dn's children. A filter keeps
- * the entries whose label or hint holds it (any case), with their ancestors.
+ * the entries whose label or hint holds it (any case), and the entry keep (the selected one), with
+ * their ancestors.
  */
 export function buildRows(
   roots: Root[],
   expanded: Set<string>,
   children: (dn: string) => ChildState | undefined,
   filter = '',
+  keep = '',
 ): TreeRow[] {
   const rows: TreeRow[] = []
   // Roots may nest (a base DN below a naming context), so the same entry can
@@ -157,20 +159,21 @@ export function buildRows(
     root = i
     walk(r.dn, r.dn, '', r.kind, false, 0)
   })
-  return filter ? filterRows(rows, filter.toLowerCase()) : rows
+  return filter ? filterRows(rows, filter.toLowerCase(), keep) : rows
 }
 
-function filterRows(rows: TreeRow[], q: string): TreeRow[] {
-  const keep = new Set<number>()
+function filterRows(rows: TreeRow[], q: string, keep: string): TreeRow[] {
+  const shown = new Set<number>()
   const path: number[] = [] // the ancestors of the row at hand
   rows.forEach((r, i) => {
     while (path.length && rows[path[path.length - 1]].depth >= r.depth) path.pop()
     const hit = (s?: string) => !!s && s.toLowerCase().includes(q)
-    if (r.type === 'entry' && (hit(r.label) || hit(r.hint)))
-      for (const j of [...path, i]) keep.add(j)
+    // The selected entry stays, so collapsing a parent kept for its matches cannot empty the tree.
+    if (r.type === 'entry' && (hit(r.label) || hit(r.hint) || (keep && sameDN(r.dn, keep))))
+      for (const j of [...path, i]) shown.add(j)
     path.push(i)
   })
-  return rows.filter((_, i) => keep.has(i))
+  return rows.filter((_, i) => shown.has(i))
 }
 
 /** Expanded nodes whose ancestors are all open: the ones whose children must be loaded. */

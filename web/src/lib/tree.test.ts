@@ -199,6 +199,22 @@ describe('buildRows', () => {
     expect(all.find((r) => r.label === 'adavis')?.hint).toBe('Alice Davis')
   })
 
+  it('keeps the selected entry and its parents under a filter that matches nothing there', () => {
+    const base = 'dc=example,dc=org'
+    const e2e = `ou=e2e,${base}`
+    const children = (dn: string): ChildState =>
+      dn === base
+        ? ok({ items: [{ dn: e2e, rdn: 'ou=e2e', leaf: false, kind: 'ou' }], more: false })
+        : ok({
+            items: [{ dn: `uid=jdoe,${e2e}`, rdn: 'uid=jdoe', leaf: true, kind: 'user' }],
+            more: false,
+          })
+    // ou=e2e was kept only as the parent of uid=jdoe; selecting it collapses it.
+    const rows = buildRows(roots, new Set([base]), children, 'doe', 'OU=E2E,DC=Example,DC=Org')
+    expect(rows.map((r) => r.label)).toEqual([base, 'e2e'])
+    expect(buildRows(roots, new Set([base]), children, 'doe')).toEqual([])
+  })
+
   it('turns an expanded node without children into a leaf', () => {
     const rows = buildRows(roots, new Set(['dc=example,dc=org']), () =>
       ok({ items: [], more: false }),

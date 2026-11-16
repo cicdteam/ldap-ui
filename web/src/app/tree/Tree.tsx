@@ -139,7 +139,7 @@ export function Tree() {
   })
   // Narrows the rows already loaded; it never asks the server.
   const [filter, setFilter] = useState('')
-  const rows = buildRows(roots, expanded, (dn) => states.get(dn), filter.trim())
+  const rows = buildRows(roots, expanded, (dn) => states.get(dn), filter.trim(), ws.dn)
 
   const selectedIndex = ws.dn
     ? rows.findIndex((r) => r.type === 'entry' && sameDN(r.dn, ws.dn))
@@ -190,6 +190,13 @@ export function Tree() {
   const typedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return
+    const at = rows[focusIndex]
+    if (e.key === 'Enter' && e.shiftKey && at?.type === 'entry' && at.expandable) {
+      // The row's List children icon, from the keyboard.
+      e.preventDefault()
+      ws.listChildren(at.dn)
+      return
+    }
     const printable = e.key.length === 1 && e.key !== ' ' && e.key !== '*'
     const action = treeKey(rows, focusIndex, e.key, printable ? typed.current : '')
     if (printable) {
@@ -223,7 +230,13 @@ export function Tree() {
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
-        <Button size="icon" variant="ghost" title="Collapse the tree" onClick={ws.toggleTree}>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Collapse the tree"
+          title="Collapse the tree"
+          onClick={ws.toggleTree}
+        >
           <PanelLeftClose className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -289,20 +302,20 @@ export function Tree() {
                   <span className="w-3.5 shrink-0" />
                 )}
                 <RowIcon row={r} />
-                <span
-                  className={cn('truncate', r.hint && 'shrink-0')}
-                  title={r.type === 'entry' ? r.dn : undefined}
-                >
+                <span className="truncate" title={r.type === 'entry' ? r.dn : undefined}>
                   {r.prefix && <span className="font-mono text-xs text-muted">{r.prefix}</span>}
                   {r.label}
                 </span>
-                {r.hint && <span className="ml-1 min-w-0 truncate text-muted">{r.hint}</span>}
+                {/* In a narrow pane the hint gives way first, then the label truncates. */}
+                {r.hint && (
+                  <span className="ml-1 min-w-0 shrink-[1000] truncate text-muted">{r.hint}</span>
+                )}
                 {r.type === 'entry' && entryChanges(batch, r.dn) && <ChangeDot />}
                 {r.type === 'entry' && r.expandable && (
                   // Like the chevron, not a button; shown on hover and on the focused row.
                   <span
                     aria-hidden
-                    title={`List children of ${r.prefix}${r.label} in the list pane`}
+                    title={`List children of ${r.prefix}${r.label} in the list pane (Shift+Enter)`}
                     onClick={(e) => {
                       e.stopPropagation()
                       ws.listChildren(r.dn)
