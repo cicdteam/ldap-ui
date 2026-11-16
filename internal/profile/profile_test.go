@@ -116,6 +116,26 @@ func TestIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestShared(t *testing.T) {
+	const dn = "cn=svc,dc=example,dc=org"
+	tests := []struct {
+		name string
+		p    Profile
+		want bool
+	}{
+		{name: "passwordEnv", p: Profile{BindDN: dn, PasswordEnv: "PW"}, want: true},
+		{name: "passwordFile", p: Profile{BindDN: dn, PasswordFile: "/pw"}, want: true},
+		{name: "anonymous", p: Profile{}, want: true},
+		{name: "bindDN without a configured password", p: Profile{BindDN: dn}, want: false},
+		{name: "bindDNTemplate", p: Profile{BindDNTemplate: "uid={user},dc=example,dc=org"}, want: false},
+	}
+	for _, tc := range tests {
+		if got := tc.p.Shared(); got != tc.want {
+			t.Errorf("%s: Shared() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestConfiguredPassword(t *testing.T) {
 	t.Setenv("LDAPLENS_TEST_PW", "from-env")
 	pwFile := filepath.Join(t.TempDir(), "pw")

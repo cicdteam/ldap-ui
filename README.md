@@ -340,6 +340,22 @@ session holds at most 8 connections: one more connect fails with 409
 `too_many_connections` until one is disconnected. The server holds at most
 1000 sessions; one more closes the connections of the least recently used.
 
+A profile that binds with its configured password (`passwordEnv` or
+`passwordFile`) or anonymously is shared: one connection in each ldaplens
+process serves every browser, outside any session. Connecting to it sets no
+session cookie, and every browser with the token can use it without
+connecting, so the Connections page marks it connected while the process
+holds it. Each process dials its own at the first request that needs it,
+one dial at a time, so any replica behind a load balancer serves any
+request. The connection is closed after `--session-idle` without use by
+anyone, and `--session-max-age` after it was dialed; the next request dials
+again. A disconnect leaves it open for the others; saving the profile in the
+UI closes it, so the next request uses the new settings. A typed password,
+whether the profile has none configured or the configured one failed, and a
+`bindDNTemplate` profile give the browser a connection of its own in its
+session, which only the process holding that session knows: those need one
+replica or sticky sessions.
+
 Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
 within 60 seconds refuse further connects as that DN with 429
 `too_many_attempts` and a `Retry-After` header in seconds, until 60 seconds
@@ -375,7 +391,9 @@ only: `LDAPLENS_DATA_DIR=""` disables saved connections, and the profiles in
 `connections.yaml` each name one form.
 
 The server runs at most 64 API requests at once, and at most 4 of one
-session; the others wait their turn. A request that waits more than 10
+session; the others wait their turn. A request without a session cookie,
+such as one on a shared profile from a browser that has typed no password,
+counts only toward the 64. A request that waits more than 10
 seconds gets 503 `busy` with `Retry-After: 1`; the UI retries a read that
 gets it up to 3 times, a second apart, and never retries a write. Once
 running, an API request has 2 minutes before it ends with 504 `timeout`. An
@@ -407,9 +425,10 @@ ldaplens logs to stdout, one `key=value` line per event. The lines below,
 except `auth failed`, end with who made them:
 
 - `session`: the first 8 hex characters of the SHA-256 of the browser's
-  session cookie, empty without one. A connect gives the browser a new
-  session ID: its `connected` line carries the new one, and the one the
-  request came with in `previous`. It ties one browser's lines together
+  session cookie, empty without one. A connect to a profile that is not
+  shared gives the browser a new session ID: its `connected` line carries
+  the new one, and the one the request came with in `previous`. A connect
+  to a shared profile keeps the session as it is and has no `previous`. It ties one browser's lines together
   across connects; the session ID itself is never logged.
 - `remote`: the client address and port. Behind a proxy this is the proxy:
   match it with the proxy's access log.
@@ -419,7 +438,7 @@ The lines:
 
 | Message | Fields |
 |---|---|
-| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
+| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one) unless the profile is shared, `connect failed` adds `error` |
 | `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts` |
 | `connect refused` | `profile`, `code`, `bindDN` (empty): a connect refused with 403 `identity_required` or `identity_mismatch` (see [Per-user login](#per-user-login)) |
 | `disconnected` | `profile`, `bindDN` |
@@ -490,10 +509,12 @@ startup error without `--identity-header`, since nobody could connect to it.
 ldaplens keeps sessions in memory and saved connections in one file with one
 writer, so a shared instance is one process. In Kubernetes, run one replica
 with `strategy: Recreate`: a second replica does not know the first one's
-sessions, and the default rolling update starts the new pod while the old
-one still holds the data dir, so the new pod exits (see [Saved
-connections](#saved-connections)) and the rollout stalls. Every restart
-ends all sessions, and users connect again.
+sessions (connections with a typed password or per-user login; a shared
+profile works on any replica, see [Flags](#flags)), and the default rolling
+update starts the new pod while the old one still holds the data dir, so the
+new pod exits (see [Saved connections](#saved-connections)) and the rollout
+stalls. Every restart ends all sessions, and users connect again; a shared
+profile is dialed again at its next request.
 
 - **Fixed profiles with per-user login** is the recommended setup for a
   shared instance: put every connection in `connections.yaml` with a

@@ -335,9 +335,11 @@ func runTo(args []string, stdout io.Writer) error {
 
 	sessions := session.New[api.Directory](cfg.sessionIdle, cfg.sessionMaxAge)
 	go sessions.Run(ctx)
+	shared := session.New[api.Directory](cfg.sessionIdle, cfg.sessionMaxAge)
+	go shared.Run(ctx)
 
 	srv := newHTTPServer(api.New(api.Options{
-		Catalog: catalog, Dial: dial, Sessions: sessions,
+		Catalog: catalog, Dial: dial, Sessions: sessions, Shared: shared,
 		AllowedHosts: cfg.allowedHosts, AuthToken: cfg.authToken, BasePath: cfg.basePath,
 		SecureCookies: cfg.secureCookies, IdentityHeader: cfg.identityHeader, TrustedProxies: cfg.trustedProxies,
 		UI: web.Dist(), Logger: logger,

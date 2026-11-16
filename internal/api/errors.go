@@ -53,11 +53,18 @@ func writeError(w http.ResponseWriter, status int, e apiError) {
 	writeJSON(w, status, e)
 }
 
+// errPasswordUnavailable marks a configured password that cannot be read.
+// The error it wraps names the env var or file, which only the server log
+// may show.
+var errPasswordUnavailable = errors.New("the configured password for this profile is unavailable; see the server log")
+
 // errorResponse maps an error from the LDAP layer to an HTTP status and body.
 func errorResponse(err error) (int, apiError) {
 	var certErr *ldapx.UntrustedCertError
 	var le *ldap.Error
 	switch {
+	case errors.Is(err, errPasswordUnavailable):
+		return http.StatusInternalServerError, apiError{Code: "password_unavailable", Message: errPasswordUnavailable.Error()}
 	case errors.As(err, &certErr):
 		return http.StatusBadGateway, apiError{Code: "tls_untrusted", Message: certErr.Error(), Certificates: certInfos(certErr.Certificates)}
 	// net.ErrClosed means the session's connection was closed under the

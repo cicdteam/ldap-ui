@@ -53,6 +53,10 @@ type Options struct {
 	Catalog  *profile.Catalog
 	Dial     Dialer
 	Sessions *session.Manager[Directory]
+	// Shared holds this process's connections of shared profiles (see
+	// profile.Profile.Shared), one session per profile, so that its idle
+	// and age limits apply to each.
+	Shared *session.Manager[Directory]
 	// AllowedHosts are Host header values accepted besides localhost.
 	AllowedHosts []string
 	// AuthToken, when set, is required on every request except probes.
@@ -89,6 +93,7 @@ func New(opts Options) http.Handler {
 	cookies := cookieOptions{Path: base + "/", Secure: opts.SecureCookies}
 	s := &server{
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
+		shared:         &sharedConns{m: opts.Shared, ids: map[string]string{}, dials: map[string]chan struct{}{}},
 		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
 		attempts: newAttemptLimiter(5, time.Minute, 10000, time.Now),
 	}

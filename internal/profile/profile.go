@@ -152,6 +152,13 @@ func (p Profile) UserLogin() bool {
 	return p.BindDNTemplate != ""
 }
 
+// Shared reports whether everyone who connects binds the same way, with
+// the configured password or anonymously, so that one connection can serve
+// them all.
+func (p Profile) Shared() bool {
+	return !p.UserLogin() && (p.PasswordEnv != "" || p.PasswordFile != "" || p.BindDN == "")
+}
+
 // BindDNFor returns BindDNTemplate with the placeholder replaced by
 // username. A username that does not match usernamePattern is refused with
 // an error wrapping ErrInvalidUsername.

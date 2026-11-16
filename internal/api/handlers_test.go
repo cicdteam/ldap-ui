@@ -145,6 +145,8 @@ type testEnv struct {
 	// RemoteAddr instead of httptest's 192.0.2.1:1234.
 	header http.Header
 	remote string
+	// opts is what h was built from.
+	opts Options
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -174,6 +176,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
 	opts.Sessions = session.New[Directory](time.Hour, 8*time.Hour)
+	opts.Shared = session.New[Directory](time.Hour, 8*time.Hour)
 	if opts.Dial == nil {
 		opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
 			env.password, env.dialed = password, p
@@ -185,7 +188,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 			return env.dir, nil
 		}
 	}
-	env.h = New(opts)
+	env.h, env.opts = New(opts), opts
 	return env
 }
 
@@ -346,7 +349,7 @@ func TestInfoCarriesProfileFlags(t *testing.T) {
 
 func TestNotConnected(t *testing.T) {
 	env := newTestEnv(t)
-	rec := env.do(t, http.MethodGet, "/api/c/dev/info", "")
+	rec := env.do(t, http.MethodGet, "/api/c/manual/info", "")
 	if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
 		t.Errorf("info without connect = %d %s, want 401 not_connected", rec.Code, rec.Body)
 	}
@@ -435,14 +438,15 @@ func TestMembership(t *testing.T) {
 }
 
 func TestDisconnectClosesConnection(t *testing.T) {
-	env := connected(t)
-	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"dev"}`); rec.Code != http.StatusNoContent {
+	env := newTestEnv(t)
+	connectTo(t, env, `{"profile":"manual","password":"pw"}`)
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"manual"}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("disconnect = %d", rec.Code)
 	}
 	if !env.dir.closed {
 		t.Error("disconnect did not close the directory")
 	}
-	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized {
+	if rec := env.do(t, http.MethodGet, "/api/c/manual/info", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("info after disconnect = %d, want 401", rec.Code)
 	}
 }
@@ -526,7 +530,7 @@ func TestCookieScope(t *testing.T) {
 		env := newTestEnvWith(t, tc.opts)
 		prefix := strings.TrimSuffix(tc.wantPath, "/")
 		env.do(t, http.MethodGet, prefix+"/?token=tok", "")
-		if rec := env.do(t, http.MethodPost, prefix+"/api/connect", `{"profile":"dev"}`); rec.Code != http.StatusOK {
+		if rec := env.do(t, http.MethodPost, prefix+"/api/connect", `{"profile":"manual","password":"pw"}`); rec.Code != http.StatusOK {
 			t.Fatalf("%s: connect = %d %s, want 200", tc.name, rec.Code, rec.Body)
 		}
 		for _, name := range []string{tokenCookie, sessionCookie} {
@@ -628,7 +632,7 @@ func TestWriteLogsAttribution(t *testing.T) {
 		t.Fatalf("connect with bad credentials = %d %s, want 401", rec.Code, rec.Body)
 	}
 	env.dialErr = nil
-	connectTo(t, env, `{"profile":"dev"}`)
+	connectTo(t, env, `{"profile":"dev","password":"`+typedPW+`"}`)
 	for _, w := range []struct{ path, body string }{
 		{path: "/api/c/dev/changes/apply", body: applyOne},
 		{path: "/api/c/dev/entries/add", body: addBody},
@@ -776,19 +780,19 @@ func connectedNames(t *testing.T, env *testEnv) []string {
 
 func TestConnectRotatesSession(t *testing.T) {
 	env := newTestEnv(t)
-	connectTo(t, env, `{"profile":"dev"}`)
+	connectTo(t, env, `{"profile":"manual","password":"pw"}`)
 	first, firstCookies := env.cookie(sessionCookie), slices.Clone(env.cookies)
-	connectTo(t, env, `{"profile":"anon"}`)
+	connectTo(t, env, `{"profile":"people","username":"user001","password":"pw"}`)
 	second := env.cookie(sessionCookie)
 	if first == "" || second == "" || second == first {
 		t.Fatalf("session cookie after two connects = %q, then %q, want two different IDs", first, second)
 	}
-	if diff := cmp.Diff([]string{"anon", "dev"}, connectedNames(t, env)); diff != "" {
+	if diff := cmp.Diff([]string{"manual", "people"}, connectedNames(t, env)); diff != "" {
 		t.Errorf("connected profiles with the new cookie mismatch (-want +got):\n%s", diff)
 	}
 
 	env.cookies = firstCookies
-	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
+	if rec := env.do(t, http.MethodGet, "/api/c/manual/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
 		t.Errorf("info with the first cookie = %d %s, want 401 not_connected", rec.Code, rec.Body)
 	}
 }
@@ -798,8 +802,8 @@ func TestConnectRotatesSession(t *testing.T) {
 func TestConnectLogsPrevious(t *testing.T) {
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
-	connectTo(t, env, `{"profile":"dev"}`)
-	connectTo(t, env, `{"profile":"anon"}`)
+	connectTo(t, env, `{"profile":"manual","password":"pw"}`)
+	connectTo(t, env, `{"profile":"people","username":"user001","password":"pw"}`)
 	var got []map[string]any
 	for _, l := range withMsg(jsonLogs(t, &logs), "connected") {
 		got = append(got, map[string]any{"session": l["session"], "previous": l["previous"]})
@@ -823,7 +827,7 @@ func TestConnectLogsPrevious(t *testing.T) {
 func TestConnectFailureCreatesNoSession(t *testing.T) {
 	env := newTestEnv(t)
 	env.dialErr = ldap.NewError(ldap.ErrorNetwork, errors.New("refused"))
-	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"dev"}`); rec.Code != http.StatusBadGateway {
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"pw"}`); rec.Code != http.StatusBadGateway {
 		t.Fatalf("connect with a failing dial = %d %s, want 502", rec.Code, rec.Body)
 	}
 	if id := env.cookie(sessionCookie); id != "" {
@@ -836,15 +840,15 @@ func TestConnectTooManyConnections(t *testing.T) {
 	var want []string
 	for i := range session.MaxConns {
 		name := fmt.Sprintf("p%d", i)
-		if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"`+name+`","url":"ldap://`+name+`:389"}`); rec.Code != http.StatusOK {
+		if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"`+name+`","url":"ldap://`+name+`:389","bindDN":"cn=admin"}`); rec.Code != http.StatusOK {
 			t.Fatalf("save %s = %d %s", name, rec.Code, rec.Body)
 		}
-		connectTo(t, env, `{"profile":"`+name+`"}`)
+		connectTo(t, env, `{"profile":"`+name+`","password":"pw"}`)
 		want = append(want, name)
 	}
 
 	env.dir = &directoryFake{}
-	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"anon"}`)
+	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"pw"}`)
 	if rec.Code != http.StatusConflict || errorCode(t, rec) != "too_many_connections" {
 		t.Errorf("connect %d = %d %s, want 409 too_many_connections", session.MaxConns+1, rec.Code, rec.Body)
 	}
@@ -1111,17 +1115,18 @@ func TestWriteLogsResolvedBindDN(t *testing.T) {
 	}
 }
 
-// TestWriteLogsAnonymousBindDN checks that the lines of an anonymous
-// connection carry an empty bindDN even after its profile was edited to a
-// bind DN: they name the DN the connection bound as, not the catalog's.
-func TestWriteLogsAnonymousBindDN(t *testing.T) {
+// TestWriteLogsBoundDN checks that the lines of a connection carry the DN
+// it bound as even after its profile was edited to an anonymous one: they
+// name the DN the connection bound as, not the catalog's.
+func TestWriteLogsBoundDN(t *testing.T) {
+	const dn = "cn=admin,dc=example,dc=org"
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
-	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`); rec.Code != http.StatusOK {
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","bindDN":"`+dn+`"}`); rec.Code != http.StatusOK {
 		t.Fatalf("save lab = %d %s, want 200", rec.Code, rec.Body)
 	}
-	connectTo(t, env, `{"profile":"lab"}`)
-	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","bindDN":"cn=admin,dc=example,dc=org"}`); rec.Code != http.StatusOK {
+	connectTo(t, env, `{"profile":"lab","password":"pw"}`)
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`); rec.Code != http.StatusOK {
 		t.Fatalf("edit lab = %d %s, want 200", rec.Code, rec.Body)
 	}
 	body := `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
@@ -1138,8 +1143,8 @@ func TestWriteLogsAnonymousBindDN(t *testing.T) {
 	lines := jsonLogs(t, &logs)
 	for _, msg := range []string{"modified", "modify rejected", "disconnected"} {
 		found := withMsg(lines, msg)
-		if len(found) != 1 || found[0]["bindDN"] != "" {
-			t.Errorf("%q lines = %v, want one with an empty bindDN", msg, found)
+		if len(found) != 1 || found[0]["bindDN"] != dn {
+			t.Errorf("%q lines = %v, want one with bindDN %s", msg, found, dn)
 		}
 	}
 }

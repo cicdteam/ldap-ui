@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -29,6 +30,7 @@ type server struct {
 	catalog  *profile.Catalog
 	dial     Dialer
 	sessions *session.Manager[Directory]
+	shared   *sharedConns
 	cookies  cookieOptions
 	log      *slog.Logger
 	// attempts counts wrong passwords per server and bind DN, keyed by
@@ -77,6 +79,11 @@ func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	for _, n := range s.sessions.Names(sessionID(r)) {
 		connected[n] = true
 	}
+	for _, p := range slices.Concat(fixed, saved) {
+		if p.Shared() && s.shared.connected(p.Name) {
+			connected[p.Name] = true
+		}
+	}
 	identity, _ := s.identity(r)
 	views := make([]profileView, 0, len(fixed)+len(saved))
 	for _, p := range fixed {
@@ -109,6 +116,9 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.fail(w, err)
 	default:
+		// A shared connection with the old settings goes, so that the next
+		// request dials the saved ones.
+		s.shared.drop(saved.Name)
 		s.log.Info("profile saved", slices.Concat([]any{
 			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
 			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
@@ -155,29 +165,29 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, apiError{Code: "profile_not_found", Message: err.Error()})
 		return
 	}
-	password := req.Password
+	// A shared profile's connection serves every browser and needs no
+	// session. A typed password, as after the configured one failed, gets
+	// a connection of this browser's own below.
+	if p.Shared() && req.Password == "" {
+		d, err := s.sharedDir(r.Context(), p)
+		if err != nil {
+			s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
+			s.fail(w, err)
+			return
+		}
+		s.log.Info("connected", s.attributed(r, p, "profile", p.Name)...)
+		writeJSON(w, http.StatusOK, newInfoView(d.Info(), p))
+		return
+	}
 	if p.UserLogin() {
 		bound, ok := s.userLogin(w, r, p, req)
 		if !ok {
 			return
 		}
 		p = bound
-	} else if password == "" {
-		configured, ok, err := p.ConfiguredPassword()
-		if err != nil {
-			// err names the env var or file; keep that in the server log.
-			s.log.Error("configured password unavailable", "profile", p.Name, "error", err)
-			writeError(w, http.StatusInternalServerError, apiError{
-				Code:    "password_unavailable",
-				Message: "the configured password for this profile is unavailable; see the server log",
-			})
-			return
-		}
-		if !ok && p.BindDN != "" {
-			writeError(w, http.StatusBadRequest, apiError{Code: "password_required", Message: "this profile needs a password"})
-			return
-		}
-		password = configured
+	} else if req.Password == "" {
+		writeError(w, http.StatusBadRequest, apiError{Code: "password_required", Message: "this profile needs a password"})
+		return
 	}
 	// Only a typed password is limited: a wrong configured one would lock
 	// its DN for everyone. end is how a limited attempt ends, set from the
@@ -203,7 +213,7 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), p.ConnectTimeout+p.SearchTimeout)
 	defer cancel()
-	dir, err := s.dial(ctx, p, password)
+	dir, err := s.dial(ctx, p, req.Password)
 	if err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
 			end = s.attempts.fail
@@ -292,6 +302,8 @@ func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req, maxBody) {
 		return
 	}
+	// A shared profile's connection stays: other browsers use it. This drops
+	// only the browser's own, from a typed password.
 	p, _ := s.catalog.Find(req.Profile) // for the bind DN; "" for an unknown name
 	// The connection's DN, as guard takes it.
 	if d, err := s.sessions.Get(sessionID(r), req.Profile); err == nil {
@@ -402,7 +414,9 @@ type identityDir struct {
 }
 
 // directory returns the connection named by the {conn} path segment, or
-// writes an error and returns false. A connection made under a trusted
+// writes an error and returns false. Without one in the browser's session,
+// a shared profile gets this process's connection, dialed by the first
+// request that needs it. A connection made under a trusted
 // identity serves only requests that carry the same identity, byte for
 // byte: any other request, for example from a shared browser after its
 // proxy sign-in switched to another person, drops the connection and gets
@@ -410,6 +424,11 @@ type identityDir struct {
 func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, bool) {
 	name := r.PathValue("conn")
 	d, err := s.sessions.Get(sessionID(r), name)
+	if err != nil {
+		if p, ferr := s.catalog.Find(name); ferr == nil && p.Shared() {
+			d, err = s.sharedDir(r.Context(), p)
+		}
+	}
 	if err != nil {
 		s.fail(w, err)
 		return nil, false
@@ -423,6 +442,86 @@ func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, b
 		}
 	}
 	return d, true
+}
+
+// sharedDir returns this process's connection of the shared profile p,
+// dialing it with the configured password, or anonymously, when there is
+// none.
+func (s *server) sharedDir(ctx context.Context, p profile.Profile) (Directory, error) {
+	return s.shared.get(ctx, p.Name, func(ctx context.Context) (Directory, error) {
+		password, _, err := p.ConfiguredPassword()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errPasswordUnavailable, err)
+		}
+		ctx, cancel := context.WithTimeout(ctx, p.ConnectTimeout+p.SearchTimeout)
+		defer cancel()
+		return s.dial(ctx, p, password)
+	})
+}
+
+// sharedConns holds the connections of shared profiles, each in a session
+// of its own in m. Every replica dials its own.
+type sharedConns struct {
+	m *session.Manager[Directory]
+
+	mu    sync.Mutex
+	ids   map[string]string        // profile name to its session in m
+	dials map[string]chan struct{} // profile name to a slot held across its dial
+}
+
+func (c *sharedConns) id(name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ids[name]
+}
+
+// connected reports whether name has a live connection, without counting
+// as a use.
+func (c *sharedConns) connected(name string) bool {
+	return len(c.m.Names(c.id(name))) > 0
+}
+
+// get returns name's connection, dialing it with dial when there is none.
+// One dial per profile runs at a time, outside the lock: a request that
+// finds one under way waits for it and takes its connection.
+func (c *sharedConns) get(ctx context.Context, name string, dial func(context.Context) (Directory, error)) (Directory, error) {
+	if d, err := c.m.Get(c.id(name), name); err == nil {
+		return d, nil
+	}
+	c.mu.Lock()
+	slot, ok := c.dials[name]
+	if !ok {
+		slot = make(chan struct{}, 1)
+		c.dials[name] = slot
+	}
+	c.mu.Unlock()
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-slot }()
+	if d, err := c.m.Get(c.id(name), name); err == nil {
+		return d, nil // dialed while this request waited
+	}
+	d, err := dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := c.m.Create()
+	if err := c.m.Put(id, name, d); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	c.mu.Lock()
+	c.ids[name] = id
+	c.mu.Unlock()
+	return d, nil
+}
+
+// drop closes name's connection, if there is one.
+func (c *sharedConns) drop(name string) {
+	c.m.Drop(c.id(name), name)
 }
 
 func (s *server) fail(w http.ResponseWriter, err error) {

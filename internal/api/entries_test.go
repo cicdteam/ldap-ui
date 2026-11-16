@@ -354,11 +354,12 @@ func TestSuccessLogsRedactSecretDNs(t *testing.T) {
 }
 
 // TestWriteEntriesNeedASession checks that every entry write answers 401
-// before anything else when the browser has no session for the profile.
+// before anything else when the browser has no session for a profile that
+// is not shared.
 func TestWriteEntriesNeedASession(t *testing.T) {
 	env := newTestEnv(t)
 	for _, path := range []string{"entries/add", "entries/delete", "entries/rename", "entries/password"} {
-		rec := env.do(t, http.MethodPost, "/api/c/dev/"+path, deleteBody)
+		rec := env.do(t, http.MethodPost, "/api/c/manual/"+path, deleteBody)
 		if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
 			t.Errorf("%s without a session = %d %s, want 401 not_connected", path, rec.Code, rec.Body)
 		}

@@ -8,6 +8,9 @@ export async function connect(page: Page, profile: string): Promise<void> {
   // Not \b: "demo" must not match "demo-pw".
   await page.getByRole('button', { name: new RegExp(`^${profile}(?![\\w-])`) }).click()
   await expect(page).toHaveURL(new RegExp(`/c/${profile}(?:[/?#]|$)`))
+  // A shared profile that an earlier spec connected opens at once, without
+  // the connect dialog: wait for the workspace, whose keys work by then.
+  await expect(page.getByRole('button', { name: 'Disconnect' })).toBeVisible()
 }
 
 /** Connects, then deep-links to dn in the inspector. */
