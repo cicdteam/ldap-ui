@@ -17,6 +17,8 @@ export interface WorkspaceCtx {
   select(dn: string, opts?: { replace?: boolean }): void
   /** Runs s; null clears the search, so the results give way to the examples. */
   runSearch(s: SearchState | null): void
+  /** Counts runs of the same search again, so its results start over. */
+  runs: number
   toggleTree(): void
   toggleInspector(): void
 }

@@ -75,8 +75,8 @@ function Examples() {
 export function Results() {
   const ws = useWorkspace()
   if (!ws.search) return <Examples />
-  // Keyed per search so the sort and the scroll position start over.
-  return <Listing key={searchKey(ws.conn, ws.search).join('\0')} search={ws.search} />
+  // Keyed per run so the limit, the sort and the scroll position start over.
+  return <Listing key={[...searchKey(ws.conn, ws.search), ws.runs].join('\0')} search={ws.search} />
 }
 
 function Listing({ search }: { search: SearchState }) {
@@ -89,6 +89,7 @@ function Listing({ search }: { search: SearchState }) {
   // Load more runs the same search again with the next limit; the server keeps nothing between
   // requests. The rows shown stay until the bigger answer arrives.
   const [limit, setLimit] = useState(RESULT_LIMITS[0])
+  const prev = RESULT_LIMITS.findLast((l) => l < limit)
   const q = useQuery({
     queryKey: [...key, limit],
     queryFn: ({ signal }) =>
@@ -118,11 +119,11 @@ function Listing({ search }: { search: SearchState }) {
     () => (ws.dn ? rows.findIndex((r) => sameDN(r.dn, ws.dn)) : -1),
     [rows, ws.dn],
   )
-  const restart = () => void qc.resetQueries({ queryKey: key })
+  const refetch = () => void q.refetch()
   const cancel = () => {
     void qc.cancelQueries({ queryKey: key })
     // A canceled Load more leaves the smaller answer on screen: go back to its limit.
-    if (q.isPlaceholderData) setLimit(RESULT_LIMITS[RESULT_LIMITS.indexOf(limit) - 1])
+    if (q.isPlaceholderData && prev) setLimit(prev)
   }
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -217,7 +218,7 @@ function Listing({ search }: { search: SearchState }) {
         <Banner
           tone="info"
           action={
-            <Button size="sm" onClick={restart}>
+            <Button size="sm" onClick={refetch}>
               Run again
             </Button>
           }
@@ -229,16 +230,24 @@ function Listing({ search }: { search: SearchState }) {
         <ErrorBanner
           error={q.error}
           action={
-            <Button size="sm" onClick={restart}>
-              Retry
-            </Button>
+            <>
+              {prev && (
+                // The smaller answer stays cached for gcTime, so going back is instant.
+                <Button size="sm" onClick={() => setLimit(prev)}>
+                  Show the first {prev}
+                </Button>
+              )}
+              <Button size="sm" onClick={refetch}>
+                Retry
+              </Button>
+            </>
           }
         />
       )}
       {more && next === null && !q.isPlaceholderData && (
         <Banner tone="info">
           Showing the first {limit.toLocaleString('en-US')} entries; refine the search to see the
-          rest.
+          rest
         </Banner>
       )}
       {q.data?.truncated && (

@@ -102,10 +102,14 @@ export function Workspace() {
       navigate(workspaceURL(conn, { dn: next, search }, 'entry'), { replace: opts?.replace }),
     [conn, search, navigate],
   )
+  const [runs, setRuns] = useState(0)
   const runSearch = useCallback(
     (s: SearchState | null) => {
+      // The same search again: drop its cached answers and start the results over, so the new
+      // run asks the server for the first limit. Another search starts over by its own key.
       if (s && search && searchKey(conn, s).join('\0') === searchKey(conn, search).join('\0')) {
-        void qc.resetQueries({ queryKey: searchKey(conn, s) })
+        qc.removeQueries({ queryKey: searchKey(conn, s) })
+        setRuns((n) => n + 1)
       }
       navigate(workspaceURL(conn, { dn, search: s }, 'search'))
     },
@@ -207,6 +211,7 @@ export function Workspace() {
     search,
     select,
     runSearch,
+    runs,
     toggleTree: () => toggle(treeRef.current),
     toggleInspector: () => toggle(inspectorRef.current),
   }

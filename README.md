@@ -75,7 +75,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   response says `more` when the search matches more. Nothing is kept on the
   server between requests, so "Load more" runs the search again with the
   next limit: 1000, then 2000, then 5000; the rows shown stay until the
-  bigger answer arrives. A search that matches more than 5000 entries shows
+  bigger answer arrives. If it fails, the error offers Retry and "Show the
+  first N", which goes back to the rows shown before. Running a search
+  again starts over at 500. A search that matches more than 5000 entries shows
   the first 5000 with the note "Showing the first 5,000 entries; refine the
   search to see the rest": narrow the filter or the base DN. Sorting by
   column and export to CSV or LDIF act on the rows loaded. A search the

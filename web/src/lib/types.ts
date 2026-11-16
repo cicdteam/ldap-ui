@@ -101,7 +101,6 @@ export interface SearchRequest {
   scope: Scope
   filter: string
   attributes?: string[]
-  pageSize?: number
   /** Entries wanted: 0 means 500, at most 5000. */
   sizeLimit?: number
 }
