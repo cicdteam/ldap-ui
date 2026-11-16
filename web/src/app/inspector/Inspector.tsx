@@ -17,6 +17,7 @@ import { LdifView } from '../../ui/LdifView'
 import { download } from '../../ui/download'
 import { PanelHeader } from '../../ui/PanelHeader'
 import { Spinner } from '../../ui/Spinner'
+import { Breadcrumbs } from '../Breadcrumbs'
 import { useWorkspace } from '../context'
 import { EntryActions } from '../entry/EntryActions'
 import { ADD_TO_GROUP } from '../events'
@@ -151,8 +152,8 @@ function EntryView({
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
-        <div className="flex items-start gap-1">
-          <span className="min-w-0 flex-1 font-mono text-[11px] break-all text-muted">{dn}</span>
+        <div className="flex items-center gap-1">
+          <Breadcrumbs dn={dn} base={ws.info.baseDN} onSelect={ws.select} />
           <CopyButton text={dn} label="Copy DN" />
         </div>
         {classes.length > 0 && (

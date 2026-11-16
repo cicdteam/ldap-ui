@@ -10,12 +10,11 @@ import { Badge, ColorDot, ProfileBadges } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { keyLabel } from '../lib/shortcuts'
 import { plural } from '../lib/status'
-import { CopyButton } from '../ui/CopyButton'
 import { PrefsToggles } from '../ui/PrefsToggles'
 import { useBatch } from './batch'
-import { Breadcrumbs } from './Breadcrumbs'
 import { useWorkspace } from './context'
 import { OPEN_REVIEW } from './events'
+import { Omnibox } from './search/Omnibox'
 
 /**
  * Disconnects the workspace's profile and goes back to the connections screen.
@@ -82,7 +81,6 @@ function ReviewBadge() {
 export function Header({ extra }: { extra?: ReactNode }) {
   const ws = useWorkspace()
   const disconnect = useDisconnect()
-  const shown = ws.dn || ws.info.baseDN
   // A fixed bind DN is the profile's, not a person's: only userLogin names who signed in.
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api.profiles() })
   const userLogin = profiles.data?.find((p) => p.name === ws.conn)?.userLogin
@@ -99,10 +97,8 @@ export function Header({ extra }: { extra?: ReactNode }) {
       <span className="flex shrink-0 gap-1 empty:hidden">
         <ProfileBadges profile={ws.info} />
       </span>
-      <span aria-hidden className="h-5 w-px shrink-0 bg-border" />
-      <Breadcrumbs dn={shown} base={ws.info.baseDN} onSelect={ws.select} />
-      <CopyButton text={shown} label="Copy DN" />
-      <div className="ml-auto flex shrink-0 items-center gap-1">
+      <Omnibox />
+      <div className="flex shrink-0 items-center gap-1">
         {userLogin && ws.info.bindDN && (
           <span className="max-w-md truncate px-1 text-xs text-muted" title={ws.info.bindDN}>
             Signed in as <span className="font-mono">{ws.info.bindDN}</span>

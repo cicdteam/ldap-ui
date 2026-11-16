@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { adBind, attrRow, blur, connect, exact } from './helpers'
+import { adBind, attrRow, blur, connect, exact, queryBar } from './helpers'
 
 // Samba AD from deploy/e2e/docker-compose.yml, seeded by global setup from ad-seed.ldif.
 const base = 'DC=corp,DC=example,DC=test'
@@ -14,7 +14,7 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   await connect(page, 'ad')
   // exact: the other naming contexts (CN=Configuration,...) end with the base.
   await expect(page.getByRole('treeitem', exact(base))).toBeVisible()
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
+  const editor = queryBar(page)
   await editor.click()
   await page.keyboard.type('(sAMAccountName=alice)')
   await page.getByRole('button', exact('Run')).click()

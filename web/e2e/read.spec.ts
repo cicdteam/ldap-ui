@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { HUGE_GROUP } from './fixture'
-import { attrRow, blur, connect, openEntry, valueItems } from './helpers'
+import { attrRow, blur, connect, openEntry, queryBar, valueItems } from './helpers'
 
 test('stored password rejected: field, hint, focus, typed password connects', async ({ page }) => {
   await page.goto('./')
@@ -69,7 +69,7 @@ test('huge attribute: 100 values, +1000, filter narrows, new filter resets', asy
 
 test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async ({ page }) => {
   await connect(page, 'demo')
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
+  const editor = queryBar(page)
   const long =
     '(&(cn=huge)(objectClass=groupOfNames)(description=some long description value here))'
   await editor.click()
@@ -91,7 +91,8 @@ test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async 
   await expect(page).toHaveURL(/filter=/)
   // The search request follows the URL change.
   await expect.poll(() => searches).toBeGreaterThan(0)
-  await editor.click()
+  // Unfocused, the bar shows the first of the five lines: click there.
+  await editor.click({ position: { x: 5, y: 5 } })
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type('(cn=')
   await page.keyboard.press('Shift+Alt+KeyF')
@@ -102,7 +103,7 @@ test('Clear results drops the search from the URL and brings back the examples',
   page,
 }) => {
   await connect(page, 'demo')
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
+  const editor = queryBar(page)
   await editor.click()
   await page.keyboard.type('(uid=jdoe)')
   await page.getByRole('button', { name: 'Run', exact: true }).click()
@@ -113,23 +114,27 @@ test('Clear results drops the search from the URL and brings back the examples',
   await expect(page.getByRole('button', { name: 'Clear results', exact: true })).toHaveCount(0)
 })
 
-test('Clear filter empties the editor and the builder, then hides', async ({ page }) => {
+test('Clear empties the bar; the builder starts from the text and writes it', async ({ page }) => {
   await connect(page, 'demo')
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
-  const clear = page.getByRole('button', { name: 'Clear filter', exact: true })
+  const bar = queryBar(page)
+  const clear = page.getByRole('button', { name: 'Clear the search', exact: true })
+  const builder = page.getByRole('button', { name: 'Filter builder', exact: true })
+  const attr = page.getByLabel('Attribute', { exact: true })
   await expect(clear).toHaveCount(0)
-  await editor.click()
-  await page.keyboard.type('(uid=jdoe)')
-  await clear.click()
-  // An empty editor shows only its placeholder.
-  await expect(editor.locator('.cm-placeholder')).toBeVisible()
-  await expect(editor).toBeFocused()
-  await expect(clear).toHaveCount(0)
+  await bar.click()
   await page.keyboard.type('(cn=x)')
-  await page.getByRole('radio', { name: 'builder', exact: true }).click()
+  await builder.click()
+  await expect(attr).toHaveValue('cn')
+  await page.getByLabel('Value', { exact: true }).fill('y')
+  await expect(bar).toHaveText('(cn=y)')
+  await page.keyboard.press('Escape')
   await clear.click()
-  await page.getByRole('radio', { name: 'text', exact: true }).click()
-  await expect(editor.locator('.cm-placeholder')).toBeVisible()
+  // An empty bar shows only its placeholder.
+  await expect(bar.locator('.cm-placeholder')).toBeVisible()
+  await expect(bar).toBeFocused()
+  await expect(clear).toHaveCount(0)
+  await builder.click()
+  await expect(attr).toHaveCount(0)
 })
 
 test('smoke: tree, search results, Cmd+K jump, LDIF tab', async ({ page }) => {
@@ -153,13 +158,12 @@ test('compact density tightens the inspector rows, not only the tree', async ({ 
   // Icon buttons follow the row height too.
   const button = page.getByRole('button', { name: 'Raw values', exact: true })
   await expect.poll(async () => (await button.boundingBox())?.height).toBe(22)
-  // The search panel's controls shrink too.
+  // Fields shrink too, the query bar's included.
+  await page.getByTitle('Search base, scope and columns').click()
   await expect
-    .poll(
-      async () =>
-        (await page.getByRole('button', { name: 'Run', exact: true }).boundingBox())?.height,
-    )
+    .poll(async () => (await page.getByLabel('Base', { exact: true }).boundingBox())?.height)
     .toBe(26)
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'Toggle density', exact: true }).click()
 })
 

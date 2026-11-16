@@ -21,3 +21,8 @@ it('colors the value wildcard as accent text, an escape as danger', () => {
   expect(got).toContainEqual(['*', 'color: var(--accent-text); font-weight: 600;'])
   expect(got).toContainEqual(['\\2a', 'color: var(--danger);'])
 })
+
+it('leaves a plain name uncolored, an attribute in a filter colored', () => {
+  expect(styled('john doe')).toEqual([])
+  expect(styled('uid=jdoe')).toContainEqual(['uid', 'color: var(--accent-text);'])
+})

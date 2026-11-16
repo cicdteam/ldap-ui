@@ -200,6 +200,13 @@ body {
   outline-offset: -2px;
 }
 
+/* The query bar's editor: a filter longer than one line opens down over the
+   panels while focused (FilterEditor sets data-tall), framed like a popover. */
+[data-tall] > .cm-editor.cm-focused {
+  outline: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
 /* Dialogs, popovers (the filter's completion and lint tooltips too) and the
    palette: the only shadow; dark adds a 1px top highlight. */
 .elevated,

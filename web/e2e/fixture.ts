@@ -115,5 +115,15 @@ export function fixtureLDIF(): string {
       person(p, E2E_OU, [`jpegPhoto:: ${readFileSync(PHOTO).toString('base64')}`]),
     ),
     ...Object.entries(E2E_GROUPS).map(([name, g]) => group(name, g)),
+    // With the demo's "Doe, John", what a name search for "doe" finds.
+    [
+      `dn: uid=jane.doe,${E2E_OU}`,
+      'objectClass: inetOrgPerson',
+      'uid: jane.doe',
+      'cn: Jane Doe',
+      'sn: Doe',
+      'mail: jane.doe@example.org',
+      '',
+    ].join('\n'),
   ].join('\n')
 }

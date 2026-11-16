@@ -157,9 +157,23 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
   A container shows its first 200 children; a bigger one ends with
   "More entries…", which opens its children as a one-level search.
-- **Search** (center): RFC 4515 filter editor with highlighting, completion
-  from the schema and inline errors, or a visual builder; base DN, scope and
-  columns sit next to it. A search returns at most a limit of entries in
+- **Search bar** (header): one line that takes three kinds of input; Enter
+  runs it.
+  - Plain text (`doe`, `John Doe`) searches by name: `cn` and `displayName`
+    containing it, `uid`, `sAMAccountName` and `mail` starting with it.
+  - Text with `=` or `(` is an RFC 4515 filter (`uid=jdoe`,
+    `(&(objectClass=person)(cn=a*))`, `memberOf=cn=devs,ou=groups,dc=example,dc=org`),
+    with highlighting, completion from the schema inside parentheses and inline
+    errors. Empty text matches everything. A filter longer than one line opens
+    down over the panels while the bar has focus.
+  - A DN under the connection's base DN, in any letter case, opens that entry.
+    A value with an unescaped `=` (the `memberOf=...` above) keeps it a filter.
+
+  The chip with the base DN and the scope (subtree, one level or base) opens
+  the search base, the scope, a button that uses the selected entry as the
+  base, and the result columns, picked from the schema's attribute names. Next
+  to it, the filter builder and the recent and saved searches.
+- **Search results** (center): a search returns at most a limit of entries in
   one request: 500, or the search API's `sizeLimit`, up to 5000. The
   response says `more` when the search matches more. Nothing is kept on the
   server between requests, so "Load more" runs the search again with the
@@ -211,9 +225,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 | Shortcut | Action |
 |---|---|
 | ⌘K / Ctrl+K | Command palette: go to a DN, find an entry by name, saved searches, switch connection, actions |
-| `/` | Focus the filter editor (outside text fields) |
-| ⌘↵ / Ctrl+Enter | Run the search (in the editor) |
-| ⇧⌥F / Shift+Alt+F | Format the filter (in the editor) |
+| `/` | Focus the search bar (outside text fields) |
+| ↵ / Enter, ⌘↵ / Ctrl+Enter | Run the search or open the DN (in the search bar) |
+| ⇧⌥F / Shift+Alt+F | Format the filter (in the search bar) |
 | `E` | Edit mode in the inspector (ignored while focus is in a text field, the tree, the results list or a dialog) |
 | ⌘S / Ctrl+S | Review the staged changes |
 | ⌘Z / Ctrl+Z, ⌘⇧Z / Ctrl+Shift+Z | Undo, redo a staged change (outside text fields) |

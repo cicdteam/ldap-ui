@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
-import { attrRow, openEntry } from './helpers'
+import { attrRow, openEntry, queryBar } from './helpers'
 
 // exact: the breadcrumb "uid=markers" is a button, and other names may contain "edit".
 const editButton = { name: 'Edit', exact: true }
@@ -27,7 +27,7 @@ test('markers, header count, invalid badge, dot in results', async ({ page }) =>
   await expect(attrRow(page, 'sn').getByRole('alert')).toHaveCount(0)
   await page.getByRole('button', editButton).click()
   await expect(attrRow(page, 'description').getByLabel('changed')).toBeVisible()
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
+  const editor = queryBar(page)
   await editor.click()
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type('(uid=markers)')
