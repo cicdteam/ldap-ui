@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
-import { attrRow, blur, openEntry } from './helpers'
+import { attrRow, blur, openEntry, pendingBar } from './helpers'
 
 test('Mod+S reviews, Mod+Z undoes, Mod+Shift+Z redoes, disconnect asks', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('keys'))
@@ -18,12 +18,12 @@ test('Mod+S reviews, Mod+Z undoes, Mod+Shift+Z redoes, disconnect asks', async (
   await page.keyboard.press('ControlOrMeta+S')
   await expect(dialog).toBeVisible()
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('button', { name: 'Review 1 change' })).toBeVisible()
+  await expect(pendingBar(page)).toContainText('1 change in')
   await blur(page)
   await page.keyboard.press('ControlOrMeta+Z')
-  await expect(page.getByRole('button', { name: /Review \d+ change/ })).toHaveCount(0)
+  await expect(pendingBar(page)).toHaveCount(0)
   await page.keyboard.press('ControlOrMeta+Shift+Z')
-  await expect(page.getByRole('button', { name: 'Review 1 change' })).toBeVisible()
+  await expect(pendingBar(page)).toContainText('1 change in')
   page.once('dialog', (d) => void d.dismiss())
   await page.getByRole('button', { name: 'Disconnect' }).click()
   await expect(page).toHaveURL(/\/c\/demo/)

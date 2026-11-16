@@ -65,6 +65,8 @@ export const E2E_PEOPLE: string[] = [
   'langer',
   'certholder',
   'layout',
+  'pending',
+  'pendingdrop',
 ]
 
 /** Groups under ou=e2e for the membership scenarios and the journey: their class and the uids in them. */

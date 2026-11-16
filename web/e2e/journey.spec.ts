@@ -41,7 +41,7 @@ async function reviewAndApply(page: Page, ...ldif: string[]) {
   await page.keyboard.press('ControlOrMeta+S')
   const dialog = page.getByRole('dialog', { name: 'Review changes' })
   for (const line of ldif) await expect(dialog).toContainText(line)
-  await dialog.getByRole('button', exact('Apply')).click()
+  await dialog.getByRole('button', exact('Apply to demo')).click()
   await expect(dialog).toBeHidden()
 }
 

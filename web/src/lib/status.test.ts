@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { changeCount, connectionStatus, plural, type StatusTone } from './status'
+import { connectionStatus, pendingText, plural, type StatusTone } from './status'
 
 const info = {
   url: 'ldaps://samba:636',
@@ -18,7 +18,7 @@ describe('connectionStatus transport', () => {
     ['ldaps, skip verify', true, true, false, 'TLS, certificate not verified', 'danger'],
     ['StartTLS, skip verify', true, true, true, 'StartTLS, certificate not verified', 'danger'],
   ])('%s', (_, encrypted, insecureSkipVerify, startTLS, text, tone) => {
-    const got = connectionStatus({ ...info, encrypted, insecureSkipVerify, startTLS }, 0)
+    const got = connectionStatus({ ...info, encrypted, insecureSkipVerify, startTLS })
     expect(got.transport).toEqual({ text, tone })
   })
 })
@@ -32,27 +32,17 @@ describe('connectionStatus server', () => {
     ['whitespace vendor', false, '  ', 'LDAP'],
     ['no vendor', false, undefined, 'LDAP'],
   ])('%s', (_, activeDirectory, vendor, want) => {
-    expect(connectionStatus({ ...info, activeDirectory, vendor }, 0).server).toBe(want)
+    expect(connectionStatus({ ...info, activeDirectory, vendor }).server).toBe(want)
   })
 })
 
-describe('connectionStatus changes', () => {
-  it.each([
-    [0, 'no staged changes'],
-    [1, '1 change'],
-    [5, '5 changes'],
-  ])('%i', (n, want) => {
-    expect(connectionStatus(info, n).changes).toBe(want)
-  })
-})
-
-describe('changeCount', () => {
-  it.each([
-    [0, 'no staged changes'],
-    [1, '1 change'],
-    [2, '2 changes'],
-  ])('%i', (n, want) => {
-    expect(changeCount(n)).toBe(want)
+describe('pendingText', () => {
+  it.each<[number, number, string]>([
+    [1, 1, '1 change in 1 entry staged for demo'],
+    [2, 1, '2 changes in 1 entry staged for demo'],
+    [3, 2, '3 changes in 2 entries staged for demo'],
+  ])('%i changes in %i entries', (changes, entries, want) => {
+    expect(pendingText(changes, entries, 'demo')).toBe(want)
   })
 })
 
@@ -68,6 +58,6 @@ describe('plural', () => {
 
 describe('connectionStatus address', () => {
   it("is the connection's URL", () => {
-    expect(connectionStatus(info, 0).address).toBe('ldaps://samba:636')
+    expect(connectionStatus(info).address).toBe('ldaps://samba:636')
   })
 })

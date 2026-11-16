@@ -3,7 +3,7 @@ import { e2eDN } from './fixture'
 import { attrRow, blur, openEntry } from './helpers'
 
 const editButton = { name: 'Edit', exact: true }
-const applyButton = { name: 'Apply', exact: true }
+const applyButton = { name: 'Apply to demo', exact: true }
 const posixMust = ['uidNumber', 'gidNumber', 'homeDirectory']
 
 /** Mod+S with nothing focused (see blur). */

@@ -30,6 +30,7 @@ import { ENTRY_ACTION, FOCUS_FILTER, OPEN_REVIEW } from './events'
 import { Header } from './Header'
 import { Inspector } from './inspector/Inspector'
 import { CommandPalette } from './palette/CommandPalette'
+import { PendingBar } from './PendingBar'
 import { searchKey } from './queries'
 import { ReviewDialog } from './review/ReviewDialog'
 import { Results } from './search/Results'
@@ -284,6 +285,7 @@ export function Workspace() {
             <Inspector />
           </Panel>
         </Group>
+        <PendingBar />
         <StatusBar />
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />

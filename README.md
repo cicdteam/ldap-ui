@@ -279,9 +279,15 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   `uniqueMember` and `memberUid`; an equality index on each keeps it fast.
   Member of and Members list at most 10 000 groups or members: a longer list
   is truncated there and marked incomplete.
+- **Pending changes** (above the status bar, only while changes are staged):
+  "2 changes in 1 entry staged for demo" with the server address, Discard
+  and Review (⌘S / Ctrl+S). Discard asks first; ⌘Z / Ctrl+Z brings the
+  changes back. "Some changes fail validation" shows on the bar while a
+  staged change breaks the schema.
 - **Status bar** (bottom): the server address, whether the connection is
   encrypted (TLS, StartTLS, not encrypted, certificate not verified), the
-  server type and the number of staged changes.
+  server type, and the keys that act in the focused pane (the tree, the
+  list, the card, or a value being edited).
 - Every view has a URL (`/c/<profile>/entry?dn=...`,
   `/c/<profile>/search?filter=...`), so links and reloads work.
 
@@ -307,12 +313,14 @@ on non-Latin keyboard layouts.
 
 - **Edit** (`E`, or Edit on the card) turns attribute values into fields; a value
   commits on Enter. Changes are staged, not written: added, changed, deleted
-  and stale values are marked on the card, the header shows
-  "N changes", and staged entries get a dot in the tree and in the results.
+  and stale values are marked on the card, the pending changes bar shows
+  how many, and staged entries get a dot in the tree and in the results.
   The batch is kept per connection for the browser tab and survives a reload.
-- **Review** (⌘S / Ctrl+S, or the header badge) shows the batch as LDIF to
-  read or copy; **Apply** writes it. A read-only profile (`readOnly: true`)
-  has no Edit, and the server refuses its writes.
+- **Review** (⌘S / Ctrl+S, Review on the pending changes bar, or the command
+  palette) names the profile and the server the batch goes to and shows it
+  as LDIF to read or copy; **Apply to** and the profile's name (Apply to
+  demo) writes it. A read-only profile (`readOnly: true`) has no Edit, and
+  the server refuses its writes.
 - If an entry changed since you read it, the apply stops at that entry:
   "Reload entry" marks the staged changes that no longer fit as stale,
   "Drop stale changes" removes them. A value the server rejects shows its

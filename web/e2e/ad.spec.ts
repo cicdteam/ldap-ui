@@ -62,7 +62,7 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   await page.keyboard.press('ControlOrMeta+S')
   const review = page.getByRole('dialog', { name: 'Review changes' })
   await expect(review).toContainText('description: set by e2e')
-  await review.getByRole('button', exact('Apply')).click()
+  await review.getByRole('button', exact('Apply to ad')).click()
   await expect(review).toBeHidden()
   // E again: out of Edit the value is text, not an input.
   await blur(page)

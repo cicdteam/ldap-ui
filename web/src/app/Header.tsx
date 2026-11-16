@@ -1,19 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LogOut, PanelLeft, PanelRight } from 'lucide-react'
-import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { api } from '../lib/api'
 import { batches } from '../lib/batchStore'
-import { invalidBatch, touchedAttributes } from '../lib/changes'
-import type { Entry } from '../lib/types'
-import { Badge, ColorDot, ProfileBadges } from '../ui/Badge'
+import { touchedAttributes } from '../lib/changes'
+import { ColorDot, ProfileBadges } from '../ui/Badge'
 import { Button } from '../ui/Button'
-import { keyLabel } from '../lib/shortcuts'
 import { plural } from '../lib/status'
 import { PrefsToggles } from '../ui/PrefsToggles'
-import { useBatch } from './batch'
 import { useWorkspace } from './context'
-import { OPEN_REVIEW } from './events'
 import { Omnibox } from './search/Omnibox'
 
 /**
@@ -43,40 +39,6 @@ export function useDisconnect(): () => Promise<void> {
   }
 }
 
-/** The staged change count; opens the review. data-invalid when a cached entry fails validation. */
-function ReviewBadge() {
-  const ws = useWorkspace()
-  const qc = useQueryClient()
-  const batch = useBatch(ws.conn)
-  const subscribe = useCallback((fn: () => void) => qc.getQueryCache().subscribe(fn), [qc])
-  // Re-checked on every query cache event, so an entry that loads later is validated too.
-  const invalid = useSyncExternalStore(
-    subscribe,
-    () =>
-      batch.length > 0 &&
-      invalidBatch(
-        batch,
-        qc.getQueriesData<Entry>({ queryKey: ['c', ws.conn, 'entry'] }).flatMap(([, e]) => e ?? []),
-        ws.schema,
-      ),
-  )
-  if (!batch.length) return null
-  const n = touchedAttributes(batch)
-  const label = plural(n, 'change', 'changes')
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      aria-label={`Review ${label}`}
-      title={`${invalid ? 'Some changes fail validation. ' : ''}Review the staged changes and apply them (${keyLabel('Mod+S')})`}
-      data-invalid={invalid ? '' : undefined}
-      onClick={() => window.dispatchEvent(new Event(OPEN_REVIEW))}
-    >
-      <Badge tone={invalid ? 'danger' : 'warn'}>{label}</Badge>
-    </Button>
-  )
-}
-
 /** extra: slot for the command palette button (Task 13). */
 export function Header({ extra }: { extra?: ReactNode }) {
   const ws = useWorkspace()
@@ -104,7 +66,6 @@ export function Header({ extra }: { extra?: ReactNode }) {
             Signed in as <span className="font-mono">{ws.info.bindDN}</span>
           </span>
         )}
-        <ReviewBadge />
         {extra}
         <Button
           size="icon"
