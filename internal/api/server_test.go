@@ -6,6 +6,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +53,21 @@ func TestProbesAtRootWithBasePath(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("GET /ldap/api/profiles with Host %s = %d, want %d", req.Host, rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestServerEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		server bool
+		want   string
+	}{
+		{server: false, want: `{"mode":"local"}`},
+		{server: true, want: `{"mode":"server"}`},
+	} {
+		env := newTestEnvWith(t, Options{Server: tc.server})
+		rec := env.do(t, http.MethodGet, "/api/server", "")
+		if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != tc.want {
+			t.Errorf("Server %v: GET /api/server = %d %s, want 200 %s", tc.server, rec.Code, got, tc.want)
+		}
 	}
 }

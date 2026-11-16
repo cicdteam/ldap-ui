@@ -172,8 +172,6 @@ func TestApplyRefusals(t *testing.T) {
 		wantMsg    string
 	}{
 		{name: "read-only profile", connect: `{"profile":"manual","password":"x"}`, conn: "manual", body: twoEntries, wantStatus: http.StatusForbidden, wantCode: "read_only"},
-		{name: "prod without confirm", connect: `{"profile":"prodrw"}`, conn: "prodrw", body: twoEntries, wantStatus: http.StatusConflict, wantCode: "confirmation_required"},
-		{name: "prod wrong confirm", connect: `{"profile":"prodrw"}`, conn: "prodrw", body: strings.Replace(twoEntries, `{"entries"`, `{"confirm":"dev","entries"`, 1), wantStatus: http.StatusConflict, wantCode: "confirmation_required"},
 		{name: "no entries", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "empty dn", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":" ","changes":[{"op":"add","attr":"cn","values":["x"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "no changes", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
@@ -251,15 +249,6 @@ func TestValidateApplyCaps(t *testing.T) {
 		if ok || e.Code != "request_too_large" || !strings.Contains(e.Message, strconv.Itoa(tc.wantCap)) {
 			t.Errorf("%s: validateApply() = %+v, %v, want request_too_large naming %d", tc.name, e, ok, tc.wantCap)
 		}
-	}
-}
-
-func TestApplyProdWithConfirm(t *testing.T) {
-	env := newTestEnv(t)
-	connectTo(t, env, `{"profile":"prodrw"}`)
-	body := strings.Replace(twoEntries, `{"entries"`, `{"confirm":"prodrw","entries"`, 1)
-	if rec := env.do(t, http.MethodPost, "/api/c/prodrw/changes/apply", body); rec.Code != http.StatusOK {
-		t.Errorf("apply with confirm = %d %s, want 200", rec.Code, rec.Body)
 	}
 }
 

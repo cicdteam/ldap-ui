@@ -16,18 +16,15 @@ import (
 )
 
 type addRequest struct {
-	confirmation
 	DN         string                `json:"dn"`
 	Attributes []ldapx.TextAttribute `json:"attributes"`
 }
 
 type deleteRequest struct {
-	confirmation
 	DN string `json:"dn"`
 }
 
 type renameRequest struct {
-	confirmation
 	DN     string `json:"dn"`
 	NewRDN string `json:"newRDN"`
 	// NewParent moves the entry; empty keeps its parent.
@@ -37,7 +34,6 @@ type renameRequest struct {
 }
 
 type passwordRequest struct {
-	confirmation
 	DN       string `json:"dn"`
 	Password string `json:"password"`
 	// Method is "server" (Password Modify) or "ssha"; AD ignores it.
@@ -91,7 +87,7 @@ func (s *server) deleteEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("deleted", s.attributed(r, p, "profile", p.Name, "dn", logDN(req.DN, sch))...)
-	writeJSON(w, http.StatusOK, writeResult{DN: req.DN})
+	writeJSON(w, http.StatusOK, writeResult{DN: req.DN}) //nolint:staticcheck // S1016: a request and a result share a shape by chance, not by design
 }
 
 // renameEntry renames or moves one entry with one LDAP modrdn.

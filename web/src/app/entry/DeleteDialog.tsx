@@ -31,7 +31,7 @@ export function DeleteDialog({ dn, close }: { dn: string; close: () => void }) {
   })
   const n = kids.data?.entries?.length ?? 0
   const m = useMutation({
-    mutationFn: (confirm: string | undefined) => api.deleteEntry(ws.conn, { confirm, dn }),
+    mutationFn: () => api.deleteEntry(ws.conn, { dn }),
     onSuccess: () => {
       // Delete waits while anything is staged under the entry; this only guards a race.
       const b = batches.get(ws.conn)
@@ -51,7 +51,7 @@ export function DeleteDialog({ dn, close }: { dn: string; close: () => void }) {
       ready={kids.isSuccess && n === 0 && typed.trim() === rdn}
       pending={m.isPending}
       error={m.error}
-      onSubmit={(c) => m.mutate(c)}
+      onSubmit={() => m.mutate()}
       close={close}
     >
       {kids.isPending && <Spinner />}

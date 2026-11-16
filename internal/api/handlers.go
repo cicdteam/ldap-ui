@@ -13,7 +13,7 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -29,66 +29,106 @@ type server struct {
 	catalog  *profile.Catalog
 	dial     Dialer
 	sessions *session.Manager[Directory]
+	shared   *sharedConns
 	cookies  cookieOptions
 	log      *slog.Logger
 	// attempts counts wrong passwords per server and bind DN, keyed by
-	// serverKey and limiterKey.
+	// serverKey and limiterKey; clients counts them per client address,
+	// keyed "client|" and the address.
 	attempts *attemptLimiter
+	clients  *attemptLimiter
 
-	identityHeader string
+	// trustedProxies are the reverse proxies whose X-Forwarded-For names
+	// the client (see clientAddr).
 	trustedProxies []netip.Prefix
+	// serverMode is Options.Server.
+	serverMode bool
+}
+
+// mode tells the UI the mode, so that it hides what server mode does not
+// offer.
+func (s *server) mode(w http.ResponseWriter, _ *http.Request) {
+	mode := "local"
+	if s.serverMode {
+		mode = "server"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
 }
 
 // profileView is a profile as the UI sees it.
 type profileView struct {
 	profile.Profile
-	ReadOnly    bool `json:"readOnly"`
 	Editable    bool `json:"editable"`
 	HasPassword bool `json:"hasPassword"` // the server can bind without asking
 	Connected   bool `json:"connected"`
 	// UserLogin is set for a bindDNTemplate profile, which asks for a
-	// username. Under identityUser, Username is the one the caller's
-	// trusted identity allows, and UsernameLocked says it cannot be changed.
-	UserLogin      bool   `json:"userLogin"`
-	Username       string `json:"username,omitempty"`
-	UsernameLocked bool   `json:"usernameLocked"`
+	// username.
+	UserLogin bool `json:"userLogin"`
+	// NeedsPassword is set when connect asks for a password: a
+	// bindDNTemplate profile, or a bindDN without a configured password.
+	NeedsPassword bool `json:"needsPassword"`
 }
 
-// view is p as the UI sees it. identity is the caller's trusted identity,
-// "" without one.
-func (s *server) view(p profile.Profile, editable bool, connected map[string]bool, identity string) profileView {
-	v := profileView{
-		Profile:     p,
-		ReadOnly:    p.IsReadOnly(),
-		Editable:    editable,
-		HasPassword: p.PasswordEnv != "" || p.PasswordFile != "",
-		Connected:   connected[p.Name],
-		UserLogin:   p.UserLogin(),
+// serverProfileView is a profile as the UI sees it in server mode: what the
+// connect page needs, and nothing about where or how the profile binds.
+type serverProfileView struct {
+	Name          string `json:"name"`
+	Color         string `json:"color,omitempty"`
+	ReadOnly      bool   `json:"readOnly"`
+	Connected     bool   `json:"connected"`
+	UserLogin     bool   `json:"userLogin"`
+	NeedsPassword bool   `json:"needsPassword"`
+}
+
+// view is p as the UI sees it.
+func (s *server) view(p profile.Profile, editable bool, connected map[string]bool) profileView {
+	return profileView{
+		Profile:       p,
+		Editable:      editable,
+		HasPassword:   p.PasswordEnv != "" || p.PasswordFile != "",
+		Connected:     connected[p.Name],
+		UserLogin:     p.UserLogin(),
+		NeedsPassword: !p.Shared(),
 	}
-	if p.IdentityUser != "" && identity != "" {
-		v.Username, v.UsernameLocked = p.IdentityUsername(identity), true
-	}
-	return v
 }
 
 func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	fixed, saved := s.catalog.All()
 	connected := map[string]bool{}
-	for _, n := range s.sessions.Names(sessionID(r)) {
-		connected[n] = true
+	for n, d := range s.sessions.Conns(sessionID(r)) {
+		connected[n] = !d.Closed()
 	}
-	identity, _ := s.identity(r)
+	for _, p := range slices.Concat(fixed, saved) {
+		if p.Shared() && s.shared.connected(p.Name) {
+			connected[p.Name] = true
+		}
+	}
 	views := make([]profileView, 0, len(fixed)+len(saved))
 	for _, p := range fixed {
-		views = append(views, s.view(p, false, connected, identity))
+		views = append(views, s.view(p, false, connected))
 	}
 	for _, p := range saved {
-		views = append(views, s.view(p, true, connected, identity))
+		views = append(views, s.view(p, true, connected))
+	}
+	if s.serverMode {
+		short := make([]serverProfileView, len(views))
+		for i, v := range views {
+			short[i] = serverProfileView{
+				Name: v.Name, Color: v.Color, ReadOnly: v.ReadOnly,
+				Connected: v.Connected, UserLogin: v.UserLogin, NeedsPassword: v.NeedsPassword,
+			}
+		}
+		writeJSON(w, http.StatusOK, short)
+		return
 	}
 	writeJSON(w, http.StatusOK, views)
 }
 
 func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
+	if s.serverMode {
+		writeError(w, http.StatusForbidden, apiError{Code: "saving_disabled", Message: "this server keeps no saved connections"})
+		return
+	}
 	var p profile.Profile
 	if !decode(w, r, &p, maxBody) {
 		return
@@ -103,36 +143,43 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, profile.ErrFixed):
 		writeError(w, http.StatusConflict, apiError{Code: "profile_fixed", Message: err.Error()})
 	case errors.Is(err, profile.ErrSavingDisabled):
-		writeError(w, http.StatusConflict, apiError{Code: "saving_disabled", Message: err.Error()})
+		writeError(w, http.StatusForbidden, apiError{Code: "saving_disabled", Message: err.Error()})
 	case errors.Is(err, profile.ErrLimit):
 		writeError(w, http.StatusConflict, apiError{Code: "profile_limit", Message: err.Error()})
 	case err != nil:
 		s.fail(w, err)
 	default:
+		// A shared connection with the old settings goes, so that the next
+		// request dials the saved ones.
+		s.shared.drop(saved.Name)
 		s.log.Info("profile saved", slices.Concat([]any{
 			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
-			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
+			"readOnly", saved.ReadOnly, "insecureSkipVerify", saved.InsecureSkipVerify,
 		}, s.who(r))...)
-		writeJSON(w, http.StatusOK, s.view(saved, true, nil, ""))
+		writeJSON(w, http.StatusOK, s.view(saved, true, nil))
 	}
 }
 
 // infoView is a connection's Info plus the profile settings the UI shows as
-// badges. They come with the info so the badges never wait on, or vanish
-// with, a separate profiles request.
+// badges and in its status bar. They come with the info so the badges never
+// wait on, or vanish with, a separate profiles request, and so that server
+// mode, whose profile list leaves out the URL, shows it only after a
+// successful bind.
 type infoView struct {
 	ldapx.Info
-	Environment        profile.Environment `json:"environment"`
-	ReadOnly           bool                `json:"readOnly"`
-	InsecureSkipVerify bool                `json:"insecureSkipVerify"`
-	Color              string              `json:"color,omitempty"`
+	URL                string `json:"url"`
+	StartTLS           bool   `json:"startTLS"`
+	ReadOnly           bool   `json:"readOnly"`
+	InsecureSkipVerify bool   `json:"insecureSkipVerify"`
+	Color              string `json:"color,omitempty"`
 }
 
 func newInfoView(info ldapx.Info, p profile.Profile) infoView {
 	return infoView{
 		Info:               info,
-		Environment:        p.Environment,
-		ReadOnly:           p.IsReadOnly(),
+		URL:                p.URL,
+		StartTLS:           p.StartTLS,
+		ReadOnly:           p.ReadOnly,
 		InsecureSkipVerify: p.InsecureSkipVerify,
 		Color:              p.Color,
 	}
@@ -155,68 +202,80 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, apiError{Code: "profile_not_found", Message: err.Error()})
 		return
 	}
-	password := req.Password
+	// A shared profile's connection serves every browser and needs no
+	// session. A typed password, as after the configured one failed, gets
+	// a connection of this browser's own below.
+	if p.Shared() && req.Password == "" {
+		d, err := s.sharedDir(r.Context(), p)
+		if err != nil {
+			s.connectFailed(w, r, p, err)
+			return
+		}
+		s.log.Info("connected", s.attributed(r, p, "profile", p.Name)...)
+		writeJSON(w, http.StatusOK, newInfoView(d.Info(), p))
+		return
+	}
 	if p.UserLogin() {
-		bound, ok := s.userLogin(w, r, p, req)
+		bound, ok := s.userLogin(w, p, req)
 		if !ok {
 			return
 		}
 		p = bound
-	} else if password == "" {
-		configured, ok, err := p.ConfiguredPassword()
-		if err != nil {
-			// err names the env var or file; keep that in the server log.
-			s.log.Error("configured password unavailable", "profile", p.Name, "error", err)
-			writeError(w, http.StatusInternalServerError, apiError{
-				Code:    "password_unavailable",
-				Message: "the configured password for this profile is unavailable; see the server log",
-			})
-			return
-		}
-		if !ok && p.BindDN != "" {
-			writeError(w, http.StatusBadRequest, apiError{Code: "password_required", Message: "this profile needs a password"})
-			return
-		}
-		password = configured
+	} else if req.Password == "" {
+		writeError(w, http.StatusBadRequest, apiError{Code: "password_required", Message: "this profile needs a password"})
+		return
 	}
 	// Only a typed password is limited: a wrong configured one would lock
-	// its DN for everyone. end is how a limited attempt ends, set from the
-	// dial: fail for a wrong password, succeed, else done. The defer ends it
-	// on every path, a panic included.
-	end := s.attempts.done
+	// its DN for everyone. A login counts against its client and its
+	// account, and both must admit it. endClient and endAccount end a
+	// limited attempt, set from the dial: fail for a wrong password, else
+	// done, but succeed for the account on a success. A success leaves the
+	// client's count, so that one valid account cannot reset it between
+	// guesses at others. The defer ends both on every path, a panic
+	// included.
+	endClient, endAccount := (*attemptLimiter).done, (*attemptLimiter).done
 	if req.Password != "" && p.BindDN != "" {
-		// Per server, so that a success elsewhere, as on a server a saved
-		// profile points at, cannot clear this server's count.
-		key := serverKey(p.URL) + "|" + limiterKey(p.BindDN)
-		wait, ok := s.attempts.begin(key)
-		if !ok {
+		throttled := func(wait time.Duration, limit, whose string) {
 			secs := int((wait + time.Second - 1) / time.Second) // rounded up
-			s.log.Info("connect throttled", s.attributed(r, p, "profile", p.Name)...)
+			s.log.Info("connect throttled", s.attributed(r, p, "profile", p.Name, "limit", limit)...)
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			writeError(w, http.StatusTooManyRequests, apiError{
 				Code:    "too_many_attempts",
-				Message: fmt.Sprintf("too many sign-in attempts for this account; try again in %d s", secs),
+				Message: fmt.Sprintf("too many sign-in attempts %s; try again in %d s", whose, secs),
 			})
+		}
+		// Whatever the profile, so that spraying many DNs from one client
+		// is caught.
+		client := "client|" + s.clientAddr(r).String()
+		// Per server, so that a success elsewhere, as on a server a saved
+		// profile points at, cannot clear this server's count.
+		key := serverKey(p.URL) + "|" + limiterKey(p.BindDN)
+		wait, ok := s.clients.begin(client)
+		if !ok {
+			throttled(wait, "client", "from this address")
 			return
 		}
-		defer func() { end(key) }()
+		if wait, ok = s.attempts.begin(key); !ok {
+			s.clients.done(client)
+			throttled(wait, "account", "for this account")
+			return
+		}
+		defer func() {
+			endClient(s.clients, client)
+			endAccount(s.attempts, key)
+		}()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), p.ConnectTimeout+p.SearchTimeout)
 	defer cancel()
-	dir, err := s.dial(ctx, p, password)
+	dir, err := s.dial(ctx, p, req.Password)
 	if err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			end = s.attempts.fail
+			endClient, endAccount = (*attemptLimiter).fail, (*attemptLimiter).fail
 		}
-		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
-		s.fail(w, err)
+		s.connectFailed(w, r, p, err)
 		return
 	}
-	end = s.attempts.succeed
-	if p.IdentityUser != "" {
-		identity, _ := s.identity(r) // userLogin made sure there is one
-		dir = identityDir{Directory: dir, identity: identity}
-	}
+	endAccount = (*attemptLimiter).succeed
 	// Every connect moves the browser to a new session ID, so an ID that
 	// leaked before it reaches no connection. The cookie is set before Put:
 	// a refused Put leaves the session, under its new ID, as it was.
@@ -235,40 +294,35 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 
+// connectFailed logs and answers a failed connect to p, in server mode
+// with signInError. The log keeps the full error.
+func (s *server) connectFailed(w http.ResponseWriter, r *http.Request, p profile.Profile, err error) {
+	s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
+	if !s.serverMode {
+		s.fail(w, err)
+		return
+	}
+	status, body := signInError(errorResponse(err))
+	if status == http.StatusInternalServerError {
+		s.log.Error("request failed", "error", err)
+	}
+	writeError(w, status, body)
+}
+
 // userLogin checks a connect to the bindDNTemplate profile p, in this
-// order: a username (400 username_required); under identityUser, a trusted
-// identity (403 identity_required) that maps to the username, compared
-// case-insensitively (403 identity_mismatch); a username the template
+// order: a username (400 username_required); a username the template
 // accepts (400 invalid_username); a password (400 password_required). It
 // returns p with BindDN set to the DN to bind as, or writes the refusal and
 // returns false, so that a template profile never binds anonymously:
 // RFC 4513 treats a bind with an empty password as unauthenticated, and
 // many servers accept it.
-func (s *server) userLogin(w http.ResponseWriter, r *http.Request, p profile.Profile, req connectRequest) (profile.Profile, bool) {
+func (s *server) userLogin(w http.ResponseWriter, p profile.Profile, req connectRequest) (profile.Profile, bool) {
 	refuse := func(status int, code, msg string) (profile.Profile, bool) {
 		writeError(w, status, apiError{Code: code, Message: msg})
 		return profile.Profile{}, false
 	}
-	// forbid is refuse for the identity checks, which are logged: they are
-	// about who may sign in, not a typo.
-	forbid := func(code, msg string) (profile.Profile, bool) {
-		s.log.Info("connect refused", s.attributed(r, p, "profile", p.Name, "code", code)...)
-		return refuse(http.StatusForbidden, code, msg)
-	}
 	if req.Username == "" {
 		return refuse(http.StatusBadRequest, "username_required", "this profile needs a username")
-	}
-	if p.IdentityUser != "" {
-		identity, ok := s.identity(r)
-		if !ok || identity == "" {
-			return forbid("identity_required", "this profile needs the user verified by the authenticating proxy")
-		}
-		// Equal byte lengths keep EqualFold to ASCII: BindDNFor below takes
-		// only ASCII usernames, and every non-ASCII rune that folds to an
-		// ASCII letter (the Kelvin sign, the long s) is longer.
-		if mapped := p.IdentityUsername(identity); len(mapped) != len(req.Username) || !strings.EqualFold(mapped, req.Username) {
-			return forbid("identity_mismatch", "the username must be the user the authenticating proxy verified")
-		}
 	}
 	dn, err := p.BindDNFor(req.Username)
 	if errors.Is(err, profile.ErrInvalidUsername) {
@@ -292,6 +346,8 @@ func (s *server) disconnect(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req, maxBody) {
 		return
 	}
+	// A shared profile's connection stays: other browsers use it. This drops
+	// only the browser's own, from a typed password.
 	p, _ := s.catalog.Find(req.Profile) // for the bind DN; "" for an unknown name
 	// The connection's DN, as guard takes it.
 	if d, err := s.sessions.Get(sessionID(r), req.Profile); err == nil {
@@ -394,35 +450,138 @@ func (s *server) refs(w http.ResponseWriter, r *http.Request, list func(Director
 	writeJSON(w, http.StatusOK, m)
 }
 
-// identityDir is the connection of an identityUser profile with the
-// trusted identity its connect carried.
-type identityDir struct {
-	Directory
-	identity string
-}
-
 // directory returns the connection named by the {conn} path segment, or
-// writes an error and returns false. A connection made under a trusted
-// identity serves only requests that carry the same identity, byte for
-// byte: any other request, for example from a shared browser after its
-// proxy sign-in switched to another person, drops the connection and gets
-// 401 not_connected, which makes the UI ask to connect again.
+// writes an error and returns false. Without one in the browser's session,
+// a shared profile gets this process's connection, dialed by the first
+// request that needs it. One in the session that ldapx closed for good, as
+// a typed password the server refused at a reconnect, is dropped and counts
+// as none.
 func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, bool) {
 	name := r.PathValue("conn")
 	d, err := s.sessions.Get(sessionID(r), name)
+	if err == nil && d.Closed() {
+		s.sessions.DropConn(sessionID(r), name, d)
+		err = session.ErrNotConnected
+	}
+	if err != nil {
+		if p, ferr := s.catalog.Find(name); ferr == nil && p.Shared() {
+			d, err = s.sharedDir(r.Context(), p)
+		}
+	}
 	if err != nil {
 		s.fail(w, err)
 		return nil, false
 	}
-	if id, ok := d.(identityDir); ok {
-		if user, _ := s.identity(r); user != id.identity {
-			s.sessions.Drop(sessionID(r), name)
-			s.log.Info("identity changed", s.attributed(r, profile.Profile{BindDN: d.Info().BindDN}, "profile", name)...)
-			s.fail(w, session.ErrNotConnected)
-			return nil, false
-		}
-	}
 	return d, true
+}
+
+// sharedDir returns this process's connection of the shared profile p,
+// dialing it with the configured password, or anonymously, when there is
+// none.
+func (s *server) sharedDir(ctx context.Context, p profile.Profile) (Directory, error) {
+	return s.shared.get(ctx, p.Name, func(ctx context.Context) (Directory, error) {
+		password, _, err := p.ConfiguredPassword()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errPasswordUnavailable, err)
+		}
+		ctx, cancel := context.WithTimeout(ctx, p.ConnectTimeout+p.SearchTimeout)
+		defer cancel()
+		return s.dial(ctx, p, password)
+	})
+}
+
+// sharedConns holds the connections of shared profiles, each in a session
+// of its own in m. Every replica dials its own.
+type sharedConns struct {
+	m *session.Manager[Directory]
+
+	mu    sync.Mutex
+	conns map[string]sharedConn    // profile name to its last dialed connection
+	dials map[string]chan struct{} // profile name to a slot held across its dial
+}
+
+// sharedConn is a dialed connection and the session in m that holds it.
+// Every dial gets a new session, so id names this connection only.
+type sharedConn struct {
+	id string
+	d  Directory
+}
+
+func (c *sharedConns) last(name string) sharedConn {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conns[name]
+}
+
+// connected reports whether name has a live connection, without counting
+// as a use.
+func (c *sharedConns) connected(name string) bool {
+	sc := c.last(name)
+	return len(c.m.Names(sc.id)) > 0 && !sc.d.Closed()
+}
+
+// lookup returns name's connection. One closed for good, as by a redial
+// whose bind the server refused, is dropped instead, so that the next dial
+// reads the configured password again.
+func (c *sharedConns) lookup(name string) (Directory, error) {
+	sc := c.last(name)
+	d, err := c.m.Get(sc.id, name)
+	if err == nil && d.Closed() {
+		c.m.Drop(sc.id, name)
+		return nil, session.ErrNotConnected
+	}
+	return d, err
+}
+
+// get returns name's connection, dialing it with dial when there is none.
+// One dial per profile runs at a time, outside the lock: a request that
+// finds one under way waits for it and takes its connection.
+//
+// ponytail: when a dial fails, each request that waited dials again in
+// turn, so a burst of k requests on a broken profile binds up to k times;
+// hand the dial's error to the waiters if a lockout policy counts them.
+func (c *sharedConns) get(ctx context.Context, name string, dial func(context.Context) (Directory, error)) (Directory, error) {
+	if d, err := c.lookup(name); err == nil {
+		return d, nil
+	}
+	c.mu.Lock()
+	slot, ok := c.dials[name]
+	if !ok {
+		slot = make(chan struct{}, 1)
+		c.dials[name] = slot
+	}
+	c.mu.Unlock()
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-slot }()
+	if d, err := c.lookup(name); err == nil {
+		return d, nil // dialed while this request waited
+	}
+	d, err := dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := c.m.Create()
+	if err := c.m.Put(id, name, d); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	c.mu.Lock()
+	c.conns[name] = sharedConn{id: id, d: d}
+	c.mu.Unlock()
+	return d, nil
+}
+
+// drop closes name's connection, if there is one.
+//
+// ponytail: a dial under way when drop runs still stores its connection,
+// made with the settings it started with, and under steady use that lives
+// until --session-max-age; take the dial slot here if that matters.
+func (c *sharedConns) drop(name string) {
+	c.m.Drop(c.last(name).id, name)
 }
 
 func (s *server) fail(w http.ResponseWriter, err error) {

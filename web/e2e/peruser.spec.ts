@@ -1,10 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 import { connect } from './helpers'
 
-// The bindDNTemplate profiles people and people-sso (OpenLDAP demo data: userNNN, secretNNN)
-// and ad-people (Samba demo data: UPN userNNN@corp.example.test, Demo-Passw0rd!) in
-// deploy/e2e/connections.yaml. people-sso has identityUser: exact, and serve.sh trusts the
-// X-User header from 127.0.0.1.
+// The bindDNTemplate profiles people (OpenLDAP demo data: userNNN, secretNNN) and ad-people
+// (Samba demo data: UPN userNNN@corp.example.test, Demo-Passw0rd!) in
+// deploy/e2e/connections.yaml.
 const person = (n: string) => `uid=user${n},ou=people,dc=example,dc=org`
 
 /** Opens the connect dialog of profile. */
@@ -62,38 +61,6 @@ test('two people sign in to one profile', async ({ page, browser }) => {
   await expect(page.locator('header').getByText(/^Signed in as/)).toHaveCount(0)
 })
 
-// user003 is used here only.
-test('SSO identity locks the username', async ({ page, browser }) => {
-  const sso = await browser.newContext({ extraHTTPHeaders: { 'X-User': 'user003' } })
-  try {
-    const page2 = await sso.newPage()
-    const d = await openDialog(page2, 'people-sso')
-    await expect(d.username).toHaveValue('user003')
-    // Read-only, so the UI cannot send another username (the server refuses one with
-    // identity_mismatch).
-    await expect(d.username).toHaveAttribute('readonly', '')
-    await expect(d.username).not.toBeEditable()
-    await d.password.fill('secret003')
-    await d.password.press('Enter')
-    await expect(page2).toHaveURL(/\/c\/people-sso(?:[/?#]|$)/)
-    await expect(signedIn(page2, person('003'))).toBeVisible()
-  } finally {
-    await sso.close()
-  }
-
-  // Without the proxy's header there is no identity to sign in as.
-  const d = await openDialog(page, 'people-sso')
-  await expect(d.username).toBeEditable()
-  await d.username.fill('user003')
-  await d.password.fill('secret003')
-  const res = page.waitForResponse((r) => r.url().endsWith('/api/connect'))
-  await d.password.press('Enter')
-  expect((await res).status()).toBe(403)
-  await expect(d.dialog.getByRole('alert')).toContainText(
-    'Open ldaplens through its sign-in proxy to use this connection.',
-  )
-})
-
 // user010 is used here only: its five failures block it for 60 s.
 test('wrong password and throttling', async ({ page }) => {
   const { dialog, username, password } = await openDialog(page, 'people')
@@ -110,7 +77,7 @@ test('wrong password and throttling', async ({ page }) => {
   }
   await attempt(429)
   await expect(dialog.getByRole('alert')).toContainText(
-    'Too many failed sign-ins for this account. Wait a minute and try again.',
+    'Too many failed sign-ins. Wait a minute and try again.',
   )
 })
 

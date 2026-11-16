@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, toProfileInput } from '../../lib/api'
-import type { Environment, Profile, ProfileInput } from '../../lib/types'
+import type { Profile, ProfileInput } from '../../lib/types'
 import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { Dialog } from '../../ui/Dialog'
@@ -15,8 +15,8 @@ const empty: ProfileInput = {
   bindDN: '',
   caPEM: '',
   insecureSkipVerify: false,
-  environment: 'dev',
   color: '',
+  readOnly: false,
 }
 
 /** Drops empty optional strings so the server applies its defaults. */
@@ -47,7 +47,6 @@ export function ProfileForm({
         qc.invalidateQueries({ queryKey: ['c', p.name, 'info'] }),
       ]),
   })
-  const readOnly = form.readOnly ?? form.environment === 'prod'
   const field = 'block space-y-1'
   const label = 'text-xs text-muted'
   return (
@@ -106,20 +105,6 @@ export function ProfileForm({
           />
         </label>
         <label className={field}>
-          <span className={label}>Environment</span>
-          <select
-            value={form.environment}
-            onChange={(e) =>
-              set({ environment: e.target.value as Environment, readOnly: undefined })
-            }
-            className={`h-[var(--ctl)] w-full px-2 ${inputLook}`}
-          >
-            <option value="dev">dev</option>
-            <option value="stage">stage</option>
-            <option value="prod">prod</option>
-          </select>
-        </label>
-        <label className={field}>
           <span className={label}>Color</span>
           <span className="flex items-center gap-2">
             <input
@@ -148,7 +133,7 @@ export function ProfileForm({
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
-              checked={readOnly}
+              checked={form.readOnly}
               onChange={(e) => set({ readOnly: e.target.checked })}
             />{' '}
             Read-only

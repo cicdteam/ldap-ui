@@ -57,11 +57,7 @@ func TestErrorResponse(t *testing.T) {
 		{name: "naming violation", err: ldap.NewError(ldap.LDAPResultNamingViolation, errors.New("")), wantStatus: http.StatusUnprocessableEntity, wantCode: "rejected"},
 		{name: "not allowed on non-leaf", err: ldap.NewError(ldap.LDAPResultNotAllowedOnNonLeaf, errors.New("")), wantStatus: http.StatusUnprocessableEntity, wantCode: "rejected"},
 		{name: "other ldap", err: ldap.NewError(ldap.LDAPResultBusy, errors.New("")), wantStatus: http.StatusBadGateway, wantCode: "ldap_error"},
-		{name: "invalid request", err: fmt.Errorf("%w: bad cursor", ldapx.ErrInvalidRequest), wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
-		{
-			name: "cursor expired with ldap error", err: fmt.Errorf("%w: %w", ldapx.ErrCursorExpired, ldap.NewError(ldap.LDAPResultUnwillingToPerform, errors.New(""))),
-			wantStatus: http.StatusGone, wantCode: "cursor_expired",
-		},
+		{name: "invalid request", err: fmt.Errorf("%w: bad scope", ldapx.ErrInvalidRequest), wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "timeout", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantCode: "timeout"},
 		{name: "not connected", err: session.ErrNotConnected, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
 		{name: "no session", err: session.ErrNoSession, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},

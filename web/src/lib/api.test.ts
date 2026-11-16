@@ -77,6 +77,13 @@ describe('request', () => {
     expect(err.code).toBe('offline')
   })
 
+  it('reads the mode from api/server', async () => {
+    const fetch = respond(200, { mode: 'server' })
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.server()).resolves.toEqual({ mode: 'server' })
+    expect(new URL(fetch.mock.calls[0][0] as string).pathname).toBe('/ldap/api/server')
+  })
+
   it('handles 204', async () => {
     vi.stubGlobal('fetch', respond(204, ''))
     await expect(api.disconnect('demo')).resolves.toBeUndefined()
@@ -121,7 +128,7 @@ describe('request', () => {
       dn: 'uid=a,dc=x',
       attributes: [{ name: 'objectClass', values: ['top'] }],
     })
-    await api.deleteEntry('demo', { confirm: 'demo', dn: 'uid=a,dc=x' })
+    await api.deleteEntry('demo', { dn: 'uid=a,dc=x' })
     await expect(api.renameEntry('demo', { dn: 'uid=a,dc=x', newRDN: 'uid=b' })).resolves.toEqual({
       dn: 'uid=a,dc=x',
     })
@@ -131,7 +138,6 @@ describe('request', () => {
       '/ldap/api/c/demo/entries/rename',
     ])
     expect(JSON.parse((post.mock.calls[1][1] as RequestInit).body as string)).toEqual({
-      confirm: 'demo',
       dn: 'uid=a,dc=x',
     })
   })
@@ -224,8 +230,6 @@ describe('errorMessage', () => {
   it.each([
     [400, 'username_required'],
     [400, 'invalid_username'],
-    [403, 'identity_required'],
-    [403, 'identity_mismatch'],
     [429, 'too_many_attempts'],
   ])('has UI text for %i %s', (status, code) => {
     expect(errorMessage(new ApiError(status, { code, message: '' }))).not.toBe('')
@@ -239,13 +243,12 @@ describe('toProfileInput', () => {
       url: 'ldaps://h',
       startTLS: false,
       insecureSkipVerify: false,
-      environment: 'prod',
       readOnly: true,
       editable: true,
       hasPassword: false,
       connected: true,
       userLogin: false,
-      usernameLocked: false,
+      needsPassword: false,
       caPEM: 'pem',
     }
     expect(toProfileInput(p)).toEqual({
@@ -253,7 +256,6 @@ describe('toProfileInput', () => {
       url: 'ldaps://h',
       startTLS: false,
       insecureSkipVerify: false,
-      environment: 'prod',
       readOnly: true,
       caPEM: 'pem',
       baseDN: undefined,

@@ -52,7 +52,7 @@ describe('childrenFromPage', () => {
         entry('cn=Empty,ou=p,dc=x', { objectClass: ['container'], numSubordinates: ['0'] }),
         entry('cn=Unknown,ou=p,dc=x', { objectClass: ['container'] }),
       ],
-      cursor: 'c1',
+      more: true,
     })
     expect(c.more).toBe(true)
     expect(c.items.map((i) => [i.rdn, i.leaf, i.kind])).toEqual([

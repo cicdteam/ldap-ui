@@ -14,6 +14,7 @@ import type {
   RenameRequest,
   Schema,
   SearchRequest,
+  ServerInfo,
   WriteResult,
 } from './types'
 
@@ -76,10 +77,8 @@ const messages = new Map([
     'invalid_username',
     'A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long.',
   ],
-  ['identity_required', 'Open ldaplens through its sign-in proxy to use this connection.'],
-  ['identity_mismatch', 'Use the username you signed in to the proxy with.'],
   // ponytail: a fixed wait, not Retry-After; read the header into ApiError to show the seconds.
-  ['too_many_attempts', 'Too many failed sign-ins for this account. Wait a minute and try again.'],
+  ['too_many_attempts', 'Too many failed sign-ins. Wait a minute and try again.'],
 ])
 
 export function errorMessage(e: unknown): string {
@@ -167,6 +166,7 @@ const conn = (c: string) => `api/c/${encodeURIComponent(c)}`
 const query = (params: Record<string, string>) => new URLSearchParams(params).toString()
 
 export const api = {
+  server: () => request<ServerInfo>('GET', 'api/server'),
   profiles: () => request<Profile[]>('GET', 'api/profiles'),
   saveProfile: (p: ProfileInput) => request<Profile>('POST', 'api/profiles', p),
   /** username is for a userLogin profile; without one the body has no username key. */
@@ -207,29 +207,20 @@ export const api = {
     request<WriteResult>('POST', `${conn(c)}/entries/password`, req),
 }
 
-/** The fields POST /api/profiles accepts; it rejects the computed ones. */
+/**
+ * The fields POST /api/profiles accepts; it rejects the computed ones. Only
+ * an editable profile gets here, and local mode sends every field of it.
+ */
 export function toProfileInput(p: Profile): ProfileInput {
-  const {
-    name,
-    url,
-    startTLS,
-    baseDN,
-    bindDN,
-    caPEM,
-    insecureSkipVerify,
-    environment,
-    color,
-    readOnly,
-  } = p
+  const { name, url, startTLS, baseDN, bindDN, caPEM, insecureSkipVerify, color, readOnly } = p
   return {
     name,
-    url,
-    startTLS,
+    url: url ?? '',
+    startTLS: !!startTLS,
     baseDN,
     bindDN,
     caPEM,
-    insecureSkipVerify,
-    environment,
+    insecureSkipVerify: !!insecureSkipVerify,
     color,
     readOnly,
   }

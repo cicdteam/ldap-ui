@@ -23,6 +23,9 @@ import (
 // Directory is an open LDAP connection. *ldapx.Conn implements it.
 type Directory interface {
 	io.Closer
+	// Closed reports whether the connection was closed for good, by Close
+	// or by itself; every later call then fails with net.ErrClosed.
+	Closed() bool
 	Info() ldapx.Info
 	Schema(ctx context.Context) (*schema.Schema, error)
 	ReloadSchema(ctx context.Context) (*schema.Schema, error)
@@ -53,24 +56,26 @@ type Options struct {
 	Catalog  *profile.Catalog
 	Dial     Dialer
 	Sessions *session.Manager[Directory]
+	// Shared holds this process's connections of shared profiles (see
+	// profile.Profile.Shared), one session per profile, so that its idle
+	// and age limits apply to each.
+	Shared *session.Manager[Directory]
 	// AllowedHosts are Host header values accepted besides localhost.
 	AllowedHosts []string
 	// AuthToken, when set, is required on every request except probes.
 	AuthToken string
 	// BasePath serves everything under a prefix such as "/ldap".
 	BasePath string
-	// SecureCookies is set when the UI is served over HTTPS, e.g. behind a
-	// TLS-terminating ingress.
+	// SecureCookies forces Secure cookies. A request over TLS, or with
+	// X-Forwarded-Proto https, gets them anyway, so it is only for a TLS
+	// proxy that sends no X-Forwarded-Proto.
 	SecureCookies bool
-	// IdentityHeader names a request header, such as X-Auth-Request-Email,
-	// that an authenticating proxy sets to the user it verified. Its value
-	// counts only on requests from TrustedProxies: it is logged as "user",
-	// and for identityUser profiles it decides which username a person may
-	// sign in as.
-	IdentityHeader string
-	// TrustedProxies are the addresses of the proxies that set
-	// IdentityHeader.
+	// TrustedProxies are the addresses of reverse proxies whose
+	// X-Forwarded-For is trusted for the client address, which logs carry
+	// and the failed-login limit counts per.
 	TrustedProxies []netip.Prefix
+	// Server is set in server mode, which keeps no data on disk.
+	Server bool
 	// UI is the built web UI; nil serves a "not built" page.
 	UI     fs.FS
 	Logger *slog.Logger // nil discards logs
@@ -89,11 +94,15 @@ func New(opts Options) http.Handler {
 	cookies := cookieOptions{Path: base + "/", Secure: opts.SecureCookies}
 	s := &server{
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
-		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
-		attempts: newAttemptLimiter(5, time.Minute, 10000, time.Now),
+		shared:         &sharedConns{m: opts.Shared, conns: map[string]sharedConn{}, dials: map[string]chan struct{}{}},
+		trustedProxies: opts.TrustedProxies,
+		serverMode:     opts.Server,
+		attempts:       newAttemptLimiter(5, time.Minute, 10000, time.Now),
+		clients:        newAttemptLimiter(20, time.Minute, 10000, time.Now),
 	}
 
 	app := http.NewServeMux()
+	app.HandleFunc("GET /api/server", s.mode)
 	app.HandleFunc("GET /api/profiles", s.listProfiles)
 	app.HandleFunc("POST /api/profiles", s.saveProfile)
 	app.HandleFunc("POST /api/connect", s.connect)
@@ -115,7 +124,7 @@ func New(opts Options) http.Handler {
 	h := admit(64, 4, 10*time.Second, withDeadline(2*time.Minute, 4*time.Minute, app))
 	h = requireJSON(h)
 	h = http.NewCrossOriginProtection().Handler(h)
-	h = requireToken(opts.AuthToken, cookies, logger, h)
+	h = requireToken(opts.AuthToken, cookies, logger, s.origin, h)
 	h = hostCheck(opts.AllowedHosts, h)
 
 	// Probes answer at the root as well as under the base path: a kubelet

@@ -53,12 +53,12 @@ test('keyboard focus stays in the row after a commit; Delete beats a draft', asy
 
 test('read-only profile has no Edit button', async ({ page }) => {
   await page.goto('./')
-  await page.getByRole('button', { name: /^prod-bad\b/ }).click()
+  await page.getByRole('button', { name: /^readonly-badpw\b/ }).click()
   const pw = page.getByRole('dialog').locator('input[type=password]')
   await pw.fill('adminpassword')
   await pw.press('Enter')
-  await expect(page).toHaveURL(/\/c\/prod-bad(?:[/?#]|$)/)
-  await page.goto(`c/prod-bad/entry?dn=${encodeURIComponent(e2eDN('edit'))}`)
+  await expect(page).toHaveURL(/\/c\/readonly-badpw(?:[/?#]|$)/)
+  await page.goto(`c/readonly-badpw/entry?dn=${encodeURIComponent(e2eDN('edit'))}`)
   await expect(page.locator('[data-attr]').first()).toBeVisible()
   await expect(page.getByRole('button', editButton)).toHaveCount(0)
 })

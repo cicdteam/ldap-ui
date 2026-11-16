@@ -5,4 +5,3 @@ connections:
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
     passwordEnv: DEMO_LDAP_PASSWORD
-    environment: dev

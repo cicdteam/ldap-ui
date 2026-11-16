@@ -21,9 +21,11 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/ldaplens /ldaplens
+# Local mode keeps its data in $XDG_CONFIG_HOME/ldaplens: mount a volume at
+# /data to keep it. Server mode writes nothing.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV LDAPLENS_LISTEN=0.0.0.0:8080 \
-    LDAPLENS_DATA_DIR=/data
+    XDG_CONFIG_HOME=/data
 EXPOSE 8080
-VOLUME /data
 ENTRYPOINT ["/ldaplens"]
+CMD ["server"]

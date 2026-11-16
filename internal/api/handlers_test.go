@@ -61,6 +61,7 @@ type directoryFake struct {
 }
 
 func (d *directoryFake) Close() error     { d.closed = true; return nil }
+func (d *directoryFake) Closed() bool     { return d.closed }
 func (d *directoryFake) Info() ldapx.Info { return d.info }
 func (d *directoryFake) Schema(context.Context) (*schema.Schema, error) {
 	return schema.Parse(nil, nil, nil), d.err
@@ -145,6 +146,8 @@ type testEnv struct {
 	// RemoteAddr instead of httptest's 192.0.2.1:1234.
 	header http.Header
 	remote string
+	// opts is what h was built from.
+	opts Options
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -158,14 +161,11 @@ func newTestEnv(t *testing.T) *testEnv {
 func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Helper()
 	t.Setenv("LDAPLENS_TEST_PW", "from-env")
-	no := false
 	cat, err := profile.NewCatalog([]profile.Profile{
 		{Name: "dev", URL: "ldap://dev:389", BindDN: "cn=admin,dc=example,dc=org", PasswordEnv: "LDAPLENS_TEST_PW"}, //nolint:gosec // env var name, not a credential
-		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", Environment: profile.Prod, InsecureSkipVerify: true, Color: "red"},
+		{Name: "manual", URL: "ldap://manual:389", StartTLS: true, BindDN: "cn=admin,dc=example,dc=org", ReadOnly: true, InsecureSkipVerify: true, Color: "red"},
 		{Name: "anon", URL: "ldap://anon:389"},
-		{Name: "prodrw", URL: "ldap://prodrw:389", Environment: profile.Prod, ReadOnly: &no},
 		{Name: "people", URL: "ldap://people:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"},
-		{Name: "self", URL: "ldap://self:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org", IdentityUser: "localpart"},
 	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
@@ -174,6 +174,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	env := &testEnv{dir: &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}}
 	opts.Catalog = cat
 	opts.Sessions = session.New[Directory](time.Hour, 8*time.Hour)
+	opts.Shared = session.New[Directory](time.Hour, 8*time.Hour)
 	if opts.Dial == nil {
 		opts.Dial = func(_ context.Context, p profile.Profile, password string) (Directory, error) {
 			env.password, env.dialed = password, p
@@ -185,7 +186,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 			return env.dir, nil
 		}
 	}
-	env.h = New(opts)
+	env.h, env.opts = New(opts), opts
 	return env
 }
 
@@ -316,16 +317,17 @@ func TestInternalErrorHidesDetails(t *testing.T) {
 }
 
 // TestInfoCarriesProfileFlags checks that connect and info both return the
-// profile settings the workspace shows as badges.
+// profile settings the workspace shows as badges and in its status bar.
 func TestInfoCarriesProfileFlags(t *testing.T) {
 	type flags struct {
 		BaseDN             string `json:"baseDN"`
-		Environment        string `json:"environment"`
+		URL                string `json:"url"`
+		StartTLS           bool   `json:"startTLS"`
 		ReadOnly           bool   `json:"readOnly"`
 		InsecureSkipVerify bool   `json:"insecureSkipVerify"`
 		Color              string `json:"color"`
 	}
-	want := flags{BaseDN: "dc=example,dc=org", Environment: "prod", ReadOnly: true, InsecureSkipVerify: true, Color: "red"}
+	want := flags{BaseDN: "dc=example,dc=org", URL: "ldap://manual:389", StartTLS: true, ReadOnly: true, InsecureSkipVerify: true, Color: "red"}
 	check := func(name string, rec *httptest.ResponseRecorder) {
 		t.Helper()
 		if rec.Code != http.StatusOK {
@@ -346,7 +348,7 @@ func TestInfoCarriesProfileFlags(t *testing.T) {
 
 func TestNotConnected(t *testing.T) {
 	env := newTestEnv(t)
-	rec := env.do(t, http.MethodGet, "/api/c/dev/info", "")
+	rec := env.do(t, http.MethodGet, "/api/c/manual/info", "")
 	if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
 		t.Errorf("info without connect = %d %s, want 401 not_connected", rec.Code, rec.Body)
 	}
@@ -410,6 +412,16 @@ func TestSearchRejectsSecretFilter(t *testing.T) {
 	}
 }
 
+// TestSearchRejectsCursorField checks that a search answers in one request:
+// a paging cursor from a client is an unknown field.
+func TestSearchRejectsCursorField(t *testing.T) {
+	env := connected(t)
+	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)","cursor":"SOMEID"}`)
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "bad_request" {
+		t.Errorf("search with cursor = %d %s, want 400 bad_request", rec.Code, rec.Body)
+	}
+}
+
 func TestMembership(t *testing.T) {
 	env := connected(t)
 	rec := env.do(t, http.MethodGet, "/api/c/dev/memberof?dn=uid%3Da&nested=true", "")
@@ -425,14 +437,15 @@ func TestMembership(t *testing.T) {
 }
 
 func TestDisconnectClosesConnection(t *testing.T) {
-	env := connected(t)
-	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"dev"}`); rec.Code != http.StatusNoContent {
+	env := newTestEnv(t)
+	connectTo(t, env, `{"profile":"manual","password":"pw"}`)
+	if rec := env.do(t, http.MethodPost, "/api/disconnect", `{"profile":"manual"}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("disconnect = %d", rec.Code)
 	}
 	if !env.dir.closed {
 		t.Error("disconnect did not close the directory")
 	}
-	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized {
+	if rec := env.do(t, http.MethodGet, "/api/c/manual/info", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("info after disconnect = %d, want 401", rec.Code)
 	}
 }
@@ -475,7 +488,7 @@ func boolStr(b bool) string {
 
 func TestSaveProfile(t *testing.T) {
 	env := newTestEnv(t)
-	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","environment":"stage"}`)
+	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"editable":true`) {
 		t.Errorf("save = %d %s, want 200 editable", rec.Code, rec.Body)
 	}
@@ -498,6 +511,193 @@ func TestSaveProfile(t *testing.T) {
 	}
 }
 
+func TestServerModeRefusesSaving(t *testing.T) {
+	env := newTestEnvWith(t, Options{Server: true})
+	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`)
+	var got apiError
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body, err)
+	}
+	want := apiError{Code: "saving_disabled", Message: "this server keeps no saved connections"}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("save in server mode = %d, want 403", rec.Code)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("save in server mode body mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestSaveWithoutDataDir checks that local mode without a data dir refuses a
+// save with the status server mode gives it.
+func TestSaveWithoutDataDir(t *testing.T) {
+	cat, err := profile.NewCatalog(nil, "")
+	if err != nil {
+		t.Fatalf("NewCatalog() error = %v", err)
+	}
+	o := newTestEnv(t).opts
+	o.Catalog = cat
+	env := &testEnv{h: New(o)}
+	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`)
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "saving_disabled" {
+		t.Errorf("save without a data dir = %d %s, want 403 saving_disabled", rec.Code, rec.Body)
+	}
+}
+
+// TestServerModeProfileView checks that server mode tells the UI only what
+// its connect page needs, nothing about where or how a profile binds.
+func TestServerModeProfileView(t *testing.T) {
+	env := newTestEnvWith(t, Options{Server: true})
+	rec := env.do(t, http.MethodGet, "/api/profiles", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("profiles = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body, err)
+	}
+	want := []map[string]any{
+		{"name": "dev", "readOnly": false, "connected": false, "userLogin": false, "needsPassword": false},
+		{"name": "manual", "color": "red", "readOnly": true, "connected": false, "userLogin": false, "needsPassword": true},
+		{"name": "anon", "readOnly": false, "connected": false, "userLogin": false, "needsPassword": false},
+		{"name": "people", "readOnly": false, "connected": false, "userLogin": true, "needsPassword": true},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("profiles mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNeedsPassword(t *testing.T) {
+	tests := []struct {
+		name string
+		p    profile.Profile
+		want bool
+	}{
+		{name: "template", p: profile.Profile{BindDNTemplate: "uid={user},dc=x"}, want: true},
+		{name: "bindDN without a configured password", p: profile.Profile{BindDN: "cn=a,dc=x"}, want: true},
+		{name: "passwordFile", p: profile.Profile{BindDN: "cn=a,dc=x", PasswordFile: "/run/pw"}, want: false},
+		{name: "anonymous", want: false},
+	}
+	for _, tc := range tests {
+		b, err := json.Marshal(new(server).view(tc.p, false, nil))
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", tc.name, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatalf("%s: decode %s: %v", tc.name, b, err)
+		}
+		if got["needsPassword"] != tc.want {
+			t.Errorf("%s: view needsPassword = %v, want %v", tc.name, got["needsPassword"], tc.want)
+		}
+	}
+}
+
+// TestServerModeConnectErrors checks that in server mode a failed connect
+// tells the browser nothing about the directory: any LDAP result is a
+// generic invalid_credentials, and a network or TLS failure keeps its code
+// with a generic message. The log keeps the full error, and local mode
+// answers as errorResponse does, AD's reason included.
+func TestServerModeConnectErrors(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	const typed = `{"profile":"manual","password":"wrong"}`
+	invalid := map[string]any{"code": "invalid_credentials", "message": "invalid username or password"}
+	tests := []struct {
+		name string
+		body string // the connect request
+		err  error  // the dial's
+		// logged is in the log in both modes.
+		logged string
+		// wantStatus and want are server mode's answer.
+		wantStatus int
+		want       map[string]any
+		// localReason is the reason local mode decodes.
+		localReason string
+	}{
+		{
+			name: "AD account locked out", body: typed,
+			err:    ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 775, v4563")),
+			logged: "data 775", wantStatus: http.StatusUnauthorized, want: invalid, localReason: "account locked out",
+		},
+		{
+			name: "shared profile, configured password refused", body: `{"profile":"dev"}`,
+			err:    ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 52e, v4563")),
+			logged: "data 52e", wantStatus: http.StatusUnauthorized, want: invalid, localReason: "invalid credentials",
+		},
+		{
+			name: "389-DS retry limit", body: typed,
+			err:    ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("Exceed password retry limit. Please try later.")),
+			logged: "Exceed password retry limit", wantStatus: http.StatusUnauthorized, want: invalid,
+		},
+		{
+			name: "389-DS inactivated account", body: typed,
+			err:    ldap.NewError(ldap.LDAPResultUnwillingToPerform, errors.New("Account inactivated. Contact system administrator.")),
+			logged: "Account inactivated", wantStatus: http.StatusUnauthorized, want: invalid,
+		},
+		{
+			name: "network", body: typed,
+			err:    ldap.NewError(ldap.ErrorNetwork, errors.New("dial tcp: lookup ldap.corp.internal: no such host")),
+			logged: "ldap.corp.internal", wantStatus: http.StatusBadGateway,
+			want: map[string]any{"code": "network", "message": "cannot reach the directory server"},
+		},
+		{
+			name: "untrusted certificate", body: typed,
+			err:    &ldapx.UntrustedCertError{Certificates: []*x509.Certificate{srv.Certificate()}, Err: x509.UnknownAuthorityError{}},
+			logged: "untrusted server certificate", wantStatus: http.StatusBadGateway,
+			want: map[string]any{"code": "tls_untrusted", "message": "the directory server's certificate is not trusted"},
+		},
+	}
+	connect := func(t *testing.T, server bool, body string, dialErr error) (int, map[string]any, string) {
+		t.Helper()
+		var logs bytes.Buffer
+		env := newTestEnvWith(t, Options{Server: server, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		env.dialErr = dialErr
+		rec := env.do(t, http.MethodPost, "/api/connect", body)
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %q: %v", rec.Body, err)
+		}
+		return rec.Code, got, logs.String()
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			status, got, logs := connect(t, true, tc.body, tc.err)
+			if status != tc.wantStatus {
+				t.Errorf("server mode: connect = %d, want %d", status, tc.wantStatus)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("server mode: connect body mismatch (-want +got):\n%s", diff)
+			}
+			if !strings.Contains(logs, tc.logged) {
+				t.Errorf("server mode: log = %q, want %q in it", logs, tc.logged)
+			}
+
+			wantStatus, e := errorResponse(tc.err)
+			b, err := json.Marshal(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := json.Unmarshal(b, &want); err != nil {
+				t.Fatal(err)
+			}
+			status, got, logs = connect(t, false, tc.body, tc.err)
+			if status != wantStatus {
+				t.Errorf("local mode: connect = %d, want %d", status, wantStatus)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("local mode: connect body mismatch (-want +got):\n%s", diff)
+			}
+			if reason, _ := got["reason"].(string); reason != tc.localReason {
+				t.Errorf("local mode: reason = %q, want %q", reason, tc.localReason)
+			}
+			if !strings.Contains(logs, tc.logged) {
+				t.Errorf("local mode: log = %q, want %q in it", logs, tc.logged)
+			}
+		})
+	}
+}
+
 // TestCookieScope checks that the token and session cookies share the
 // base path and the SecureCookies setting.
 func TestCookieScope(t *testing.T) {
@@ -516,7 +716,7 @@ func TestCookieScope(t *testing.T) {
 		env := newTestEnvWith(t, tc.opts)
 		prefix := strings.TrimSuffix(tc.wantPath, "/")
 		env.do(t, http.MethodGet, prefix+"/?token=tok", "")
-		if rec := env.do(t, http.MethodPost, prefix+"/api/connect", `{"profile":"dev"}`); rec.Code != http.StatusOK {
+		if rec := env.do(t, http.MethodPost, prefix+"/api/connect", `{"profile":"manual","password":"pw"}`); rec.Code != http.StatusOK {
 			t.Fatalf("%s: connect = %d %s, want 200", tc.name, rec.Code, rec.Body)
 		}
 		for _, name := range []string{tokenCookie, sessionCookie} {
@@ -606,7 +806,7 @@ func TestWriteLogsAttribution(t *testing.T) {
 		token    = "attribution-token-not-logged" //nolint:gosec // test value, not a credential
 		typedPW  = "typed-password-not-logged"
 		bindDN   = "cn=admin,dc=example,dc=org"
-		remote   = "192.0.2.1:1234" // httptest.NewRequest's RemoteAddr
+		remote   = "192.0.2.1" // httptest.NewRequest's RemoteAddr, without the port
 		applyOne = `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["secret-value"]}]}]}`
 	)
 	var logs bytes.Buffer
@@ -618,7 +818,7 @@ func TestWriteLogsAttribution(t *testing.T) {
 		t.Fatalf("connect with bad credentials = %d %s, want 401", rec.Code, rec.Body)
 	}
 	env.dialErr = nil
-	connectTo(t, env, `{"profile":"dev"}`)
+	connectTo(t, env, `{"profile":"dev","password":"`+typedPW+`"}`)
 	for _, w := range []struct{ path, body string }{
 		{path: "/api/c/dev/changes/apply", body: applyOne},
 		{path: "/api/c/dev/entries/add", body: addBody},
@@ -688,8 +888,8 @@ func TestSaveProfileLogged(t *testing.T) {
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 	for _, body := range []string{
-		`{"name":"lab","url":"ldap://lab:389","environment":"prod"}`,
-		`{"name":"lab","url":"ldap://evil.example:389","environment":"prod","readOnly":false,"insecureSkipVerify":true}`,
+		`{"name":"lab","url":"ldap://lab:389","readOnly":true}`,
+		`{"name":"lab","url":"ldap://evil.example:389","insecureSkipVerify":true}`,
 	} {
 		if rec := env.do(t, http.MethodPost, "/api/profiles", body); rec.Code != http.StatusOK {
 			t.Fatalf("save %s = %d %s, want 200", body, rec.Code, rec.Body)
@@ -723,8 +923,8 @@ func TestBadTokenLogged(t *testing.T) {
 		t.Fatalf("bad token = %d %s, want 401 unauthorized", rec.Code, rec.Body)
 	}
 	got := withMsg(jsonLogs(t, &logs), "auth failed")
-	if len(got) != 1 || got[0]["remote"] != req.RemoteAddr {
-		t.Errorf("auth failed lines = %v, want one with remote %q", got, req.RemoteAddr)
+	if len(got) != 1 || got[0]["remote"] != "192.0.2.1" {
+		t.Errorf("auth failed lines = %v, want one with remote 192.0.2.1, httptest's client", got)
 	}
 	for _, secret := range []string{token, "wrong-token-not-logged"} {
 		if strings.Contains(logs.String(), secret) {
@@ -766,19 +966,19 @@ func connectedNames(t *testing.T, env *testEnv) []string {
 
 func TestConnectRotatesSession(t *testing.T) {
 	env := newTestEnv(t)
-	connectTo(t, env, `{"profile":"dev"}`)
+	connectTo(t, env, `{"profile":"manual","password":"pw"}`)
 	first, firstCookies := env.cookie(sessionCookie), slices.Clone(env.cookies)
-	connectTo(t, env, `{"profile":"anon"}`)
+	connectTo(t, env, `{"profile":"people","username":"user001","password":"pw"}`)
 	second := env.cookie(sessionCookie)
 	if first == "" || second == "" || second == first {
 		t.Fatalf("session cookie after two connects = %q, then %q, want two different IDs", first, second)
 	}
-	if diff := cmp.Diff([]string{"anon", "dev"}, connectedNames(t, env)); diff != "" {
+	if diff := cmp.Diff([]string{"manual", "people"}, connectedNames(t, env)); diff != "" {
 		t.Errorf("connected profiles with the new cookie mismatch (-want +got):\n%s", diff)
 	}
 
 	env.cookies = firstCookies
-	if rec := env.do(t, http.MethodGet, "/api/c/dev/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
+	if rec := env.do(t, http.MethodGet, "/api/c/manual/info", ""); rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
 		t.Errorf("info with the first cookie = %d %s, want 401 not_connected", rec.Code, rec.Body)
 	}
 }
@@ -788,8 +988,8 @@ func TestConnectRotatesSession(t *testing.T) {
 func TestConnectLogsPrevious(t *testing.T) {
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
-	connectTo(t, env, `{"profile":"dev"}`)
-	connectTo(t, env, `{"profile":"anon"}`)
+	connectTo(t, env, `{"profile":"manual","password":"pw"}`)
+	connectTo(t, env, `{"profile":"people","username":"user001","password":"pw"}`)
 	var got []map[string]any
 	for _, l := range withMsg(jsonLogs(t, &logs), "connected") {
 		got = append(got, map[string]any{"session": l["session"], "previous": l["previous"]})
@@ -813,7 +1013,7 @@ func TestConnectLogsPrevious(t *testing.T) {
 func TestConnectFailureCreatesNoSession(t *testing.T) {
 	env := newTestEnv(t)
 	env.dialErr = ldap.NewError(ldap.ErrorNetwork, errors.New("refused"))
-	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"dev"}`); rec.Code != http.StatusBadGateway {
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"pw"}`); rec.Code != http.StatusBadGateway {
 		t.Fatalf("connect with a failing dial = %d %s, want 502", rec.Code, rec.Body)
 	}
 	if id := env.cookie(sessionCookie); id != "" {
@@ -826,15 +1026,15 @@ func TestConnectTooManyConnections(t *testing.T) {
 	var want []string
 	for i := range session.MaxConns {
 		name := fmt.Sprintf("p%d", i)
-		if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"`+name+`","url":"ldap://`+name+`:389"}`); rec.Code != http.StatusOK {
+		if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"`+name+`","url":"ldap://`+name+`:389","bindDN":"cn=admin"}`); rec.Code != http.StatusOK {
 			t.Fatalf("save %s = %d %s", name, rec.Code, rec.Body)
 		}
-		connectTo(t, env, `{"profile":"`+name+`"}`)
+		connectTo(t, env, `{"profile":"`+name+`","password":"pw"}`)
 		want = append(want, name)
 	}
 
 	env.dir = &directoryFake{}
-	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"anon"}`)
+	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"pw"}`)
 	if rec.Code != http.StatusConflict || errorCode(t, rec) != "too_many_connections" {
 		t.Errorf("connect %d = %d %s, want 409 too_many_connections", session.MaxConns+1, rec.Code, rec.Body)
 	}
@@ -903,179 +1103,6 @@ func TestConnectTemplateRefusals(t *testing.T) {
 	}
 }
 
-// identityOptions trusts httptest's remote, 192.0.2.1, to set X-User.
-var identityOptions = Options{IdentityHeader: "X-User", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
-
-func TestConnectIdentityLock(t *testing.T) {
-	tests := []struct {
-		name       string
-		remote     string
-		user       string // X-User
-		username   string
-		wantStatus int
-		wantCode   string
-		wantBindDN string
-	}{
-		{name: "same user", user: "alice@corp.example", username: "alice", wantStatus: http.StatusOK, wantBindDN: "uid=alice,ou=people,dc=example,dc=org"},
-		{name: "other user", user: "alice@corp.example", username: "bob", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
-		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
-		{name: "no header", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
-		{name: "case-insensitive", user: "alice@corp.example", username: "ALICE", wantStatus: http.StatusOK, wantBindDN: "uid=ALICE,ou=people,dc=example,dc=org"},
-		// The Kelvin sign folds to k in Unicode, but is no ASCII k.
-		{name: "Kelvin sign", user: "\u212Aate@corp.example", username: "kate", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			env := newTestEnvWith(t, identityOptions)
-			env.remote = tc.remote
-			if tc.user != "" {
-				env.header = http.Header{"X-User": {tc.user}}
-			}
-			rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"`+tc.username+`","password":"pw"}`)
-			if rec.Code != tc.wantStatus || (tc.wantCode != "" && errorCode(t, rec) != tc.wantCode) {
-				t.Fatalf("connect as %s with X-User %q = %d %s, want %d %s", tc.username, tc.user, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
-			}
-			wantDials := 0
-			if tc.wantBindDN != "" {
-				wantDials = 1
-			}
-			if env.dials != wantDials || env.dialed.BindDN != tc.wantBindDN {
-				t.Errorf("connect as %s dialed %d times as %q, want %d as %q", tc.username, env.dials, env.dialed.BindDN, wantDials, tc.wantBindDN)
-			}
-		})
-	}
-}
-
-// TestConnectIdentityRefusalLogged checks that a connect refused for the
-// trusted identity is logged with its code, without the username it asked
-// for.
-func TestConnectIdentityRefusalLogged(t *testing.T) {
-	var logs bytes.Buffer
-	opts := identityOptions
-	opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
-	env := newTestEnvWith(t, opts)
-	env.remote, env.header = "198.51.100.1:1234", http.Header{"X-User": {"alice@corp.example"}}
-	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("connect from an untrusted remote = %d %s, want 403", rec.Code, rec.Body)
-	}
-	env.remote = ""
-	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("connect as mallory with X-User alice = %d %s, want 403", rec.Code, rec.Body)
-	}
-	var got []map[string]any
-	for _, l := range withMsg(jsonLogs(t, &logs), "connect refused") {
-		if _, ok := l["session"]; !ok {
-			t.Errorf("connect refused line = %v, want who made it", l)
-		}
-		got = append(got, map[string]any{"profile": l["profile"], "code": l["code"], "bindDN": l["bindDN"], "remote": l["remote"], "user": l["user"]})
-	}
-	want := []map[string]any{
-		{"profile": "self", "code": "identity_required", "bindDN": "", "remote": "198.51.100.1:1234", "user": nil},
-		{"profile": "self", "code": "identity_mismatch", "bindDN": "", "remote": "192.0.2.1:1234", "user": "alice@corp.example"},
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("connect refused lines mismatch (-want +got):\n%s", diff)
-	}
-	if strings.Contains(logs.String(), "mallory") {
-		t.Errorf("log contains the username:\n%s", logs.String())
-	}
-}
-
-func TestListProfilesIdentity(t *testing.T) {
-	type view struct {
-		UserLogin      bool   `json:"userLogin"`
-		Username       string `json:"username"`
-		UsernameLocked bool   `json:"usernameLocked"`
-	}
-	views := func(t *testing.T, env *testEnv) map[string]view {
-		t.Helper()
-		rec := env.do(t, http.MethodGet, "/api/profiles", "")
-		var list []struct {
-			Name string `json:"name"`
-			view
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-			t.Fatalf("decode profiles %q: %v", rec.Body, err)
-		}
-		m := map[string]view{}
-		for _, v := range list {
-			if v.Name == "dev" || v.Name == "people" || v.Name == "self" {
-				m[v.Name] = v.view
-			}
-		}
-		return m
-	}
-	env := newTestEnvWith(t, identityOptions)
-	env.header = http.Header{"X-User": {"alice@corp.example"}}
-	want := map[string]view{
-		"dev":    {},
-		"people": {UserLogin: true},
-		"self":   {UserLogin: true, Username: "alice", UsernameLocked: true},
-	}
-	if diff := cmp.Diff(want, views(t, env)); diff != "" {
-		t.Errorf("profiles with X-User mismatch (-want +got):\n%s", diff)
-	}
-	env.header = nil
-	want["self"] = view{UserLogin: true}
-	if diff := cmp.Diff(want, views(t, env)); diff != "" {
-		t.Errorf("profiles without X-User mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// TestIdentityCheckedEveryRequest checks that a connection made under a
-// trusted identity serves only requests with that identity: a request with
-// another one, or with none, drops the connection and gets 401
-// not_connected, which makes the UI ask to connect again.
-func TestIdentityCheckedEveryRequest(t *testing.T) {
-	tests := []struct {
-		name     string
-		remote   string
-		user     string // X-User of the request after the connect
-		wantDrop bool
-	}{
-		{name: "same identity", user: "alice@corp.example"},
-		{name: "other identity", user: "bob@corp.example", wantDrop: true},
-		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", wantDrop: true},
-		{name: "no header", wantDrop: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var logs bytes.Buffer
-			opts := identityOptions
-			opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
-			env := newTestEnvWith(t, opts)
-			env.header = http.Header{"X-User": {"alice@corp.example"}}
-			connectTo(t, env, `{"profile":"self","username":"alice","password":"pw"}`)
-
-			env.remote, env.header = tc.remote, nil
-			if tc.user != "" {
-				env.header = http.Header{"X-User": {tc.user}}
-			}
-			rec := env.do(t, http.MethodGet, "/api/c/self/info", "")
-			if !tc.wantDrop {
-				if rec.Code != http.StatusOK || env.dir.closed {
-					t.Errorf("info with X-User %q = %d %s, closed %v, want 200 and the connection open", tc.user, rec.Code, rec.Body, env.dir.closed)
-				}
-				return
-			}
-			if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
-				t.Errorf("info with X-User %q from %q = %d %s, want 401 not_connected", tc.user, tc.remote, rec.Code, rec.Body)
-			}
-			if !env.dir.closed {
-				t.Error("connection is open after a request with another identity, want it closed")
-			}
-			env.remote, env.header = "", http.Header{"X-User": {"alice@corp.example"}}
-			if rec := env.do(t, http.MethodGet, "/api/c/self/info", ""); rec.Code != http.StatusUnauthorized {
-				t.Errorf("info with X-User alice after the drop = %d %s, want 401", rec.Code, rec.Body)
-			}
-			found := withMsg(jsonLogs(t, &logs), "identity changed")
-			if len(found) != 1 || found[0]["profile"] != "self" || found[0]["bindDN"] != "uid=alice,ou=people,dc=example,dc=org" {
-				t.Errorf(`"identity changed" lines = %v, want one with profile self and alice's bindDN`, found)
-			}
-		})
-	}
-}
-
 // TestWriteLogsResolvedBindDN checks that a template connection's lines
 // carry the DN it bound as, not the template's empty bindDN.
 func TestWriteLogsResolvedBindDN(t *testing.T) {
@@ -1101,17 +1128,18 @@ func TestWriteLogsResolvedBindDN(t *testing.T) {
 	}
 }
 
-// TestWriteLogsAnonymousBindDN checks that the lines of an anonymous
-// connection carry an empty bindDN even after its profile was edited to a
-// bind DN: they name the DN the connection bound as, not the catalog's.
-func TestWriteLogsAnonymousBindDN(t *testing.T) {
+// TestWriteLogsBoundDN checks that the lines of a connection carry the DN
+// it bound as even after its profile was edited to an anonymous one: they
+// name the DN the connection bound as, not the catalog's.
+func TestWriteLogsBoundDN(t *testing.T) {
+	const dn = "cn=admin,dc=example,dc=org"
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
-	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`); rec.Code != http.StatusOK {
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","bindDN":"`+dn+`"}`); rec.Code != http.StatusOK {
 		t.Fatalf("save lab = %d %s, want 200", rec.Code, rec.Body)
 	}
-	connectTo(t, env, `{"profile":"lab"}`)
-	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","bindDN":"cn=admin,dc=example,dc=org"}`); rec.Code != http.StatusOK {
+	connectTo(t, env, `{"profile":"lab","password":"pw"}`)
+	if rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`); rec.Code != http.StatusOK {
 		t.Fatalf("edit lab = %d %s, want 200", rec.Code, rec.Body)
 	}
 	body := `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["x"]}]}]}`
@@ -1128,8 +1156,8 @@ func TestWriteLogsAnonymousBindDN(t *testing.T) {
 	lines := jsonLogs(t, &logs)
 	for _, msg := range []string{"modified", "modify rejected", "disconnected"} {
 		found := withMsg(lines, msg)
-		if len(found) != 1 || found[0]["bindDN"] != "" {
-			t.Errorf("%q lines = %v, want one with an empty bindDN", msg, found)
+		if len(found) != 1 || found[0]["bindDN"] != dn {
+			t.Errorf("%q lines = %v, want one with bindDN %s", msg, found, dn)
 		}
 	}
 }
@@ -1223,8 +1251,8 @@ func TestConnectThrottlePerAccount(t *testing.T) {
 		t.Errorf("connect as user002: %d dials, last as %q, want 6, the last as user002", env.dials, env.dialed.BindDN)
 	}
 	found := withMsg(jsonLogs(t, &logs), "connect throttled")
-	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1:1234" {
-		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q and remote 192.0.2.1:1234`, found, userDN)
+	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1" || found[0]["limit"] != "account" {
+		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q, remote 192.0.2.1 and limit account`, found, userDN)
 	}
 	if strings.Contains(logs.String(), "secret-not-logged") {
 		t.Errorf("log contains the password:\n%s", logs.String())
@@ -1257,6 +1285,131 @@ func TestConnectThrottlePerServer(t *testing.T) {
 	}
 	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("connect as user001 to ldap://people:389 after a success on ldap://other:389 = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// connectAs connects env to the people profile as username with a wrong
+// password and returns the response.
+func connectAs(t *testing.T, env *testEnv, username string) *httptest.ResponseRecorder {
+	t.Helper()
+	return env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"`+username+`","password":"wrong"}`)
+}
+
+// TestConnectThrottledPerClient checks that 20 wrong passwords from one
+// client, each for another account, refuse its 21st connect without
+// dialing, that the refusal is logged, and that another client is still
+// admitted.
+func TestConnectThrottledPerClient(t *testing.T) {
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	env.dialErr = invalidCredentials
+	for i := range 20 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+1)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("connect %d as another account = %d %s, want 401", i+1, rec.Code, rec.Body)
+		}
+	}
+	rec := connectAs(t, env, "user021")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Errorf("21st connect from one client = %d %s, want 429 too_many_attempts", rec.Code, rec.Body)
+	}
+	if got := retryAfter(rec); got < 1 || got > 60 {
+		t.Errorf("21st connect from one client Retry-After = %q, want whole seconds in 1..60", rec.Header().Get("Retry-After"))
+	}
+	if env.dials != 20 {
+		t.Errorf("21 connects from one client: %d dials, want 20", env.dials)
+	}
+	found := withMsg(jsonLogs(t, &logs), "connect throttled")
+	if len(found) != 1 || found[0]["remote"] != "192.0.2.1" || found[0]["limit"] != "client" {
+		t.Errorf(`"connect throttled" lines = %v, want one with remote 192.0.2.1 and limit client`, found)
+	}
+	env.remote = "198.51.100.1:1234"
+	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("connect from another client = %d %s, want 401", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectSuccessKeepsClientCount checks that a successful connect does
+// not clear its client's failures, so that one valid account cannot reset
+// the count between guesses at others.
+func TestConnectSuccessKeepsClientCount(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for i := range 19 {
+		connectAs(t, env, fmt.Sprintf("user%03d", i+1))
+	}
+	env.dialErr = nil
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user020","password":"right"}`); rec.Code != http.StatusOK {
+		t.Fatalf("connect as user020 after 19 failures = %d %s, want 200", rec.Code, rec.Body)
+	}
+	env.dialErr = invalidCredentials
+	if rec := connectAs(t, env, "user021"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("connect after 19 failures and a success = %d %s, want 401", rec.Code, rec.Body)
+	}
+	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after 20 failures and a success = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectUnreachableNotCounted checks that a connect failing for
+// another reason than a wrong password does not count against its client.
+func TestConnectUnreachableNotCounted(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = ldap.NewError(ldap.ErrorNetwork, errors.New("connection refused"))
+	for i := range 25 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+1)); rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("connect %d to an unreachable server = %d %s, want a dial", i+1, rec.Code, rec.Body)
+		}
+	}
+	env.dialErr = invalidCredentials
+	for i := range 20 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+26)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("wrong password %d after 25 unreachable = %d %s, want 401", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := connectAs(t, env, "user046"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after 20 wrong passwords = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectClientsBehindProxy checks that two clients behind one trusted
+// proxy, told apart by X-Forwarded-For, are counted apart.
+func TestConnectClientsBehindProxy(t *testing.T) {
+	// httptest's remote, 192.0.2.1, is the proxy.
+	env := newTestEnvWith(t, Options{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}})
+	env.dialErr = invalidCredentials
+	env.header = http.Header{"X-Forwarded-For": {"203.0.113.7"}}
+	for i := range 20 {
+		connectAs(t, env, fmt.Sprintf("user%03d", i+1))
+	}
+	if rec := connectAs(t, env, "user021"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("21st connect from 203.0.113.7 = %d %s, want 429", rec.Code, rec.Body)
+	}
+	env.header = http.Header{"X-Forwarded-For": {"203.0.113.8"}}
+	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("connect from 203.0.113.8 through the same proxy = %d %s, want 401", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectPerAccountRefusalNotCounted checks that a connect the
+// per-account limit refuses does not count against its client.
+func TestConnectPerAccountRefusalNotCounted(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for range 5 {
+		connectAs(t, env, "user001")
+	}
+	for range 30 {
+		if rec := connectAs(t, env, "user001"); rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("connect as user001 after 5 failures = %d %s, want 429", rec.Code, rec.Body)
+		}
+	}
+	for i := range 15 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+2)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("connect %d as another account after 5 failures and 30 refusals = %d %s, want 401", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := connectAs(t, env, "user017"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after 20 failures from one client = %d %s, want 429", rec.Code, rec.Body)
 	}
 }
 

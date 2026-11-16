@@ -62,8 +62,7 @@ function CreateForm({
   const qc = useQueryClient()
   const [form, setForm] = useState(initial)
   const m = useMutation({
-    mutationFn: (confirm: string | undefined) =>
-      api.addEntry(ws.conn, { confirm, dn: formDN(form), attributes: addAttributes(form) }),
+    mutationFn: () => api.addEntry(ws.conn, { dn: formDN(form), attributes: addAttributes(form) }),
     onSuccess: (res) => {
       afterWrite(qc, ws.conn)
       ws.select(res.dn)
@@ -90,7 +89,7 @@ function CreateForm({
       ready={canCreate(form, ws.schema)}
       pending={m.isPending}
       error={atField ? null : m.error}
-      onSubmit={(c) => m.mutate(c)}
+      onSubmit={() => m.mutate()}
       close={close}
     >
       <EntryFields

@@ -18,16 +18,6 @@ import (
 	"github.com/go-ldap/ldap/v3"
 )
 
-// Environment tells the user how careful to be with a connection.
-type Environment string
-
-// Known environments.
-const (
-	Dev   Environment = "dev"
-	Stage Environment = "stage"
-	Prod  Environment = "prod"
-)
-
 const (
 	defaultConnectTimeout = 10 * time.Second
 	defaultSearchTimeout  = 30 * time.Second
@@ -62,26 +52,15 @@ type Profile struct {
 	BaseDN             string        `yaml:"baseDN" json:"baseDN,omitempty"`
 	BindDN             string        `yaml:"bindDN" json:"bindDN,omitempty"`
 	BindDNTemplate     string        `yaml:"bindDNTemplate" json:"-"`
-	IdentityUser       string        `yaml:"identityUser" json:"-"`
 	PasswordEnv        string        `yaml:"passwordEnv" json:"-"`
 	PasswordFile       string        `yaml:"passwordFile" json:"-"`
 	CAFile             string        `yaml:"caFile" json:"-"`
 	CAPEM              string        `yaml:"caPEM" json:"caPEM,omitempty"`
 	InsecureSkipVerify bool          `yaml:"insecureSkipVerify" json:"insecureSkipVerify"`
-	Environment        Environment   `yaml:"environment" json:"environment"`
 	Color              string        `yaml:"color" json:"color,omitempty"`
-	ReadOnly           *bool         `yaml:"readOnly" json:"readOnly,omitempty"`
+	ReadOnly           bool          `yaml:"readOnly" json:"readOnly"`
 	ConnectTimeout     time.Duration `yaml:"connectTimeout" json:"-"`
 	SearchTimeout      time.Duration `yaml:"searchTimeout" json:"-"`
-}
-
-// IsReadOnly reports whether writes are disabled. Prod profiles are
-// read-only unless the profile sets readOnly: false explicitly.
-func (p Profile) IsReadOnly() bool {
-	if p.ReadOnly != nil {
-		return *p.ReadOnly
-	}
-	return p.Environment == Prod
 }
 
 // normalize validates p and fills in defaults. It is idempotent.
@@ -113,13 +92,6 @@ func (p *Profile) normalize() error {
 	if u.User != nil {
 		return fmt.Errorf("%w: %s: url must not contain credentials", ErrInvalid, p.Name)
 	}
-	switch p.Environment {
-	case "":
-		p.Environment = Dev
-	case Dev, Stage, Prod:
-	default:
-		return fmt.Errorf("%w: %s: environment must be dev, stage or prod, got %q", ErrInvalid, p.Name, p.Environment)
-	}
 	if p.BindDNTemplate != "" {
 		if strings.Count(p.BindDNTemplate, userPlaceholder) != 1 {
 			return fmt.Errorf("%w: %s: bindDNTemplate must contain %s exactly once", ErrInvalid, p.Name, userPlaceholder)
@@ -127,15 +99,6 @@ func (p *Profile) normalize() error {
 		if p.BindDN != "" || p.PasswordEnv != "" || p.PasswordFile != "" {
 			return fmt.Errorf("%w: %s: bindDNTemplate cannot be combined with bindDN, passwordEnv or passwordFile", ErrInvalid, p.Name)
 		}
-	}
-	switch p.IdentityUser {
-	case "":
-	case "exact", "localpart":
-		if p.BindDNTemplate == "" {
-			return fmt.Errorf("%w: %s: identityUser requires bindDNTemplate", ErrInvalid, p.Name)
-		}
-	default:
-		return fmt.Errorf("%w: %s: identityUser must be exact or localpart, got %q", ErrInvalid, p.Name, p.IdentityUser)
 	}
 	if p.ConnectTimeout <= 0 {
 		p.ConnectTimeout = defaultConnectTimeout
@@ -150,6 +113,13 @@ func (p *Profile) normalize() error {
 // BindDNFor turns into the bind DN.
 func (p Profile) UserLogin() bool {
 	return p.BindDNTemplate != ""
+}
+
+// Shared reports whether everyone who connects binds the same way, with
+// the configured password or anonymously, so that one connection can serve
+// them all.
+func (p Profile) Shared() bool {
+	return !p.UserLogin() && (p.PasswordEnv != "" || p.PasswordFile != "" || p.BindDN == "")
 }
 
 // BindDNFor returns BindDNTemplate with the placeholder replaced by
@@ -167,17 +137,6 @@ func (p Profile) BindDNFor(username string) (string, error) {
 		username = ldap.EscapeDN(username)
 	}
 	return strings.Replace(p.BindDNTemplate, userPlaceholder, username, 1), nil
-}
-
-// IdentityUsername maps a trusted identity, such as the user a proxy
-// authenticated, to the username it may sign in as. With identityUser
-// localpart that is the part before the last "@"; otherwise the identity
-// itself.
-func (p Profile) IdentityUsername(identity string) string {
-	if i := strings.LastIndex(identity, "@"); p.IdentityUser == "localpart" && i >= 0 {
-		return identity[:i]
-	}
-	return identity
 }
 
 // ConfiguredPassword returns the bind password from PasswordEnv or

@@ -68,6 +68,46 @@ func TestNamesAndDrop(t *testing.T) {
 	}
 }
 
+func TestDropConn(t *testing.T) {
+	m := New[*closerSpy](time.Hour, 8*time.Hour)
+	id := m.Create()
+	old, cur := &closerSpy{}, &closerSpy{}
+	_ = m.Put(id, "dev", old)
+	_ = m.Put(id, "dev", cur)
+	m.DropConn(id, "dev", old) // replaced meanwhile: cur must stay
+	if got, err := m.Get(id, "dev"); err != nil || got != cur || cur.closed {
+		t.Errorf("after DropConn(old): Get(dev) = %p, %v, closed %v, want %p open", got, err, cur.closed, cur)
+	}
+	m.DropConn(id, "dev", cur)
+	if _, err := m.Get(id, "dev"); !errors.Is(err, ErrNotConnected) || !cur.closed {
+		t.Errorf("after DropConn(cur): Get(dev) error = %v, closed %v, want ErrNotConnected, closed", err, cur.closed)
+	}
+	m.DropConn("nope", "dev", cur) // unknown session: no panic
+}
+
+func TestConns(t *testing.T) {
+	now := time.Unix(0, 0)
+	m := New[*closerSpy](time.Hour, 2*time.Hour)
+	m.now = func() time.Time { return now }
+	id := m.Create()
+	a, b := &closerSpy{}, &closerSpy{}
+	_ = m.Put(id, "a", a)
+	now = now.Add(90 * time.Minute)
+	_ = m.Put(id, "b", b)
+	now = now.Add(40 * time.Minute) // a is past the maximum age, b is not
+	if got := m.Conns(id); len(got) != 1 || got["b"] != b {
+		t.Errorf("Conns() = %v, want only b %p", got, b)
+	}
+	now = now.Add(30 * time.Minute) // idle since the Put, not since Conns
+	m.Sweep()
+	if m.Exists(id) {
+		t.Error("Conns() marked the session used: Sweep kept it")
+	}
+	if got := m.Conns("nope"); len(got) != 0 {
+		t.Errorf("Conns(unknown) = %v, want empty", got)
+	}
+}
+
 // closeSignalSpy is closed by Close, which Sweep runs in the background.
 type closeSignalSpy chan struct{}
 

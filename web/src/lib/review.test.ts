@@ -37,8 +37,8 @@ describe('afterApply', () => {
 })
 
 describe('canApply', () => {
-  const ok = { batch, invalid: 0, prod: false, confirm: '', conn: 'demo' }
-  it('allows a valid non-prod batch', () => {
+  const ok = { batch, invalid: 0 }
+  it('allows a valid batch', () => {
     expect(canApply(ok)).toBe(true)
   })
   it('refuses an empty batch', () => {
@@ -46,13 +46,6 @@ describe('canApply', () => {
   })
   it('refuses invalid entries', () => {
     expect(canApply({ ...ok, invalid: 1 })).toBe(false)
-  })
-  it('asks prod for the exact profile name', () => {
-    const prod = { ...ok, prod: true, conn: 'prod-rw' }
-    expect(canApply({ ...prod, confirm: '' })).toBe(false)
-    expect(canApply({ ...prod, confirm: 'prod-r' })).toBe(false)
-    expect(canApply({ ...prod, confirm: 'PROD-RW' })).toBe(false)
-    expect(canApply({ ...prod, confirm: 'prod-rw' })).toBe(true)
   })
 })
 

@@ -21,9 +21,8 @@ export function RenameDialog({ dn, close }: { dn: string; close: () => void }) {
   const newParent = sameDN(parent, parentDN(dn)) ? undefined : parent.trim()
   const problem = renameProblem(dn, rdn, parent, ws.schema)
   const m = useMutation({
-    mutationFn: (confirm: string | undefined) =>
+    mutationFn: () =>
       api.renameEntry(ws.conn, {
-        confirm,
         dn,
         newRDN: rdn.trim(),
         newParent,
@@ -52,7 +51,7 @@ export function RenameDialog({ dn, close }: { dn: string; close: () => void }) {
       ready={problem === ''}
       pending={m.isPending}
       error={m.error}
-      onSubmit={(c) => m.mutate(c)}
+      onSubmit={() => m.mutate()}
       close={close}
     >
       <Field label="New RDN">

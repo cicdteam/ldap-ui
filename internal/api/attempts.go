@@ -13,9 +13,10 @@ import (
 	"github.com/go-ldap/ldap/v3"
 )
 
-// attemptLimiter counts failed logins per key, a bind DN, together with the
-// logins in flight, so that a key never has more than max of them in a
-// window that starts at its first failure. It is safe for concurrent use.
+// attemptLimiter counts failed logins per key, such as a bind DN or a client
+// address, together with the logins in flight, so that a key never has more
+// than max of them in a window that starts at its first failure. It is safe
+// for concurrent use.
 type attemptLimiter struct {
 	max      int
 	window   time.Duration

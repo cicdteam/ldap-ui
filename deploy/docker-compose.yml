@@ -1,5 +1,5 @@
-# Demo: ldaplens next to an OpenLDAP and a Samba AD with sample users. Start it
-# with `make demo-start`, then open
+# Demo: ldaplens in local mode next to an OpenLDAP and a Samba AD with sample
+# users. Start it with `make demo-start`, then open
 # http://127.0.0.1:8080/?token=demo-token-not-secret.
 name: ldaplens-demo
 services:
@@ -78,6 +78,8 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         VERSION: ${VERSION:-dev}
+    # Local mode, so the demo shows saving connections and trusting a CA.
+    command: [local]
     depends_on:
       openldap:
         condition: service_healthy
@@ -87,7 +89,7 @@ services:
       - "127.0.0.1:${DEMO_PORT:-8080}:8080"
     environment:
       LDAPLENS_CONFIG: /etc/ldaplens/connections.yaml
-      LDAPLENS_AUTH_TOKEN: demo-token-not-secret # demo only; omit to get a random token in the log
+      LDAPLENS_AUTH_TOKEN: demo-token-not-secret # demo only; omit to use the token kept in the volume, printed in the log
       DEMO_LDAP_PASSWORD: adminpassword
       AD_LDAP_PASSWORD: Adm1nPassw0rd! # demo only
     volumes:

@@ -3,32 +3,36 @@
 
 import type { Op } from './changes'
 
-export type Environment = 'dev' | 'stage' | 'prod'
 export type Scope = 'base' | 'one' | 'sub'
 
-/** A profile as GET /api/profiles returns it. readOnly is computed by the server. */
+/** GET /api/server: server mode serves only the profiles in its config. */
+export interface ServerInfo {
+  mode: 'local' | 'server'
+}
+
+/**
+ * A profile as GET /api/profiles returns it. Server mode sends only name,
+ * color, readOnly, connected, userLogin and needsPassword.
+ */
 export interface Profile {
   name: string
-  url: string
-  startTLS: boolean
+  url?: string
+  startTLS?: boolean
   baseDN?: string
   bindDN?: string
   caPEM?: string
-  insecureSkipVerify: boolean
-  environment: Environment
+  insecureSkipVerify?: boolean
   color?: string
   readOnly: boolean
   /** Saved from the UI (true) or fixed in connections.yaml (false). */
-  editable: boolean
+  editable?: boolean
   /** The server can bind without asking for a password. */
-  hasPassword: boolean
+  hasPassword?: boolean
   connected: boolean
   /** A bindDNTemplate profile: each person signs in with a username. */
   userLogin: boolean
-  /** The username the trusted identity allows, set when usernameLocked. */
-  username?: string
-  /** The username is fixed by the authenticating proxy's identity. */
-  usernameLocked: boolean
+  /** Connect asks for a password (and, for userLogin, a username). */
+  needsPassword: boolean
 }
 
 /** Body of POST /api/profiles; the server rejects unknown fields. */
@@ -40,14 +44,16 @@ export interface ProfileInput {
   bindDN?: string
   caPEM?: string
   insecureSkipVerify: boolean
-  environment: Environment
   color?: string
-  readOnly?: boolean
+  readOnly: boolean
 }
 
-/** A connection's info plus the profile settings its badges show. */
+/** A connection's info plus the profile settings its badges and status bar show. */
 export interface Info {
   baseDN: string
+  /** The profile's URL; server mode shows it only here, after sign-in. */
+  url: string
+  startTLS: boolean
   /** The DN the connection bound as (a UPN on an AD UPN template); absent for anonymous. */
   bindDN?: string
   namingContexts?: string[]
@@ -60,7 +66,6 @@ export interface Info {
   passwordModify: boolean
   /** ldaps:// or StartTLS. */
   encrypted: boolean
-  environment: Environment
   readOnly: boolean
   insecureSkipVerify: boolean
   color?: string
@@ -90,8 +95,8 @@ export interface Entry {
 
 export interface Page {
   entries?: Entry[]
-  /** Empty on the last page. Single use: pass it once to get the next page. */
-  cursor?: string
+  /** The search matches more entries than its sizeLimit; a bigger one returns them. */
+  more?: boolean
   truncated?: boolean
   referrals?: string[]
 }
@@ -101,8 +106,7 @@ export interface SearchRequest {
   scope: Scope
   filter: string
   attributes?: string[]
-  pageSize?: number
-  cursor?: string
+  /** Entries wanted: 0 means 500, at most 5000. */
   sizeLimit?: number
 }
 
@@ -175,9 +179,8 @@ export interface ApiErrorBody {
   attribute?: string
 }
 
-/** Body of POST /api/c/{conn}/changes/apply; confirm is the profile name on prod. */
+/** Body of POST /api/c/{conn}/changes/apply. */
 export interface ApplyRequest {
-  confirm?: string
   entries: { dn: string; changes: Op[] }[]
 }
 
@@ -194,22 +197,19 @@ export interface TextAttribute {
   base64?: boolean
 }
 
-/** Body of POST /api/c/{conn}/entries/add; confirm is the profile name on prod. */
+/** Body of POST /api/c/{conn}/entries/add. */
 export interface AddRequest {
-  confirm?: string
   dn: string
   attributes: TextAttribute[]
 }
 
 /** Body of POST /api/c/{conn}/entries/delete. */
 export interface DeleteRequest {
-  confirm?: string
   dn: string
 }
 
 /** Body of POST /api/c/{conn}/entries/rename; newParent only for a move. */
 export interface RenameRequest {
-  confirm?: string
   dn: string
   newRDN: string
   newParent?: string
@@ -226,7 +226,6 @@ export type PasswordMethod = 'server' | 'ssha'
 
 /** Body of POST /api/c/{conn}/entries/password; Active Directory ignores method. */
 export interface PasswordRequest {
-  confirm?: string
   dn: string
   password: string
   method?: PasswordMethod

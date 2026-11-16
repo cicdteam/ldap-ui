@@ -96,7 +96,7 @@ export function Header({ extra }: { extra?: ReactNode }) {
         <ColorDot color={ws.info.color} />
         {ws.conn}
       </Link>
-      <span className="flex shrink-0 gap-1">
+      <span className="flex shrink-0 gap-1 empty:hidden">
         <ProfileBadges profile={ws.info} />
       </span>
       <span aria-hidden className="h-5 w-px shrink-0 bg-border" />

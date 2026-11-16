@@ -1,7 +1,7 @@
 import { normDN, rdnType, rdnValue, splitDN } from './dn'
 import type { Page } from './types'
 
-/** Children per tree page; bigger containers get a "more" row that opens a paged list. */
+/** Children per tree page; bigger containers get a "more" row that opens them as a search. */
 export const TREE_PAGE = 200
 
 export type EntryKind = 'user' | 'group' | 'ou' | 'domain' | 'other'
@@ -53,7 +53,7 @@ export function childrenFromPage(page: Page): Children {
       sensitivity: 'base',
     }),
   )
-  return { items, more: !!page.cursor || !!page.truncated }
+  return { items, more: !!page.more || !!page.truncated }
 }
 
 export type ChildState =

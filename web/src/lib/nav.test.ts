@@ -27,11 +27,12 @@ describe('safeNext', () => {
 describe('columns', () => {
   const info = (ad: boolean): Info => ({
     baseDN: 'dc=x',
+    url: 'ldap://x',
+    startTLS: false,
     activeDirectory: ad,
     paging: true,
     passwordModify: false,
     encrypted: false,
-    environment: 'dev',
     readOnly: false,
     insecureSkipVerify: false,
   })

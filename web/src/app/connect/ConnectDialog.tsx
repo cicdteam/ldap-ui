@@ -25,10 +25,8 @@ export function ConnectDialog({
 }) {
   const qc = useQueryClient()
   const [password, setPassword] = useState('')
-  const [typed, setTyped] = useState('')
-  const username = profile?.usernameLocked ? (profile.username ?? '') : typed
-  const needsPassword =
-    !!profile && (profile.userLogin || (!profile.hasPassword && !!profile.bindDN))
+  const [username, setUsername] = useState('')
+  const needsPassword = !!profile?.needsPassword
   // Kept across retries: a pending connect clears the error, not the field.
   // The first one wins: it comes from the stored password, later ones from typed ones.
   const [hint, setHint] = useState<string>()
@@ -86,22 +84,22 @@ export function ConnectDialog({
               <label className="block space-y-1">
                 <span className="text-xs text-muted">Username</span>
                 <Input
-                  autoFocus={!profile.usernameLocked}
+                  autoFocus
                   autoComplete="username"
                   required
-                  readOnly={profile.usernameLocked}
                   value={username}
-                  onChange={(e) => setTyped(e.target.value)}
+                  onChange={(e) => setUsername(e.target.value)}
                   className="w-full"
                 />
               </label>
             ) : (
               /* Password managers key saved passwords by this username, so
-                 each bind DN gets its own instead of one for every profile. */
+                 each bind DN, or each profile where the bind DN is not shown
+                 (server mode), gets its own instead of one for every profile. */
               <input
                 type="text"
                 autoComplete="username"
-                value={profile.bindDN ?? ''}
+                value={profile.bindDN || profile.name}
                 readOnly
                 tabIndex={-1}
                 aria-hidden
@@ -115,18 +113,18 @@ export function ConnectDialog({
             )}
             <label className="block space-y-1">
               <span className="text-xs text-muted">
-                {profile.userLogin ? (
-                  'Password'
-                ) : (
+                {profile.bindDN ? (
                   <>
                     Password for <span className="font-mono">{profile.bindDN}</span>
                   </>
+                ) : (
+                  'Password'
                 )}
               </span>
               {/* autoFocus also focuses the field when an error makes it appear. */}
               <Input
                 type="password"
-                autoFocus={!profile.userLogin || profile.usernameLocked}
+                autoFocus={!profile.userLogin}
                 autoComplete="current-password"
                 required={profile.userLogin}
                 aria-describedby={needsPassword ? undefined : hintId}

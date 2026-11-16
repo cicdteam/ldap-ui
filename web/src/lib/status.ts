@@ -1,10 +1,10 @@
-import type { Info, Profile } from './types'
+import type { Info } from './types'
 
 export type StatusTone = 'ok' | 'warn' | 'danger'
 
 /** The status bar's text: never color alone, every tone has its words. */
 export interface ConnectionStatus {
-  address?: string
+  address: string
   transport: { text: string; tone: StatusTone }
   server: string
   changes: string
@@ -20,20 +20,22 @@ export function changeCount(n: number): string {
   return n === 0 ? 'no staged changes' : plural(n, 'change', 'changes')
 }
 
-/** changes: the staged count the Review badge shows. profile: undefined until the list loads. */
+/** changes: the staged count the Review badge shows. */
 export function connectionStatus(
-  info: Pick<Info, 'encrypted' | 'insecureSkipVerify' | 'activeDirectory' | 'vendor'>,
-  profile: Pick<Profile, 'url' | 'startTLS'> | undefined,
+  info: Pick<
+    Info,
+    'url' | 'startTLS' | 'encrypted' | 'insecureSkipVerify' | 'activeDirectory' | 'vendor'
+  >,
   changes: number,
 ): ConnectionStatus {
-  const tls = profile?.startTLS ? 'StartTLS' : 'TLS'
+  const tls = info.startTLS ? 'StartTLS' : 'TLS'
   const transport: ConnectionStatus['transport'] = !info.encrypted
     ? { text: 'not encrypted', tone: 'warn' }
     : info.insecureSkipVerify
       ? { text: `${tls}, certificate not verified`, tone: 'danger' }
       : { text: tls, tone: 'ok' }
   return {
-    address: profile?.url,
+    address: info.url,
     transport,
     server: info.activeDirectory ? 'Active Directory' : info.vendor?.trim() || 'LDAP',
     changes: changeCount(changes),

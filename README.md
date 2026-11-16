@@ -4,35 +4,122 @@ A web UI to view, search and manage LDAP data: an LDAP browser and editor for
 OpenLDAP and Active Directory. One binary or one container, nothing to install
 next to it.
 
+## Two modes
+
+ldaplens runs in one of two modes, picked by its first argument:
+
+- **`ldaplens`**, or **`ldaplens local`**, is for one person: on a laptop, a
+  jump host or in a quick Docker try. It keeps the connections you save in
+  the UI and a login token in a data dir: `--data-dir`, or else `ldaplens` in
+  the user config dir, created with mode 0700:
+  - Linux: `$XDG_CONFIG_HOME/ldaplens`, or `~/.config/ldaplens`;
+  - macOS: `~/Library/Application Support/ldaplens`;
+  - Windows: `%AppData%\ldaplens`;
+  - the image: `/data/ldaplens`.
+- **`ldaplens server`** is for a team, for example in Kubernetes. It serves
+  only the profiles in `--config` and keeps nothing on disk.
+
+Any other first argument that does not start with `-` fails with `unknown
+command "x": want local or server`, and a mode after the flags fails too.
+`--version` and `-h` work in both modes.
+
+**Local mode always needs a token.** Unless `--auth-token` or
+`--auth-token-file` sets one, the first start makes one and keeps it in
+`token` in the data dir (mode 0600), and every start logs a login link with
+it:
+
+```text
+level=INFO msg="open the UI with this login link (adjust the host and port to how you reach it)" url="http://localhost:8080/?token=..."
+```
+
+Open the link once: it sets a cookie that lasts 30 days, and the token stays
+the same across restarts, so a bookmark of the UI keeps working. To change
+the token, and log out every browser, delete the file and restart. Without a
+user config dir (no `$HOME`, for example), there is no data dir: ldaplens
+logs `saving profiles disabled (no data dir)` and makes a new token at every
+start.
+
+**Server mode needs `--config`**; without it, startup fails with `server mode
+needs --config`. It refuses `--data-dir` and `LDAPLENS_DATA_DIR` with `server
+mode keeps no data; --data-dir is for local mode`, and never makes a token.
+Without `--auth-token` or `--auth-token-file`, every profile must ask each
+person for a password: a `bindDNTemplate` profile, or a `bindDN` without
+`passwordEnv` or `passwordFile`. A profile that binds with a configured
+password or anonymously would serve anyone who reaches ldaplens, so it fails
+startup with `profile <name> binds with a configured password or
+anonymously; server mode needs --auth-token or --auth-token-file`.
+
+**What the token is for.** The token guards ldaplens itself, before any
+LDAP bind. A profile that asks each person for a password needs no guard:
+the directory checks that password. A profile that binds with a configured
+password or anonymously binds as the server, so without the token anyone
+who reaches the URL would work as that account. The token is one secret for
+the whole instance, not a per-person login: who you are, in the logs and in
+the directory, comes from the bind.
+
+**Server mode shows only what it takes to connect.** The UI learns the mode
+from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`). In server
+mode:
+
+- the profile list (`GET /api/profiles`) gives each profile's `name`,
+  `color`, `readOnly`, `connected`, `userLogin` and `needsPassword` only,
+  nothing about where or how it binds: no URL, base DN, bind DN, CA or TLS
+  settings. The server address and StartTLS show in the status bar once a
+  connect has succeeded;
+- the UI has no "New connection", no profile editing and no "Trust this CA
+  and connect"; a save answers 403 `saving_disabled` with `this server keeps
+  no saved connections`;
+- the connect dialog of a profile with a bind DN and no configured password
+  asks for a "Password", without naming the DN;
+- a failed connect tells nothing about the directory. Every LDAP result,
+  not only 49 (invalid credentials) but also, for example, 389-DS's 19 and
+  53 for a locked or inactivated account, answers 401 `invalid_credentials`
+  with `invalid username or password`, and no `diagnostic`, `reason`,
+  `matchedDN` or `ldapResultCode`: the directory's message, and the reason
+  decoded from it, such as Active Directory's `account locked out`, would
+  tell anyone who tries a name that the account exists. A server that
+  cannot be reached answers 502 `network` with `cannot reach the directory
+  server`, and an untrusted certificate 502 `tls_untrusted` with `the
+  directory server's certificate is not trusted`, without host names, the
+  error text or the certificate chain. The server log keeps the full error
+  in `connect failed`.
+
+Local mode shows all of it.
+
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
 `ghcr.io/cicdteam/ldaplens:<version>` (for example `1.0.0`) and `:latest`.
+The image listens on `0.0.0.0:8080` and runs `server` when given no arguments.
 
-The quickest start:
+The quickest start runs local mode with its data in a volume:
 
 ```sh
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cicdteam/ldaplens:latest
+docker run --rm -p 127.0.0.1:8080:8080 -v ldaplens:/data ghcr.io/cicdteam/ldaplens local
 ```
 
-The container listens beyond loopback, so ldaplens prints a login link with a
-random token at startup; open it, then add your directories with
-**New connection**. Set `LDAPLENS_AUTH_TOKEN` to choose the token (at least 16
-characters from `A-Z a-z 0-9 . _ ~ -`). Without a volume, the connections you
-add are lost when the container is removed.
+Open the login link from the log, then add your directories with **New
+connection**. The volume keeps them and the token; without it, both are lost
+when the container is removed. Set `LDAPLENS_AUTH_TOKEN` to choose the token
+(at least 16 characters from `A-Z a-z 0-9 . _ ~ -`).
 
 Connections come from two places, and you can use either or both: the ones
-you create in the UI (kept in `/data`, passwords never stored) and the fixed
-ones in a [`connections.yaml`](#connectionsyaml) you mount. A fuller run that
-keeps UI connections across restarts and loads a `connections.yaml`:
+you create in the UI (kept in the data dir, passwords never stored) and the
+fixed ones in a [`connections.yaml`](#connectionsyaml) you mount. A local run
+that also loads a `connections.yaml`:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -v ldaplens-data:/data \
+  -v ldaplens:/data \
   -v "$PWD/connections.yaml:/etc/ldaplens/connections.yaml:ro" \
   -e LDAPLENS_CONFIG=/etc/ldaplens/connections.yaml \
-  ghcr.io/cicdteam/ldaplens:latest
+  ghcr.io/cicdteam/ldaplens local
 ```
+
+With no arguments, the image runs `server`, which needs `LDAPLENS_CONFIG`
+(or `--config`) and writes nothing, so it runs with a read-only root
+filesystem and no volume. Arguments replace that default, so start them with
+`server` or `local`: `--config=...` alone runs local mode.
 
 To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
@@ -41,14 +128,15 @@ The UI's hashed assets are served gzipped and cached for a year, so no ingress c
 `/api` responses are never cached (`Cache-Control: no-store`), and the UI refuses to be framed by other pages.
 
 `make image-multiarch` builds `ldaplens:dev-amd64` and `ldaplens:dev-arm64` with
-buildx and checks each (architecture, `--version`, `/healthz`, unpacked size
-under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
+buildx and checks each (architecture, `--version`, `/healthz` of server mode
+on a read-only root filesystem, the login link of local mode with a volume,
+unpacked size under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
 (or arm64) emulation, pass `PLATFORMS=linux/arm64` (or `linux/amd64`) to check
 one platform.
 
-Demo with a sample OpenLDAP and Samba AD: `make demo-start`, then open
+Demo with a sample OpenLDAP and Samba AD, in local mode: `make demo-start`, then open
 <http://127.0.0.1:8080/?token=demo-token-not-secret>. It has two profiles on the
-OpenLDAP directory, `demo` (dev, editable) and `demo-prod` (prod, read-only),
+OpenLDAP directory, `demo` (editable) and `demo-readonly` (read-only),
 and `demo-ad` (Samba AD over LDAPS, editable, bound as Administrator; demo
 people 001-040 bind with `Demo-Passw0rd!`, 041-045 are disabled). The
 directories reset on every start. `make demo-stop` stops it; `make demo-start DEMO_PORT=8090` picks another port.
@@ -57,26 +145,35 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 ## Using the UI
 
 - **Connections** (`/`): profiles from `connections.yaml` (marked `yaml`) and
-  ones saved in the UI. Passwords are never stored: a profile with a bind DN
+  ones saved in the UI (local mode; server mode shows less, see [Two
+  modes](#two-modes)). Passwords are never stored: a profile with a bind DN
   but no `passwordEnv`/`passwordFile` asks for one at connect time, and so
   does one whose configured password the server rejects or cannot read. A
   `bindDNTemplate` profile asks for a username and a password (see [Per-user
   login](#per-user-login)). An
-  untrusted TLS certificate shows its chain and fingerprints; "Trust this CA"
-  stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
+  untrusted TLS certificate shows its chain and fingerprints; "Trust this CA
+  and connect" stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
   point `caFile` at it).
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
   A container shows its first 200 children; a bigger one ends with
-  "More entries…", which lists all of them as a one-level search.
+  "More entries…", which opens its children as a one-level search.
 - **Search** (center): RFC 4515 filter editor with highlighting, completion
   from the schema and inline errors, or a visual builder; base DN, scope and
-  columns sit next to it. Results load 500 at a time; sorting by column and
-  export to CSV or LDIF act on the rows loaded so far. A page the server cut
-  with a size or time limit, or one past ldaplens's caps on a single response
-  (5000 entries, 64 MiB of attribute values), shows what arrived and is
-  marked truncated ("The search stopped early"); a listing cut by a cap has
-  no further pages. One server message (an entry) over 64 MiB fails the
-  request instead. Recent and saved
+  columns sit next to it. A search returns at most a limit of entries in
+  one request: 500, or the search API's `sizeLimit`, up to 5000. The
+  response says `more` when the search matches more. Nothing is kept on the
+  server between requests, so "Load more" runs the search again with the
+  next limit: 1000, then 2000, then 5000; the rows shown stay until the
+  bigger answer arrives. If it fails, the error offers Retry and "Show the
+  first N", which goes back to the rows shown before. Running a search
+  again starts over at 500. A search that matches more than 5000 entries shows
+  the first 5000 with the note "Showing the first 5,000 entries; refine the
+  search to see the rest": narrow the filter or the base DN. Sorting by
+  column and export to CSV or LDIF act on the rows loaded. A search the
+  server cut with its own size or time
+  limit, or one past ldaplens's cap of 64 MiB of attribute values, shows
+  what arrived and is marked truncated ("The search stopped early"). One
+  server message (an entry) over 64 MiB fails the request instead. Recent and saved
   searches are kept per connection in the browser. A filter can test a
   password or secret attribute for presence (`(userPassword=*)`) but not
   match on its values: equality, substring, ordering, approximate and
@@ -133,9 +230,8 @@ on non-Latin keyboard layouts.
   "N changes", and staged entries get a dot in the tree and in the results.
   The batch is kept per connection for the browser tab and survives a reload.
 - **Review** (⌘S / Ctrl+S, or the header badge) shows the batch as LDIF to
-  read or copy; **Apply** writes it. A prod profile asks you to type its name
-  first. A read-only profile (prod by default, or `readOnly: true`) has no
-  Edit, and the server refuses its writes.
+  read or copy; **Apply** writes it. A read-only profile (`readOnly: true`)
+  has no Edit, and the server refuses its writes.
 - If an entry changed since you read it, the apply stops at that entry:
   "Reload entry" marks the staged changes that no longer fit as stale,
   "Drop stale changes" removes them. A value the server rejects shows its
@@ -146,9 +242,8 @@ on non-Latin keyboard layouts.
 - **Actions** (in the inspector, or the command palette): **New child** (`N`),
   **Clone** (`C`), **Rename/Move** (`R` or F2) and **Delete** (`Delete` or
   ⌘⌫ / Ctrl+Backspace). Each opens a dialog with the DN and the LDIF it
-  writes, and writes at once; it is not staged. A prod profile asks for its
-  name first; a read-only profile has no Actions, and the server refuses these
-  writes too.
+  writes, and writes at once; it is not staged. A read-only profile has no
+  Actions, and the server refuses these writes too.
 - **New child** picks a structural class (common ones first), auxiliary
   classes, the RDN attribute and value, and asks for the MUST attributes.
   **Clone** starts from the entry, staged changes included, binary values
@@ -168,8 +263,7 @@ on non-Latin keyboard layouts.
   entries whose classes allow `userPassword`, which needs the schema (on
   Active Directory, for `user` entries only). It asks for the new password
   twice and sets it at once: it is never staged, kept in the browser or
-  logged, and the dialog shows no LDIF. A prod profile asks for its name
-  first. On OpenLDAP the server hashes it by its own policy through the
+  logged, and the dialog shows no LDIF. On OpenLDAP the server hashes it by its own policy through the
   Password Modify operation (the default, when the server offers it), or
   ldaplens stores it as SSHA. Active Directory takes it as `unicodePwd`, only
   over ldaps:// or StartTLS.
@@ -224,17 +318,23 @@ connections:
     bindDN: cn=reader,ou=svc,dc=corp,dc=example
     passwordEnv: CORP_AD_PASSWORD # or passwordFile, or type it in the UI
     caFile: /etc/ldaplens/corp-ca.pem
-    environment: prod # prod profiles are read-only by default
+    readOnly: true
+    color: "#d33"
 ```
+
+`readOnly` and `color` are the only safety and marking options. A profile is
+writable unless it sets `readOnly: true`: then the UI offers no Edit or
+Actions and the server refuses its writes with 403 `read_only`. `color` (a
+hex color such as `#d33`, or a CSS color name) puts a colored dot next to the
+profile in the connection list and in the workspace header.
 
 ### Signing in with your own username
 
 A profile with `bindDNTemplate` instead of `bindDN` asks each person for a
 username and password at connect, and binds as the template with `{user}`
 replaced by the username. The template contains `{user}` exactly once and
-cannot be combined with `bindDN`, `passwordEnv` or `passwordFile`. Both keys
-below are read from `connections.yaml` only; profiles saved in the UI cannot
-have them.
+cannot be combined with `bindDN`, `passwordEnv` or `passwordFile`. It is
+read from `connections.yaml` only; profiles saved in the UI cannot have it.
 
 ```yaml
 connections:
@@ -247,31 +347,20 @@ connections:
     url: ldaps://dc1.corp.example:636
     baseDN: dc=corp,dc=example
     bindDNTemplate: "{user}@corp.example"
-    identityUser: localpart
 ```
 
 The username must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (ASCII letters,
 digits, `.`, `_` and `-`, starting with a letter or digit, at most 64
 characters), so it cannot change the structure of the DN; in a template that
-contains `=` it is also escaped as a DN value.
-
-`identityUser` (`exact` or `localpart`, needs `bindDNTemplate`) ties the
-username to the user an authenticating proxy verified (see
-`--identity-header` under [Logs and accountability](#logs-and-accountability)):
-a connect needs that identity, and the username must equal it, compared
-case-insensitively. `exact` takes the identity as is; `localpart` takes the
-part before the last `@` (`alice@corp.example` gives `alice`). `localpart`
-ignores the domain, so `alice@other.example` gives `alice` too: the proxy
-must admit only the directory's domain (oauth2-proxy `--email-domain
-corp.example`). `exact` needs a header that carries a bare username: an
-email address never matches the username pattern above. The connect dialog
-fills in the username and does not let it be changed. [Per-user
+contains `=` it is also escaped as a DN value. [Per-user
 login](#per-user-login) has the whole flow and its errors.
 
 ## Saved connections
 
 Profiles created in the UI are kept, without passwords, in `profiles.json`
-in `--data-dir`; without a data dir the UI cannot save profiles. At most 200
+in the data dir of local mode (see [Two modes](#two-modes)); without a data
+dir, as in server mode, the UI cannot save profiles, and a save fails with
+403 `saving_disabled`. At most 200
 profiles can be saved, each at most 4 KiB as JSON not counting `caPEM`, which
 has its own limit of 16 KiB; saving one more profile, or a bigger one, fails
 with 409 `profile_limit`. Saves are written to a temporary file, synced and
@@ -287,34 +376,39 @@ moved, so it is a startup error, and so is a file the server cannot read
 
 Run one ldaplens process per data dir. The server locks `.lock` in it (Linux,
 macOS and the BSDs), and a second process on the same directory exits with
-`data dir ... is in use by another ldaplens process`. A data dir that does not
-exist is a startup error. One that is read-only or not writable for the
-server's user still starts: the saved profiles are listed, saving fails, and
-the server runs without the lock and logs the warning `data dir is not
-writable; saving profiles will fail` with its `dir`.
+`data dir ... is in use by another ldaplens process`. A `--data-dir` that does
+not exist is a startup error; the default one is created. One that is
+read-only or not writable for the server's user still starts if it holds the
+token file or a token is set: the saved profiles are listed, saving fails,
+and the server runs without the lock and logs the warning `data dir is not
+writable; saving profiles will fail` with its `dir`. Without either, keeping
+a new token there fails startup.
+
+Back up `profiles.json` (it holds no passwords), and always before an
+upgrade: after a rollback, the older version drops the settings it does not
+know at its next save.
 
 ## Flags
 
-| Flag | Env | Default |
-|---|---|---|
-| `--listen` | `LDAPLENS_LISTEN` | `127.0.0.1:8080` |
-| `--base-path` | `LDAPLENS_BASE_PATH` | none |
-| `--config` | `LDAPLENS_CONFIG` | none |
-| `--data-dir` | `LDAPLENS_DATA_DIR` | none (`/data` in the image) |
-| `--auth-token` | `LDAPLENS_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
-| `--auth-token-file` | `LDAPLENS_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
-| `--allowed-hosts` | `LDAPLENS_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
-| `--session-idle` | `LDAPLENS_SESSION_IDLE` | `30m` |
-| `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | `8h` |
-| `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
-| `--identity-header` | `LDAPLENS_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)); for `identityUser` profiles it decides which username a person may sign in as (see [Per-user login](#per-user-login)) |
-| `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
-| `--version` | | prints `ldaplens <version>` and exits |
+| Flag | Env | Mode | Default |
+|---|---|---|---|
+| `--listen` | `LDAPLENS_LISTEN` | both | `127.0.0.1:8080` (`0.0.0.0:8080` in the image) |
+| `--base-path` | `LDAPLENS_BASE_PATH` | both | none |
+| `--config` | `LDAPLENS_CONFIG` | both, required in server | none |
+| `--data-dir` | `LDAPLENS_DATA_DIR` | local | `ldaplens` in the user config dir (see [Two modes](#two-modes)) |
+| `--auth-token` | `LDAPLENS_AUTH_TOKEN` | both | local: kept in `token` in the data dir; server: none, which allows only profiles that ask for a password |
+| `--auth-token-file` | `LDAPLENS_AUTH_TOKEN_FILE` | both | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
+| `--allowed-hosts` | `LDAPLENS_ALLOWED_HOSTS` | both | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
+| `--session-idle` | `LDAPLENS_SESSION_IDLE` | both | `30m` |
+| `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | both | `8h` |
+| `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | both | `false`; TLS and `X-Forwarded-Proto: https` make cookies Secure without it (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
+| `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | both | none; comma-separated CIDRs or IPs of reverse proxies whose `X-Forwarded-For` is trusted for the client address (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
+| `--version` | | both | prints `ldaplens <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
-(`LDAPLENS_DATA_DIR=""` disables saving). A variable that does not parse
-(`LDAPLENS_SECURE_COOKIES=yes`, `LDAPLENS_SESSION_IDLE=30`) is a startup error
-even when its flag is set. `--auth-token` or `--auth-token-file`
+(`LDAPLENS_DATA_DIR=""` means the default data dir). A variable that does not
+parse (`LDAPLENS_SECURE_COOKIES=yes`, `LDAPLENS_SESSION_IDLE=30`) is a startup
+error even when its flag is set. `--auth-token` or `--auth-token-file`
 on the command line overrides both token variables. Both flags at once, or
 both variables at once, are a startup error, and so is a token file that is
 missing or holds an invalid token (at least 16 characters from
@@ -332,24 +426,50 @@ session holds at most 8 connections: one more connect fails with 409
 `too_many_connections` until one is disconnected. The server holds at most
 1000 sessions; one more closes the connections of the least recently used.
 
+A profile that binds with its configured password (`passwordEnv` or
+`passwordFile`) or anonymously is shared: one connection in each ldaplens
+process serves every browser, outside any session. Connecting to it sets no
+session cookie, and every browser with the token can use it without
+connecting, so the Connections page marks it connected while the process
+holds it. Each process dials its own at the first request that needs it,
+one dial at a time, so any replica behind a load balancer serves any
+request. The connection is closed after `--session-idle` without use by
+anyone, and `--session-max-age` after it was dialed; the next request dials
+again. A disconnect leaves it open for the others; saving the profile in the
+UI closes it, so the next request uses the new settings. A typed password,
+whether the profile has none configured or the configured one failed, and a
+`bindDNTemplate` profile give the browser a connection of its own in its
+session, which only the process holding that session knows: those need one
+replica or sticky sessions (see [Running for a team](#running-for-a-team)).
+
 Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
 within 60 seconds refuse further connects as that DN with 429
 `too_many_attempts` and a `Retry-After` header in seconds, until 60 seconds
-after the first of them. Connects as that DN still waiting for the server
-count too, so a burst of them at once gets no more than five tries: a connect
-refused before five have failed gets `Retry-After: 1`. A successful connect
-clears the count; other failures, such as a server that cannot be reached, do
-not count. The limit is per account on each server: it is keyed by the
-server and the bind DN (see below), not by client address, since behind a
-proxy every client has the same address. A successful connect as the same DN
-to another server does not clear the count. It applies to every connect with a typed password, on a `bindDN`
+after the first of them. Twenty wrong passwords from one client address
+within 60 seconds, whatever the profiles and DNs, refuse further connects
+from that address the same way, so that trying a few passwords on many
+accounts is caught too. A connect must pass both limits, and a wrong
+password counts against both; a connect refused for its DN does not count
+against its address. Connects still waiting for the server count too, so a
+burst of them at once gets no more tries than the limit: a connect refused
+while those in flight fill it gets `Retry-After: 1`. A successful connect
+clears the count of its DN but not that of its address, so that one valid
+account cannot reset the count between guesses at others; other failures,
+such as a server that cannot be reached, do not count. The DN limit is per account on
+each server: it is keyed by the server and the bind DN (see below), and a
+successful connect as the same DN to another server does not clear it. The
+address limit is keyed by the client address the logs carry as `remote`:
+behind a reverse proxy, set `--trusted-proxies` (see [Behind a reverse
+proxy](#behind-a-reverse-proxy)), or every client has the proxy's address
+and shares one count. Both apply to every connect with a typed password, on a `bindDN`
 profile as on a `bindDNTemplate` one. A connect with the configured password
 (`passwordEnv` or `passwordFile`) and an anonymous one are never refused, so a
 wrong service password cannot lock its DN for everyone. In return, anyone who
 can reach ldaplens can keep one account from connecting through ldaplens, a
 minute at a time; the directory's own lockout policy is separate and
 unaffected. The counts are kept in memory, per process, like sessions, for at
-most 10,000 bind DNs; past that the oldest are dropped.
+most 10,000 bind DNs and 10,000 client addresses; past that the oldest are
+dropped.
 
 The count is per account as the bind DN names it, after normalizing spacing,
 case and escapes: `uid=alice,ou=people,dc=example,dc=org`,
@@ -362,12 +482,14 @@ OIDs (`0.9.2342.19200300.100.1.1=alice` for `uid=alice`), Active Directory's
 other names for one account (its UPN, `DOMAIN\user` and its DN) and other
 names for one server (its IP address) still count separately, and a saved
 connection can name an account or a server any of those ways. So
-where guessing passwords through ldaplens matters, run with fixed profiles
-only: `LDAPLENS_DATA_DIR=""` disables saved connections, and the profiles in
-`connections.yaml` each name one form.
+where guessing passwords through ldaplens matters, run `ldaplens server`,
+which has no saved connections, with profiles in `connections.yaml` that each
+name one form.
 
 The server runs at most 64 API requests at once, and at most 4 of one
-session; the others wait their turn. A request that waits more than 10
+session; the others wait their turn. A request without a session cookie,
+such as one on a shared profile from a browser that has typed no password,
+counts only toward the 64. A request that waits more than 10
 seconds gets 503 `busy` with `Retry-After: 1`; the UI retries a read that
 gets it up to 3 times, a second apart, and never retries a write. Once
 running, an API request has 2 minutes before it ends with 504 `timeout`. An
@@ -390,7 +512,10 @@ the 30 second default grace period of a Kubernetes pod.
 `connections.yaml`, the `passwordEnv` variables, the token (also from
 `--auth-token-file`) and every other flag and variable are read at startup:
 restart after changing them. `passwordFile` and `caFile` are read at every
-connect, so a rotated Secret is used at the next connect. Mount ConfigMaps
+dial, so a rotated Secret is used at the next dial: at a connect, or for a
+shared profile at the first request after its connection closed (idle, past
+`--session-max-age`, or because the server refused the old password at a
+reconnect). Mount ConfigMaps
 and Secrets as directories, not with `subPath`, which never sees an update.
 
 ## Logs and accountability
@@ -401,21 +526,25 @@ except `auth failed`, end with who made them:
 - `session`: the first 8 hex characters of the SHA-256 of the browser's
   session cookie, empty without one. A connect gives the browser a new
   session ID: its `connected` line carries the new one, and the one the
-  request came with in `previous`. It ties one browser's lines together
-  across connects; the session ID itself is never logged.
-- `remote`: the client address and port. Behind a proxy this is the proxy:
-  match it with the proxy's access log.
-- `user`: the `--identity-header` value, see below.
+  request came with in `previous`. A connect that used the shared
+  connection keeps the session as it is and has no `previous`; a password
+  typed for a shared profile opens the browser's own connection, so it gets
+  a new session ID. It ties one browser's lines together across connects;
+  the session ID itself is never logged.
+- `remote`: the client address, without the port. From a proxy in
+  `--trusted-proxies` it is taken from `X-Forwarded-For` (see [Behind a
+  reverse proxy](#behind-a-reverse-proxy)); behind any other proxy it is the
+  proxy's: match it with the proxy's access log.
+- `proxy`: the address and port of the trusted proxy the request came
+  through, only when that is not `remote`.
 
 The lines:
 
 | Message | Fields |
 |---|---|
-| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one), `connect failed` adds `error` |
-| `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts` |
-| `connect refused` | `profile`, `code`, `bindDN` (empty): a connect refused with 403 `identity_required` or `identity_mismatch` (see [Per-user login](#per-user-login)) |
+| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one) unless it used the shared connection, `connect failed` adds `error` |
+| `connect throttled` | `profile`, `limit` (`account` for its DN, `client` for its client address), `bindDN`: a connect refused with 429 `too_many_attempts` |
 | `disconnected` | `profile`, `bindDN` |
-| `identity changed` | `profile`, `bindDN`: a request on an `identityUser` connection with another trusted identity or none; the connection is closed (see [Per-user login](#per-user-login)) |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
 | `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
 | `renamed` | `profile`, `dn`, `newDN`, `bindDN` |
@@ -423,7 +552,7 @@ The lines:
 | `deleted` | `profile`, `dn`, `bindDN` |
 | `modify rejected`, `add rejected`, `rename rejected`, `password rejected`, `delete rejected` | the fields of the write, `code`, `ldapResultCode`, `bindDN`; an unexpected error also logs `<op> failed` with `error` |
 | `profile saved` | `name`, `oldURL` (empty for a new profile), `url`, `readOnly`, `insecureSkipVerify` |
-| `auth failed` | `remote` only: a request refused with 401 for a missing or wrong token |
+| `auth failed` | `remote` only, and `proxy` when it differs from `remote`: a request refused with 401 for a missing or wrong token |
 
 `bindDN` is the DN the connection bound as: the profile's `bindDN`, or for a
 `bindDNTemplate` profile the template with the username filled in; empty for
@@ -431,14 +560,13 @@ an anonymous bind. Attribute values, passwords, tokens and
 session IDs are never logged, and a DN that does not parse or has a secret
 attribute in an RDN is logged as `<redacted>`.
 
-At startup the server logs `listening` with `version`, `addr`, `basePath`,
-`profiles` (how many from `connections.yaml`), `saved` (how many saved
-connections it loaded) and `dataDir` (empty when saving is disabled). A
-generated token adds the login link, and inside Kubernetes
-(`KUBERNETES_SERVICE_HOST` is set) a warning: a generated token changes on
-every restart and differs per replica, so set `LDAPLENS_AUTH_TOKEN` or
-`LDAPLENS_AUTH_TOKEN_FILE` from a Secret. A shutdown that runs out of time
-logs the warning `shutdown drain timed out` with `after`.
+At startup the server logs `listening` with `version`, `mode` (`local` or
+`server`), `addr`, `basePath`, `profiles` (how many from `connections.yaml`),
+`saved` (how many saved connections it loaded) and `dataDir` (empty when
+saving is disabled). In local mode, a token that no flag or variable set adds
+the login link, and no data dir adds the warning `saving profiles disabled
+(no data dir)` (see [Two modes](#two-modes)). A shutdown that runs out of
+time logs the warning `shutdown drain timed out` with `after`.
 
 The directory's own audit log sees only the bind DN. A profile bound as a
 shared service account (`passwordEnv` or `passwordFile`) makes every write
@@ -447,73 +575,63 @@ people apart. For per-person accountability, use [per-user
 login](#per-user-login): everyone binds as themselves with their own
 password, and both the directory and ldaplens log their DN.
 
-Behind an authenticating proxy, ldaplens can also log the user the proxy
-verified. For example, ingress-nginx asks oauth2-proxy (run with
-`--set-xauthrequest`) about every request through
-`nginx.ingress.kubernetes.io/auth-url` and passes the user on with
-`nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Email`:
-
-```sh
-ldaplens --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
-```
-
-`10.244.0.0/16` stands for the cluster's pod network, which differs between
-Kubernetes clusters: use yours. This trusts every pod in it, so it assumes a
-NetworkPolicy that lets only the ingress controller reach ldaplens, like the one
-under [Kubernetes](#kubernetes).
-
-The value is logged as `user`, cut to 256 bytes, on the lines that carry
-`session`, and only for requests whose client address is in
-`--trusted-proxies`. On its own it grants nothing, and the token still
-applies; on a profile with `identityUser` it decides which username a person
-may sign in as (see [Per-user login](#per-user-login)). Any client can send
-any header, so the value means something only when the proxy replaces it on
-every request (ingress-nginx and nginx's
-`proxy_set_header` do) and nothing else can reach ldaplens from a trusted
-address: list only the proxy's addresses, and keep other clients off the
-ldaplens port (a NetworkPolicy, or a loopback listener next to the proxy).
-`--identity-header` without `--trusted-proxies` is a startup error, and so
-is `Authorization`, `Proxy-Authorization` or `Cookie` as the header: they
-carry credentials. A profile in `connections.yaml` with `identityUser` is a
-startup error without `--identity-header`, since nobody could connect to it.
-
 ## Running for a team
 
-ldaplens keeps sessions in memory and saved connections in one file with one
-writer, so a shared instance is one process. In Kubernetes, run one replica
-with `strategy: Recreate`: a second replica does not know the first one's
-sessions, and the default rolling update starts the new pod while the old
-one still holds the data dir, so the new pod exits (see [Saved
-connections](#saved-connections)) and the rollout stalls. Every restart
-ends all sessions, and users connect again.
+For a team, run `ldaplens server`, for example in Kubernetes (see
+[Kubernetes](#kubernetes) for a manifest). It serves only the profiles in
+`connections.yaml`, keeps nothing on disk and runs as several replicas
+behind one ingress. Server mode is built and tested for the OpenLDAP
+family: OpenLDAP and directories like it, such as 389 Directory Server.
+Active Directory is supported in local mode: its admin setups, such as
+Protected Users and tiered admin accounts, do not fit a shared web
+service.
 
-- **Fixed profiles with per-user login** is the recommended setup for a
-  shared instance: put every connection in `connections.yaml` with a
-  `bindDNTemplate` (see [Per-user login](#per-user-login)), set
-  `LDAPLENS_DATA_DIR=""`, and keep the token or an SSO proxy in front (with
-  `--identity-header` and `identityUser`, the proxy also decides which
-  username each person may sign in as). Everyone then works as themselves,
-  and no service account password is stored in the deployment. Saving in
-  the UI fails with 409 `saving_disabled`, and connect opens
-  only the profiles from that file, so nobody can make the server open
-  connections to other hosts and ports it reaches, or change a shared
-  profile so that the next person's password goes to a server of their
-  choosing. No volume is needed.
-- **With UI-saved profiles** anyone who has the token can do both; every
-  save is logged as `profile saved`, with the old and the new URL. Mount a
-  volume at `/data`: in Kubernetes a PVC with `securityContext.fsGroup:
-  65532`, which makes a root-owned volume writable for the image's user
-  (UID 65532). A `hostPath` ignores `fsGroup`, and the `restricted` policy
-  refuses it. An `emptyDir` forgets the profiles when the pod is replaced.
-  Without a volume, the image's `VOLUME /data` gets a directory that lives
-  only as long as the container, so saves are lost at its next restart.
-- **Back up `profiles.json`** (it holds no passwords), and always before an
-  upgrade: after a rollback, the older version drops the settings it does
-  not know at its next save.
-- **The token** comes from a Secret through `LDAPLENS_AUTH_TOKEN_FILE` (or
-  `LDAPLENS_AUTH_TOKEN`). A generated one changes at every restart, which
-  logs everyone out, and is printed only in the log. The token file is read
-  at startup: restart after rotating it.
+- **Per-user login** is the recommended setup: give every profile a
+  `bindDNTemplate` (see [Per-user login](#per-user-login)). Everyone then
+  works as themselves, no service account password is stored in the
+  deployment, and server mode needs no token. The UI offers no saving, and a
+  save fails with 403 `saving_disabled`; connect opens only the profiles in
+  `connections.yaml`, so nobody can make the server open connections to
+  other hosts and ports it reaches, or change a profile so that the next
+  person's password goes to a server of their choosing.
+- **A shared profile**, one that binds with a configured password
+  (`passwordFile` from a Secret, or `passwordEnv`) or anonymously, serves
+  anyone who reaches ldaplens, so server mode then needs a token, from a
+  Secret through `LDAPLENS_AUTH_TOKEN_FILE` (see [Two modes](#two-modes)).
+  Server mode never makes one. The token file is read at startup: restart
+  after rotating it.
+- **Two replicas**, a rolling update that starts a new pod before it stops an
+  old one (`maxSurge: 1`, `maxUnavailable: 0`) and a PodDisruptionBudget with
+  `minAvailable: 1` keep the UI up through a rollout or a node drain. Each
+  replica dials its own connection for a shared profile, so any replica
+  answers for it (see [Flags](#flags)), and shared profiles need no affinity.
+  A per-user or typed-password connection lives in the browser's session on
+  the pod where it was made, so the ingress must keep each browser on one
+  pod with an affinity cookie (see [Behind a reverse
+  proxy](#behind-a-reverse-proxy) for ingress-nginx and Traefik). When that
+  pod goes away, in a rollout, a drain or a crash, its sessions go with it,
+  and their users sign in again. A rollout replaces every pod, so after one
+  every per-user and typed-password user signs in again.
+- **TLS ends at the ingress**, and ldaplens speaks plain HTTP behind it. The
+  ingress sends `X-Forwarded-Proto: https`, which makes the cookies Secure:
+  no flag is needed. `kubectl port-forward` over plain HTTP works as is, for
+  example `kubectl -n ldaplens port-forward svc/ldaplens 8080:80` and then
+  `http://localhost:8080`; it reaches one pod, so it needs no affinity.
+- **The client address**: set `--trusted-proxies` to the pod network where
+  the ingress controller runs, for example `10.244.0.0/16` (use yours), or
+  to the nodes' addresses for an ingress controller on `hostNetwork`, so
+  that the logs and the per-client limit see the client behind the ingress
+  (see [Behind a reverse proxy](#behind-a-reverse-proxy)). The ingress
+  controller must see it too: behind a load balancer that hides it, such as
+  a Service with `externalTrafficPolicy: Cluster`, clients share the nodes'
+  addresses, and their wrong passwords add up.
+- **The failed sign-in limits are per replica.** Each replica keeps its own
+  counts (see [Flags](#flags)) and forgets them when it restarts, and a
+  client that sends no affinity cookie spreads its tries over all of them:
+  with two replicas, up to 10 wrong passwords a minute for one DN and 40 from
+  one address. The directory's own lockout policy is the real limit (in
+  OpenLDAP, the ppolicy overlay with `pwdLockout`); the limits of ldaplens
+  only slow guessing down.
 - **Memory**: ldaplens uses about 10 MiB, plus about 55 MiB for each Apply of
   4 MiB of photos in flight. A large read holds up to 64 MiB of values per
   response, several times over while it is converted and encoded. Set a memory
@@ -521,7 +639,7 @@ ends all sessions, and users connect again.
   Go does not read the container's limit by itself. `GOMEMLIMIT` makes the
   garbage collector work harder near the limit, which makes an OOM kill
   less likely, but it does not prevent one when live memory exceeds the
-  limit. An OOM kill ends everyone's session.
+  limit. An OOM kill ends the sessions on that pod.
 
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
@@ -541,9 +659,8 @@ the deployment.
 A connect to such a profile goes like this:
 
 1. The browser sends the profile, the username and the password.
-2. ldaplens checks, in this order, that there is a username; with
-   `identityUser`, that the request carries a trusted identity and that the
-   username is the one it maps to; that the username matches
+2. ldaplens checks, in this order, that there is a username; that the
+   username matches
    `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; and that there is a password. Nothing
    reaches the directory before every check has passed. An empty password
    would be an unauthenticated bind (RFC 4513), which many servers accept as
@@ -551,17 +668,15 @@ A connect to such a profile goes like this:
 3. ldaplens binds as the template with the username filled in, for example
    `uid=alice,ou=people,dc=example,dc=org`. A wrong password is 401
    `invalid_credentials`, as on any profile. Five of them in 60 seconds
-   refuse that DN with 429 `too_many_attempts` until the 60 seconds are
-   over (see [Flags](#flags)).
+   refuse that DN, and twenty from one client address refuse that address,
+   with 429 `too_many_attempts` until the 60 seconds are over (see
+   [Flags](#flags)).
 4. The connection's lines in the log (`connected`, `connect failed`, every
    write and `disconnected`) carry that DN as `bindDN`.
 
 The connect dialog of such a profile has a visible Username field above the
 password, marked `autocomplete="username"` so that a password manager offers
-the accounts it saved; ldaplens itself does not remember the username. With
-`identityUser`, when the request carries a trusted identity, the field is
-filled in with the username it maps to and is read-only; without one, the
-field is empty and connect fails with `identity_required`. Once connected, the
+the accounts it saved; ldaplens itself does not remember the username. Once connected, the
 workspace header shows `Signed in as` and the DN the connection bound as,
 for example `Signed in as uid=alice,ou=people,dc=example,dc=org`, or the UPN
 for a template like `{user}@corp.example`. Profiles with a fixed `bindDN`
@@ -569,43 +684,12 @@ do not show this line. Two people signed in to the same profile from two
 browsers each have their own connection: one's disconnect or wrong password
 does not touch the other's.
 
-With `identityUser`, the username is tied to the user an authenticating
-proxy verified. With oauth2-proxy in front of ldaplens, as under [Logs and
-accountability](#logs-and-accountability):
-
-```yaml
-connections:
-  - name: corp-ad
-    url: ldaps://dc1.corp.example:636
-    baseDN: dc=corp,dc=example
-    bindDNTemplate: "{user}@corp.example"
-    identityUser: localpart
-```
-
-```sh
-ldaplens --config connections.yaml \
-  --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
-```
-
-Someone signed in to oauth2-proxy as `alice@corp.example` can connect to
-`corp-ad` only as `alice` (or `Alice`: the comparison ignores case, and the
-bind uses the username as typed), and the connect dialog fills that in. The
-password is still the directory's: the proxy decides who may sign in, the
-directory checks the password. A request without the header, or from an
-address outside `--trusted-proxies`, cannot connect to the profile. Every
-later request on that connection must carry the same identity: one with
-another identity or with none, for example from a shared browser after the
-proxy sign-in changed to someone else, closes the connection, and the UI
-asks to connect again.
-
 | Code | Status | When | The connect dialog says |
 |---|---|---|---|
 | `username_required` | 400 | no username | Enter your username. |
-| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity | Open ldaplens through its sign-in proxy to use this connection. |
-| `identity_mismatch` | 403 | the username is not the one the identity maps to | Use the username you signed in to the proxy with. |
 | `invalid_username` | 400 | the username does not match the pattern above | A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long. |
 | `password_required` | 400 | no password | this profile needs a password |
-| `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects to this DN that are still under way; `Retry-After` gives the seconds to wait | Too many failed sign-ins for this account. Wait a minute and try again. |
+| `too_many_attempts` | 429 | five wrong passwords for this DN, or twenty from this client address, in 60 seconds, counting connects that are still under way; `Retry-After` gives the seconds to wait | Too many failed sign-ins. Wait a minute and try again. |
 
 The password a person typed stays in the server's memory, with their
 connection, so that ldaplens can reconnect after a dropped connection without
@@ -620,18 +704,34 @@ asks to sign in again.
 Set up the proxy and ldaplens together:
 
 - **A token**, from `LDAPLENS_AUTH_TOKEN_FILE` or `LDAPLENS_AUTH_TOKEN`.
-  `--allowed-hosts` makes ldaplens generate one, but a new one at every
-  restart. Without `--allowed-hosts`, a proxy that forwards `Host:
-  localhost` or `127.0.0.1` to a loopback listener looks like a local
-  browser, which needs no token.
+  Local mode otherwise uses the one it keeps in its data dir, also behind a
+  proxy on the same host; server mode needs one for a profile with a
+  configured password or an anonymous bind (see [Two modes](#two-modes)).
 - **The Host header**: set `--allowed-hosts` to the host name users open,
   and have the proxy pass the browser's `Host` on (nginx: `proxy_set_header
   Host $host`; Traefik and ingress-nginx do so by default). Any other Host
   gets 403 `host_not_allowed`.
-- **`--secure-cookies`** when the proxy terminates TLS. ldaplens does not
-  trust `X-Forwarded-Proto`, which any client that reaches it directly could
-  send, so without the flag its cookies lack `Secure` although the browser
-  uses HTTPS.
+- **The client address**: set `--trusted-proxies` to the proxy's addresses
+  and have the proxy append the client to `X-Forwarded-For` (nginx:
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`; Traefik and
+  ingress-nginx send it by default). For a request from a listed address,
+  the client is the right-most `X-Forwarded-For` address that is not itself
+  listed, or the left-most when all are; an entry that does not parse ends
+  the search there. Logs carry the client as `remote` and the proxy as
+  `proxy`, and the failed sign-in limit counts per client (see
+  [Flags](#flags)). Without it, every client has the proxy's address: their
+  wrong passwords add up to one count, and twenty in a minute refuse
+  everyone for the rest of it. List only proxies: whatever reaches ldaplens
+  from a listed address can name any client.
+- **Secure cookies**: ldaplens marks its cookies `Secure` when the request
+  came over TLS or its first `X-Forwarded-Proto` value is `https` (in any
+  case), which ingress-nginx and Traefik send by default. nginx does not:
+  add `proxy_set_header X-Forwarded-Proto $scheme`, or set
+  `--secure-cookies`, which marks every cookie `Secure`, as the example below
+  does. The header is taken from any client: forging it can only add
+  `Secure`, which makes a browser on plain HTTP drop the cookie, never weaken
+  it. Over plain HTTP, such as `kubectl port-forward`, `docker run` or the
+  demo, the cookies work in every browser.
 - **Body size and read timeout**: Apply, New child and Clone send up to
   8 MiB, and an Apply may run 4 minutes; ldaplens cuts off any request after
   5 minutes. nginx and ingress-nginx allow 1 MiB and wait 60 seconds by default: a
@@ -662,8 +762,8 @@ Set up the proxy and ldaplens together:
   that nobody handles the token. With a token set, ldaplens prints no link.
 
 nginx, terminating TLS, with ldaplens on `127.0.0.1:8080`
-(`LDAPLENS_ALLOWED_HOSTS=ldaplens.corp.example`, `LDAPLENS_SECURE_COOKIES=true`
-and a token):
+(`LDAPLENS_ALLOWED_HOSTS=ldaplens.corp.example`, `LDAPLENS_SECURE_COOKIES=true`,
+`LDAPLENS_TRUSTED_PROXIES=127.0.0.1` and a token):
 
 ```nginx
 # The query string holds the login token, DNs and filters: log the path only.
@@ -682,6 +782,7 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8080;   # no URI after the address: keeps the path
         proxy_set_header Host $host;        # not the default $proxy_host
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 300s;
         # Leave Origin and Sec-Fetch-Site alone, and do not cache.
     }
@@ -691,8 +792,9 @@ server {
 }
 ```
 
-Traefik (file provider) keeps the Host header and sets no body size limit
-or backend timeout by default:
+Traefik (file provider) keeps the Host header, sends `X-Forwarded-For` and
+sets no body size limit or backend timeout by default; run ldaplens as for
+nginx, with `LDAPLENS_TRUSTED_PROXIES=127.0.0.1`:
 
 ```yaml
 http:
@@ -726,6 +828,10 @@ metadata:
     # An Apply may run 4 minutes; the default is 60 seconds.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     # No rewrite-target. For a sub-path, set LDAPLENS_BASE_PATH to it.
+    # Keeps each browser on the pod that holds its per-user or typed-password
+    # connections; persistent: a scale-up, as in a rollout, moves nobody.
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/affinity-mode: persistent
 spec:
   ingressClassName: nginx
   tls:
@@ -741,16 +847,34 @@ spec:
               service: {name: ldaplens, port: {name: http}}
 ```
 
+Traefik as the ingress controller sets no body size limit or backend timeout
+by default, so its Ingress needs no annotations. Its affinity cookie is set
+on the Service in [Kubernetes](#kubernetes) instead: add this annotation to
+that Service's `metadata`:
+
+```yaml
+annotations:
+  traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+```
+
+A Traefik IngressRoute takes `sticky: {cookie: {}}` on its service.
+
 ### Kubernetes
 
-The manifest below runs ldaplens under the `restricted` Pod Security Standard
-(`runAsNonRoot`, `readOnlyRootFilesystem`, all capabilities dropped,
-`seccompProfile: RuntimeDefault`), with the token and a bind password in a
-Secret, `connections.yaml` and the directory's CA in a ConfigMap, a PVC for
-UI-saved profiles, and a NetworkPolicy that lets in only the ingress
-controller (ingress-nginx here: adjust the labels to yours). For fixed
-profiles only, uncomment `LDAPLENS_DATA_DIR` and drop the PVC, the `data`
-volume and its mount. Pin the image by digest in production.
+The manifest below runs `ldaplens server` in two replicas under the
+`restricted` Pod Security Standard (`runAsNonRoot`, `readOnlyRootFilesystem`,
+all capabilities dropped, `seccompProfile: RuntimeDefault`), with
+`connections.yaml` and the directory's CA in a ConfigMap, the shared
+profile's password and the token in a Secret, and a NetworkPolicy that lets
+in only the ingress controller (ingress-nginx here: adjust the labels to
+yours). Server mode writes nothing, so there is no volume. `args` start with
+`server`, because arguments replace the image's default. The Ingress, with
+its affinity cookie, is under [Behind a reverse
+proxy](#behind-a-reverse-proxy). Pin the image by digest in production.
+ingress-nginx logs the query string by default, so a login link
+(`/?token=...`) lands in its access log: log the path only with its
+`log-format-upstream` (`$uri` in place of `$request`), or have an
+authenticating proxy send the token as an `Authorization: Bearer` header.
 
 ```yaml
 apiVersion: v1
@@ -761,11 +885,13 @@ metadata:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
 ---
-# The placeholders fail closed: ldaplens does not start until auth-token holds
-# a real token. Better, create the Secret with
+# Only the shared profile needs this Secret: without one, drop it, its
+# volume and mount, and LDAPLENS_AUTH_TOKEN_FILE. The placeholders fail
+# closed: ldaplens does not start until auth-token holds a real token.
+# Better, create it with
 #   kubectl -n ldaplens create secret generic ldaplens \
 #     --from-literal=auth-token="$(openssl rand -hex 32)" \
-#     --from-file=corp-ad=./corp-ad.password
+#     --from-file=people-reader=./people-reader.password
 apiVersion: v1
 kind: Secret
 metadata:
@@ -774,7 +900,7 @@ metadata:
 type: Opaque
 stringData:
   auth-token: "<openssl rand -hex 32>"
-  corp-ad: "<bind password of cn=reader>"
+  people-reader: "<bind password of cn=ldaplens-reader>"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -784,29 +910,26 @@ metadata:
 data:
   connections.yaml: |
     connections:
-      - name: corp-ad
-        url: ldaps://dc1.corp.example:636
+      # Everyone signs in as themselves: no token, no stored password.
+      - name: people
+        url: ldaps://ldap.corp.example:636
         baseDN: dc=corp,dc=example
-        bindDN: cn=reader,ou=svc,dc=corp,dc=example
-        # Read at every connect: a rotated Secret is used without a restart.
-        passwordFile: /etc/ldaplens/secrets/corp-ad
+        bindDNTemplate: uid={user},ou=people,dc=corp,dc=example
         caFile: /etc/ldaplens/config/corp-ca.pem
-        environment: prod
+      # Shared: binds with the password from the Secret, so ldaplens needs
+      # the token.
+      - name: people-reader
+        url: ldaps://ldap.corp.example:636
+        baseDN: dc=corp,dc=example
+        bindDN: cn=ldaplens-reader,ou=services,dc=corp,dc=example
+        # Read at every dial: a rotated Secret is used without a restart.
+        passwordFile: /etc/ldaplens/secrets/people-reader
+        caFile: /etc/ldaplens/config/corp-ca.pem
+        readOnly: true
   corp-ca.pem: |
     -----BEGIN CERTIFICATE-----
     (the directory's CA certificate)
     -----END CERTIFICATE-----
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ldaplens-data
-  namespace: ldaplens
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -814,11 +937,12 @@ metadata:
   name: ldaplens
   namespace: ldaplens
 spec:
-  # Sessions live in memory and the data dir has one writer: one replica,
-  # and Recreate, so that two pods never run at once.
-  replicas: 1
+  # A new pod is ready before an old one stops. Per-user and typed-password
+  # sessions end with their pod; shared profiles work on any replica.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
   revisionHistoryLimit: 3
   selector:
     matchLabels: {app.kubernetes.io/name: ldaplens}
@@ -839,24 +963,24 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
-        # Makes a root-owned volume (EBS, PD, Azure Disk) writable for 65532.
+        # Lets the app's group read the Secret's files, which are 0440 below.
         fsGroup: 65532
-        fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: ldaplens
           image: ghcr.io/cicdteam/ldaplens:<version>
-          args: [--config=/etc/ldaplens/config/connections.yaml]
+          args: [server, --config=/etc/ldaplens/config/connections.yaml]
           env:
+            # Only for a shared profile.
             - {name: LDAPLENS_AUTH_TOKEN_FILE, value: /etc/ldaplens/secrets/auth-token}
             # The host name users open; ldaplens answers 403 to any other Host.
             - {name: LDAPLENS_ALLOWED_HOSTS, value: ldaplens.corp.example}
-            - {name: LDAPLENS_SECURE_COOKIES, value: "true"}
+            # The pod network, where the ingress controller runs, so that its
+            # X-Forwarded-For names the client; it differs between clusters:
+            # use yours. The NetworkPolicy below keeps other pods out.
+            - {name: LDAPLENS_TRUSTED_PROXIES, value: 10.244.0.0/16}
             # About 80% of the memory limit: Go does not read the limit.
             - {name: GOMEMLIMIT, value: 400MiB}
-            # Fixed profiles only: uncomment this, and drop the PVC and the
-            # data volume and its mount.
-            # - {name: LDAPLENS_DATA_DIR, value: ""}
           ports:
             - {name: http, containerPort: 8080}
           readinessProbe:
@@ -877,15 +1001,22 @@ spec:
             # Directories, not subPath: a subPath file never sees an update.
             - {name: config, mountPath: /etc/ldaplens/config, readOnly: true}
             - {name: secrets, mountPath: /etc/ldaplens/secrets, readOnly: true}
-            - {name: data, mountPath: /data}
       volumes:
         - name: config
           configMap: {name: ldaplens-connections}
         - name: secrets
-          # 0440 is enough: fsGroup gives the group read access.
           secret: {secretName: ldaplens, defaultMode: 0440}
-        - name: data
-          persistentVolumeClaim: {claimName: ldaplens-data}
+---
+# A node drain or another voluntary eviction leaves one pod running.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ldaplens
+  namespace: ldaplens
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: ldaplens}
 ---
 # Only the ingress controller reaches ldaplens. The kubelet's probes come from
 # the node, which a NetworkPolicy does not block.
@@ -923,9 +1054,10 @@ spec:
 On a Linux server, run ldaplens as a service on loopback behind a reverse
 proxy on the same host, such as the nginx example above. The binary is
 static: `make build` builds `bin/ldaplens`, or copy `/ldaplens` out of the
-image. The unit runs it as a dynamic user in a sandbox, with saved
-connections in `/var/lib/ldaplens` (0700); for fixed profiles only, change
-its `LDAPLENS_DATA_DIR` line to `Environment=LDAPLENS_DATA_DIR=`.
+image. The unit runs it in local mode as a dynamic user in a sandbox, with
+saved connections in `/var/lib/ldaplens` (0700); for fixed profiles only, run
+server mode: put `server` before `--config` in `ExecStart` and drop the
+`LDAPLENS_DATA_DIR` line.
 
 ```ini
 # /etc/systemd/system/ldaplens.service
@@ -949,6 +1081,8 @@ ExecStart=/usr/local/bin/ldaplens --config=/etc/ldaplens/connections.yaml
 Environment=LDAPLENS_LISTEN=127.0.0.1:8080
 Environment=LDAPLENS_DATA_DIR=%S/ldaplens
 Environment=LDAPLENS_SECURE_COOKIES=true
+# The reverse proxy on this host, whose X-Forwarded-For names the client.
+Environment=LDAPLENS_TRUSTED_PROXIES=127.0.0.1
 # About 80% of MemoryMax: the Go runtime does not read MemoryMax by itself.
 Environment=GOMEMLIMIT=400MiB
 # LDAPLENS_AUTH_TOKEN, LDAPLENS_ALLOWED_HOSTS and the passwordEnv variables.
@@ -1011,27 +1145,27 @@ LDAPLENS_AUTH_TOKEN=<openssl rand -hex 32>
 LDAPLENS_ALLOWED_HOSTS=ldaplens.corp.example
 ```
 
-Without the token, ldaplens generates one at every start, and journald keeps
-the login link. Passwords for `passwordFile` profiles go in
-`/etc/ldaplens/secrets/` (`root:ldaplens-secrets`, 0640).
+Without the token, ldaplens keeps one in `/var/lib/ldaplens/token`, and
+journald keeps the login link it logs at every start. Passwords for
+`passwordFile` profiles go in `/etc/ldaplens/secrets/`
+(`root:ldaplens-secrets`, 0640).
 
 ## Operations
 
 - **Logs** go to stdout, one `key=value` line per event (see [Logs and
   accountability](#logs-and-accountability)): `kubectl -n ldaplens logs
-  deploy/ldaplens`, or `journalctl -u ldaplens` for the systemd unit. A startup
+  -l app.kubernetes.io/name=ldaplens --prefix --tail=-1` for every replica, or
+  `journalctl -u ldaplens` for the systemd unit. A startup
   error is one line on stderr that starts with `ldaplens:`, and the process
   exits with status 1; for a pod in CrashLoopBackOff, add `--previous` to
-  `kubectl logs`.
+  `kubectl logs <pod>`.
 - **A broken `profiles.json`** is moved to `profiles.json.bad` next to it
-  (`/data` in the image, `/var/lib/ldaplens` with the unit), and ldaplens starts
-  without saved profiles and logs `profiles file was invalid and was moved
-  aside` with its `path` and `error`. The next broken file replaces it. To
+  (`/data/ldaplens` in the image, `/var/lib/ldaplens` with the unit), and
+  ldaplens starts without saved profiles and logs `profiles file was
+  invalid and was moved aside` with its `path` and `error`. The next broken
+  file replaces it. To
   put a fixed copy back, stop ldaplens first, because it rewrites the file
-  from its own list at the next save. In Kubernetes: scale the Deployment to
-  0, mount the PVC in a helper pod with the same `securityContext` (on the
-  same node for a ReadWriteOnce volume), copy the file in with `kubectl cp`,
-  delete the helper and scale back to 1.
+  from its own list at the next save.
 - **Debugging** the image, which has no shell: attach a debug container
   that runs as the app's user. `--custom` sets that user even when the pod
   sets none, because the `restricted` policy refuses busybox's root.
@@ -1043,7 +1177,7 @@ the login link. Passwords for `passwordFile` profiles go in
   ```
 
   The app's files are under `/proc/1/root/` there, for example
-  `/proc/1/root/data/profiles.json.bad`.
+  `/proc/1/root/etc/ldaplens/config/connections.yaml`.
 
 ## Development
 
@@ -1068,6 +1202,9 @@ docker compose -f deploy/docker-compose.yml up -d openldap
 DEMO_LDAP_PASSWORD=adminpassword go run ./cmd/ldaplens --config deploy/connections.dev.yaml
 cd web && npm ci && npm run dev   # http://localhost:5173, /api is proxied to :8080
 ```
+
+Open the login link that ldaplens logs once: browsers send its cookie to
+every port of `localhost`, so the Vite server on 5173 then works too.
 
 The demo directory (`deploy/demo-ldif/gen.sh`) has 250 people, nested groups
 with a cycle, DNs with escaped commas and non-ASCII characters, photos on the

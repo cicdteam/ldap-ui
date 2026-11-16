@@ -17,6 +17,8 @@ import (
 
 // Caps on one search response, so that a server cannot make ldaplens hold an
 // unbounded result in memory. A response past one ends early as truncated.
+// maxResponseEntries is also the most entries a Search returns, and the
+// value bytes of all the pages it walks share maxResponseBytes.
 const (
 	maxResponseEntries = 5000
 	// maxResponseBytes counts attribute value bytes.
@@ -33,10 +35,14 @@ type result struct {
 	entries   []*ldap.Entry
 	referrals []string
 	controls  []ldap.Control
+	// size is the value bytes of entries.
+	size      int
 	truncated bool
 	// capped is set when a response cap stopped the reading: the server
 	// may still be sending the rest, which go-ldap drops.
 	capped bool
+	// more is set by walk when the server has entries past its limit.
+	more bool
 }
 
 // searchOnce sends one search request and collects its results. Size and
@@ -46,6 +52,12 @@ type result struct {
 // is closing yields an ErrorNetwork error so that read can redial, and so
 // does a lost one (see networkError).
 func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*result, error) {
+	return searchWithin(ctx, lc, req, maxResponseBytes)
+}
+
+// searchWithin is searchOnce with maxBytes value bytes in place of
+// maxResponseBytes.
+func searchWithin(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest, maxBytes int) (*result, error) {
 	// Cancelling sctx on a cap stops go-ldap's reading for this search;
 	// only ctx ending is an error.
 	sctx, cancel := context.WithCancel(ctx)
@@ -55,15 +67,14 @@ func searchOnce(ctx context.Context, lc *ldap.Conn, req *ldap.SearchRequest) (*r
 	// buffer bounds what is held beyond the cap.
 	resp := lc.SearchAsync(sctx, req, 4)
 	res := &result{}
-	size := 0
 	for resp.Next() {
 		if e := resp.Entry(); e != nil {
 			n := valueBytes(e)
-			if len(res.entries) == maxResponseEntries || size+n > maxResponseBytes {
+			if len(res.entries) == maxResponseEntries || res.size+n > maxBytes {
 				res.truncated, res.capped = true, true
 				break
 			}
-			size += n
+			res.size += n
 			res.entries = append(res.entries, e)
 		}
 		if r := resp.Referral(); r != "" {
@@ -120,13 +131,13 @@ func searchTimeLimit(d time.Duration) int {
 	return max(1, int((d-2*time.Second)/time.Second))
 }
 
-// Search runs one page of a search. On servers with paging, Page.Cursor is
-// an opaque ID for the next page. It works once and fails with
-// ErrCursorExpired after cursorIdle without use or when more than
-// maxCursors listings are open on c. A filter that matches on a secret
-// attribute's value fails with ErrSecretFilter before the search is sent.
+// Search returns the entries of a search, at most r.SizeLimit of them (see
+// SearchRequest), in one call. Page.More is set when the search matches
+// more; no state outlives the call (see walk). A filter that matches on a
+// secret attribute's value fails with ErrSecretFilter before the search is
+// sent.
 func (c *Conn) Search(ctx context.Context, r SearchRequest) (Page, error) {
-	req, err := buildRequest(r, c.info.Paging)
+	req, limit, err := buildRequest(r, c.info.Paging)
 	if err != nil {
 		return Page{}, err
 	}
@@ -141,88 +152,104 @@ func (c *Conn) Search(ctx context.Context, r SearchRequest) (Page, error) {
 		return Page{}, fmt.Errorf("%w: %s", ErrSecretFilter, attr)
 	}
 	req.TimeLimit = searchTimeLimit(c.prof.SearchTimeout)
-	c.expireCursors()
-	var res *result
-	var cursor string
-	if c.info.Paging {
-		res, cursor, err = c.pagedSearch(ctx, r.Cursor, req)
-	} else {
-		err = c.read(ctx, func(lc *ldap.Conn) error {
-			var err error
-			res, err = searchOnce(ctx, lc, req)
-			return err
-		})
-	}
+	res, err := c.walk(ctx, req, limit)
 	if err != nil {
 		return Page{}, err
 	}
-	page := Page{Entries: make([]Entry, 0, len(res.entries)), Cursor: cursor, Truncated: res.truncated, Referrals: res.referrals}
+	page := Page{Entries: make([]Entry, 0, len(res.entries)), More: res.more, Truncated: res.truncated, Referrals: res.referrals}
 	for _, e := range res.entries {
 		page.Entries = append(page.Entries, convertEntry(e, s, c.info.ActiveDirectory))
 	}
 	return page, nil
 }
 
-// pagedSearch runs one page on a connection nobody else pages on: the
-// first page on the shared connection taken out of its slot, later pages
-// on the connection pinned to cursor id. A page with a continuation cookie
-// pins its connection under a new cursor ID; the last page releases it and
-// a failed page closes it.
-func (c *Conn) pagedSearch(ctx context.Context, id string, req *ldap.SearchRequest) (*result, string, error) {
-	var res *result
-	var lc *ldap.Conn
-	var err error
-	if id == "" {
-		lc, err = retry(ctx, c.take, func(lc *ldap.Conn) error {
+// walk runs req and returns at most limit of its entries, with more set
+// when the server has others. A request without the paging control is one
+// search, whose size limit the caller set to limit: sizeLimitExceeded at
+// limit entries means more. With the control, walk pages through the
+// results on the shared connection taken out of its slot, until it has
+// limit entries or the server has no more. A walk that stops early
+// abandons the paged search before it hands the connection back, so no
+// paged state outlives it. The value bytes of all pages share
+// maxResponseBytes.
+func (c *Conn) walk(ctx context.Context, req *ldap.SearchRequest, limit int) (*result, error) {
+	paging, ok := ldap.FindControl(req.Controls, ldap.ControlTypePaging).(*ldap.ControlPaging)
+	if !ok {
+		var res *result
+		err := c.read(ctx, func(lc *ldap.Conn) error {
 			var err error
 			res, err = searchOnce(ctx, lc, req)
 			return err
 		})
 		if err != nil {
-			if lc != nil {
-				// go-ldap sends no Abandon on cancel, so the paged search
-				// may still run on lc; never share it again.
-				_ = lc.Close()
+			return nil, err
+		}
+		// ponytail: a time limit hit at exactly limit entries also reads
+		// as more; tell size from time limit in result if that matters.
+		if res.truncated && !res.capped && len(res.entries) == limit {
+			res.truncated, res.more = false, true
+		}
+		return res, nil
+	}
+	var res *result
+	lc, err := retry(ctx, c.take, func(lc *ldap.Conn) error {
+		res = &result{}
+		paging.SetCookie(nil)
+		// At most limit pages, so a server that keeps sending cookies
+		// with empty pages cannot keep us looping.
+		for range limit {
+			page, err := searchWithin(ctx, lc, req, maxResponseBytes-res.size)
+			if err != nil {
+				return err
 			}
-			return nil, "", err
+			res.entries = append(res.entries, page.entries...)
+			res.referrals = append(res.referrals, page.referrals...)
+			res.size += page.size
+			res.truncated = res.truncated || page.truncated
+			res.capped = page.capped
+			var cookie []byte
+			if ctl, ok := ldap.FindControl(page.controls, ldap.ControlTypePaging).(*ldap.ControlPaging); ok {
+				cookie = ctl.Cookie
+			}
+			paging.SetCookie(cookie)
+			if len(cookie) == 0 || page.truncated || len(res.entries) >= limit {
+				break
+			}
 		}
-	} else {
-		cur := c.unpin(id)
-		if cur == nil {
-			return nil, "", ErrCursorExpired
-		}
-		lc = cur.lc
-		if ctl, ok := ldap.FindControl(req.Controls, ldap.ControlTypePaging).(*ldap.ControlPaging); ok {
-			ctl.SetCookie(cur.cookie)
-		}
-		if res, err = searchOnce(ctx, lc, req); err != nil {
-			// The server drops the paged state on errors (code 2 or 53
-			// for a cookie it no longer knows), so the cursor is done.
-			expired := ctx.Err() == nil && (lc.IsClosing() ||
-				ldap.IsErrorWithCode(err, ldap.LDAPResultProtocolError) ||
-				ldap.IsErrorWithCode(err, ldap.LDAPResultUnwillingToPerform))
+		return nil
+	})
+	if err != nil {
+		if lc != nil {
+			// go-ldap sends no Abandon on cancel, so the paged search
+			// may still run on lc; never share it again.
 			_ = lc.Close()
-			if expired {
-				return nil, "", fmt.Errorf("%w: %w", ErrCursorExpired, err)
-			}
-			return nil, "", err
 		}
+		return nil, err
 	}
-	if res.capped {
-		// The rest of a half-read page cannot be fetched, so the listing
-		// ends here, truncated. The server is still sending that page and
-		// keeps its paged state for a cookie nobody reads; lc is this
-		// listing's own, so close it rather than share it.
+	switch {
+	case res.capped:
+		// The rest of a half-read page cannot be fetched, so the walk
+		// ends here, truncated. The server is still sending that page
+		// and keeps its paged state; lc is this walk's own, so close it
+		// rather than share it.
 		_ = lc.Close()
-		return res, "", nil
-	}
-	ctl, ok := ldap.FindControl(res.controls, ldap.ControlTypePaging).(*ldap.ControlPaging)
-	if !ok || len(ctl.Cookie) == 0 {
+	case len(paging.Cookie) > 0:
+		// Stopped early with the paged search still open on the server.
+		// Page size 0 with the cookie abandons it (RFC 2696); if that
+		// fails, lc is closed rather than shared while still paging.
+		res.more = true
+		paging.PagingSize = 0
+		if _, err := searchOnce(ctx, lc, req); err != nil {
+			_ = lc.Close()
+		}
+		c.release(lc) // closes lc instead when it is closing
+	default:
 		c.release(lc)
-		return res, "", nil
 	}
-	next, err := c.pin(lc, ctl.Cookie)
-	return res, next, err
+	if len(res.entries) > limit {
+		res.entries, res.more = res.entries[:limit], true
+	}
+	return res, nil
 }
 
 // Entry reads one entry with all user and operational attributes. Ranged

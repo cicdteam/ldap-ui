@@ -20,16 +20,9 @@ export function afterApply(batch: Batch, sent: Batch, result: ApplyResult): Batc
   return left.length === batch.length ? batch : left
 }
 
-/** Whether Apply may run: batch non-empty, no invalid entry, prod confirm typed. */
-export function canApply(opts: {
-  batch: Batch
-  invalid: number
-  prod: boolean
-  confirm: string
-  conn: string
-}): boolean {
-  const { batch, invalid, prod, confirm, conn } = opts
-  return batch.length > 0 && invalid === 0 && (!prod || confirm === conn)
+/** Whether Apply may run: batch non-empty, no invalid entry. */
+export function canApply(opts: { batch: Batch; invalid: number }): boolean {
+  return opts.batch.length > 0 && opts.invalid === 0
 }
 
 /** Batch entries failing validation against their loaded entry; unloaded ones are not counted. */

@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowDown, ArrowUp, Download, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
@@ -9,14 +9,7 @@ import { parentDN, rdnDisplay, sameDN, splitDN } from '../../lib/dn'
 import { entriesToLDIF } from '../../lib/ldif'
 import { defaultColumns } from '../../lib/nav'
 import { rowHeight, usePrefs } from '../../lib/prefs'
-import {
-  RESULT_PAGE,
-  collect,
-  isCursorExpired,
-  nextSort,
-  sortEntries,
-  type Sort,
-} from '../../lib/results'
+import { RESULT_LIMITS, nextLimit, nextSort, sortEntries, type Sort } from '../../lib/results'
 import type { SearchState } from '../../lib/storage'
 import { ChangeDot } from '../../ui/Badge'
 import { Banner, ErrorBanner } from '../../ui/Banner'
@@ -82,8 +75,8 @@ function Examples() {
 export function Results() {
   const ws = useWorkspace()
   if (!ws.search) return <Examples />
-  // Keyed per search so the sort and the scroll position start over.
-  return <Listing key={searchKey(ws.conn, ws.search).join('\0')} search={ws.search} />
+  // Keyed per run so the limit, the sort and the scroll position start over.
+  return <Listing key={[...searchKey(ws.conn, ws.search), ws.runs].join('\0')} search={ws.search} />
 }
 
 function Listing({ search }: { search: SearchState }) {
@@ -93,9 +86,13 @@ function Listing({ search }: { search: SearchState }) {
   const batch = useBatch(ws.conn)
   const key = searchKey(ws.conn, search)
   const attrs = search.attrs.length ? search.attrs : defaultColumns(ws.info)
-  const q = useInfiniteQuery({
-    queryKey: key,
-    queryFn: ({ pageParam, signal }) =>
+  // Load more runs the same search again with the next limit; the server keeps nothing between
+  // requests. The rows shown stay until the bigger answer arrives.
+  const [limit, setLimit] = useState(RESULT_LIMITS[0])
+  const prev = RESULT_LIMITS.findLast((l) => l < limit)
+  const q = useQuery({
+    queryKey: [...key, limit],
+    queryFn: ({ signal }) =>
       api.search(
         ws.conn,
         {
@@ -103,26 +100,31 @@ function Listing({ search }: { search: SearchState }) {
           scope: search.scope,
           filter: search.filter,
           attributes: attrs,
-          pageSize: RESULT_PAGE,
-          cursor: pageParam || undefined,
+          sizeLimit: limit,
         },
         signal,
       ),
-    initialPageParam: '',
-    getNextPageParam: (last) => last.cursor || undefined,
+    placeholderData: keepPreviousData,
     staleTime: Infinity,
     gcTime: 5 * 60_000,
   })
-  const listing = useMemo(() => collect(q.data?.pages ?? []), [q.data])
+  const more = !!q.data?.more
+  const next = nextLimit(limit)
   const [sort, setSort] = useState<Sort>(null)
-  const rows = useMemo(() => sortEntries(listing.entries, sort), [listing.entries, sort])
+  const entries = q.data?.entries
+  const rows = useMemo(() => sortEntries(entries ?? [], sort), [entries, sort])
   // The active row is the selected entry, so it stays right after sorting, paging or a
   // selection made elsewhere (tree, breadcrumbs).
   const active = useMemo(
     () => (ws.dn ? rows.findIndex((r) => sameDN(r.dn, ws.dn)) : -1),
     [rows, ws.dn],
   )
-  const restart = () => void qc.resetQueries({ queryKey: key })
+  const refetch = () => void q.refetch()
+  const cancel = () => {
+    void qc.cancelQueries({ queryKey: key })
+    // A canceled Load more leaves the smaller answer on screen: go back to its limit.
+    if (q.isPlaceholderData && prev) setLimit(prev)
+  }
 
   const scrollRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual cannot be memoized; the app does not use the React Compiler, so this is informational only
@@ -163,23 +165,24 @@ function Listing({ search }: { search: SearchState }) {
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2 text-xs">
         <span className="text-muted">
           {q.isPending ? 'Searching…' : `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`}
-          {q.hasNextPage && ', more on the server'}
-          {sort && q.hasNextPage && ' (sorting loaded rows)'}
+          {more && ', more on the server'}
+          {sort && more && ' (sorting loaded rows)'}
         </span>
         {q.isFetching && <Spinner />}
         <div className="ml-auto flex items-center gap-1">
           {q.isFetching && (
-            <Button size="sm" onClick={() => void qc.cancelQueries({ queryKey: key })}>
+            <Button size="sm" onClick={cancel}>
               Cancel
             </Button>
           )}
-          {q.hasNextPage && (
+          {more && next !== null && (
             <Button
               size="sm"
-              disabled={q.isFetchingNextPage}
-              onClick={() => void q.fetchNextPage()}
+              disabled={q.isFetching}
+              title={`Run the search again for up to ${next} entries`}
+              onClick={() => setLimit(next)}
             >
-              Load {RESULT_PAGE} more
+              Load more
             </Button>
           )}
           <Button
@@ -215,7 +218,7 @@ function Listing({ search }: { search: SearchState }) {
         <Banner
           tone="info"
           action={
-            <Button size="sm" onClick={restart}>
+            <Button size="sm" onClick={refetch}>
               Run again
             </Button>
           }
@@ -223,38 +226,39 @@ function Listing({ search }: { search: SearchState }) {
           Search canceled.
         </Banner>
       )}
-      {q.isError &&
-        (isCursorExpired(q.error) ? (
-          <Banner
-            tone="warn"
-            action={
-              <Button size="sm" onClick={restart}>
-                Restart
-              </Button>
-            }
-          >
-            The server dropped this listing (idle too long or too many open listings). Restart it
-            from the first page.
-          </Banner>
-        ) : (
-          <ErrorBanner
-            error={q.error}
-            action={
-              <Button size="sm" onClick={restart}>
+      {q.isError && (
+        <ErrorBanner
+          error={q.error}
+          action={
+            <>
+              {prev && (
+                // The smaller answer stays cached for gcTime, so going back is instant.
+                <Button size="sm" onClick={() => setLimit(prev)}>
+                  Show the first {prev}
+                </Button>
+              )}
+              <Button size="sm" onClick={refetch}>
                 Retry
               </Button>
-            }
-          />
-        ))}
-      {listing.truncated && (
+            </>
+          }
+        />
+      )}
+      {more && next === null && !q.isPlaceholderData && (
+        <Banner tone="info">
+          Showing the first {limit.toLocaleString('en-US')} entries; refine the search to see the
+          rest
+        </Banner>
+      )}
+      {q.data?.truncated && (
         <Banner tone="warn">
           The search stopped early (a size, time or response limit). Showing what arrived.
         </Banner>
       )}
-      {listing.referrals.length > 0 && (
+      {!!q.data?.referrals?.length && (
         <Banner tone="info">
           Referrals (not followed):{' '}
-          {listing.referrals.map((r) => (
+          {q.data.referrals.map((r) => (
             <span key={r} className="mr-2 font-mono text-xs">
               {r}
             </span>

@@ -53,11 +53,18 @@ func writeError(w http.ResponseWriter, status int, e apiError) {
 	writeJSON(w, status, e)
 }
 
+// errPasswordUnavailable marks a configured password that cannot be read.
+// The error it wraps names the env var or file, which only the server log
+// may show.
+var errPasswordUnavailable = errors.New("the configured password for this profile is unavailable; see the server log")
+
 // errorResponse maps an error from the LDAP layer to an HTTP status and body.
 func errorResponse(err error) (int, apiError) {
 	var certErr *ldapx.UntrustedCertError
 	var le *ldap.Error
 	switch {
+	case errors.Is(err, errPasswordUnavailable):
+		return http.StatusInternalServerError, apiError{Code: "password_unavailable", Message: errPasswordUnavailable.Error()}
 	case errors.As(err, &certErr):
 		return http.StatusBadGateway, apiError{Code: "tls_untrusted", Message: certErr.Error(), Certificates: certInfos(certErr.Certificates)}
 	// net.ErrClosed means the session's connection was closed under the
@@ -66,10 +73,6 @@ func errorResponse(err error) (int, apiError) {
 		return http.StatusUnauthorized, apiError{Code: "not_connected", Message: "connect to this profile first"}
 	case errors.Is(err, session.ErrTooManyConns):
 		return http.StatusConflict, apiError{Code: "too_many_connections", Message: "too many connections in this session; disconnect one first"}
-	// Checked before *ldap.Error: an expired cursor may wrap the server's
-	// rejection of the paging cookie.
-	case errors.Is(err, ldapx.ErrCursorExpired):
-		return http.StatusGone, apiError{Code: "cursor_expired", Message: "the listing expired, restart it from the first page"}
 	case errors.Is(err, ldapx.ErrInvalidRequest):
 		return http.StatusBadRequest, apiError{Code: "bad_request", Message: err.Error()}
 	case errors.Is(err, ldapx.ErrSecretFilter):
@@ -119,6 +122,24 @@ func errorResponse(err error) (int, apiError) {
 	// Unexpected errors may name local files such as a CA file; the caller
 	// logs err, the client only learns that something failed.
 	return http.StatusInternalServerError, apiError{Code: "internal", Message: "internal error; see the server log"}
+}
+
+// signInError is errorResponse's answer to a failed connect, as server mode
+// gives it to someone who has not signed in: nothing about the directory.
+// Every LDAP result is a wrong username or password, since a diagnostic or
+// a code such as AD's "account locked out" or 389-DS's 19 and 53 tells that
+// the account exists. A network or TLS failure keeps its code, without the
+// host name, the error text or the certificate chain.
+func signInError(status int, e apiError) (int, apiError) {
+	switch {
+	case e.Code == "network":
+		return status, apiError{Code: e.Code, Message: "cannot reach the directory server"}
+	case e.Code == "tls_untrusted":
+		return status, apiError{Code: e.Code, Message: "the directory server's certificate is not trusted"}
+	case e.LDAPResultCode != 0: // every other LDAP result
+		return http.StatusUnauthorized, apiError{Code: "invalid_credentials", Message: "invalid username or password"}
+	}
+	return status, e
 }
 
 func certInfos(certs []*x509.Certificate) []certInfo {

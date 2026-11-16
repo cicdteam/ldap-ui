@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -33,9 +34,9 @@ func TestParseFlags(t *testing.T) {
 	}
 	getenv := func(k string) string { return env[k] }
 
-	got, err := parseFlags([]string{"--base-path", "/ldap/"}, getenv, io.Discard)
+	got, err := parseArgs([]string{"--base-path", "/ldap/"}, getenv, io.Discard)
 	if err != nil {
-		t.Fatalf("parseFlags() error = %v", err)
+		t.Fatalf("parseArgs() error = %v", err)
 	}
 	want := config{
 		listen: "0.0.0.0:9000", basePath: "/ldap", dataDir: "/data",
@@ -43,17 +44,17 @@ func TestParseFlags(t *testing.T) {
 		sessionMaxAge: 8 * time.Hour,
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(config{})); diff != "" {
-		t.Errorf("parseFlags() mismatch (-want +got):\n%s", diff)
+		t.Errorf("parseArgs() mismatch (-want +got):\n%s", diff)
 	}
 
-	got, err = parseFlags([]string{"--listen", "127.0.0.1:1"}, getenv, io.Discard)
+	got, err = parseArgs([]string{"--listen", "127.0.0.1:1"}, getenv, io.Discard)
 	if err != nil || got.listen != "127.0.0.1:1" {
-		t.Errorf("parseFlags(--listen) = %q, %v, want the flag to win over env", got.listen, err)
+		t.Errorf("parseArgs(--listen) = %q, %v, want the flag to win over env", got.listen, err)
 	}
 
 	for _, bad := range []string{"ldap", "/a b", "/ldap/<x>", "/.", "/..", "/a/..", "/a/./b", "/a/../"} {
-		if _, err := parseFlags([]string{"--base-path", bad}, getenv, io.Discard); err == nil {
-			t.Errorf("parseFlags(--base-path %q) error = nil, want error", bad)
+		if _, err := parseArgs([]string{"--base-path", bad}, getenv, io.Discard); err == nil {
+			t.Errorf("parseArgs(--base-path %q) error = nil, want error", bad)
 		}
 	}
 }
@@ -79,15 +80,15 @@ func TestParseFlagsSecureCookies(t *testing.T) {
 			}
 			return ""
 		}
-		got, err := parseFlags(tc.args, getenv, io.Discard)
+		got, err := parseArgs(tc.args, getenv, io.Discard)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("%s: parseFlags(%q) error = nil, want error", tc.name, tc.args)
+				t.Errorf("%s: parseArgs(%q) error = nil, want error", tc.name, tc.args)
 			}
 			continue
 		}
 		if err != nil || got.secureCookies != tc.want {
-			t.Errorf("%s: parseFlags(%q) secureCookies = %v, %v, want %v, nil", tc.name, tc.args, got.secureCookies, err, tc.want)
+			t.Errorf("%s: parseArgs(%q) secureCookies = %v, %v, want %v, nil", tc.name, tc.args, got.secureCookies, err, tc.want)
 		}
 	}
 }
@@ -104,15 +105,15 @@ func TestParseFlagsSessionIdle(t *testing.T) {
 	}
 	noEnv := func(string) string { return "" }
 	for _, tc := range tests {
-		got, err := parseFlags([]string{"--session-idle", tc.value}, noEnv, io.Discard)
+		got, err := parseArgs([]string{"--session-idle", tc.value}, noEnv, io.Discard)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("parseFlags(--session-idle %s) error = nil, want error", tc.value)
+				t.Errorf("parseArgs(--session-idle %s) error = nil, want error", tc.value)
 			}
 			continue
 		}
 		if err != nil || got.sessionIdle != tc.want {
-			t.Errorf("parseFlags(--session-idle %s) = %v, %v, want %v, nil", tc.value, got.sessionIdle, err, tc.want)
+			t.Errorf("parseArgs(--session-idle %s) = %v, %v, want %v, nil", tc.value, got.sessionIdle, err, tc.want)
 		}
 	}
 }
@@ -132,13 +133,15 @@ func clearEnv(t *testing.T) {
 // with flag.ExitOnError, instead of failing with flag.ErrHelp.
 func TestRunHelp(t *testing.T) {
 	clearEnv(t)
-	if err := run([]string{"-h"}); err != nil {
-		t.Errorf("run(-h) = %v, want nil", err)
+	for _, args := range [][]string{{"-h"}, {"local", "-h"}, {"server", "-h"}} {
+		if err := run(args); err != nil {
+			t.Errorf("run(%q) = %v, want nil", args, err)
+		}
 	}
 }
 
-// TestRunVersion checks that --version prints the version and stops, even
-// when the LDAPLENS_* environment would fail validation.
+// TestRunVersion checks that --version prints the version and stops in every
+// mode, even when the LDAPLENS_* environment would fail validation.
 func TestRunVersion(t *testing.T) {
 	tests := []struct {
 		name, key, value string
@@ -151,6 +154,7 @@ func TestRunVersion(t *testing.T) {
 		{name: "missing auth token file", key: "LDAPLENS_AUTH_TOKEN_FILE", value: "/nonexistent/token"},
 		{name: "bad session idle", key: "LDAPLENS_SESSION_IDLE", value: "soon"},
 		{name: "bad session max age", key: "LDAPLENS_SESSION_MAX_AGE", value: "soon"},
+		{name: "data dir", key: "LDAPLENS_DATA_DIR", value: "/nonexistent"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -158,26 +162,205 @@ func TestRunVersion(t *testing.T) {
 			if tc.key != "" {
 				t.Setenv(tc.key, tc.value)
 			}
-			var out bytes.Buffer
-			if err := runTo([]string{"--version"}, &out); err != nil {
-				t.Fatalf("run(--version) with %s=%q = %v, want nil", tc.key, tc.value, err)
-			}
-			if got, want := out.String(), "ldaplens dev\n"; got != want {
-				t.Errorf("run(--version) with %s=%q printed %q, want %q", tc.key, tc.value, got, want)
+			for _, args := range [][]string{{"--version"}, {"local", "--version"}, {"server", "--version"}} {
+				var out bytes.Buffer
+				if err := runTo(args, &out); err != nil {
+					t.Errorf("run(%q) with %s=%q = %v, want nil", args, tc.key, tc.value, err)
+					continue
+				}
+				if got, want := out.String(), "ldaplens dev\n"; got != want {
+					t.Errorf("run(%q) with %s=%q printed %q, want %q", args, tc.key, tc.value, got, want)
+				}
 			}
 		})
 	}
 }
 
-func TestParseFlagsIdentity(t *testing.T) {
+func TestParseArgsMode(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	tests := []struct {
+		args    []string
+		want    mode
+		wantErr string
+	}{
+		{args: nil, want: modeLocal},
+		{args: []string{"local"}, want: modeLocal},
+		{args: []string{"server", "--config", "c.yaml"}, want: modeServer},
+		{args: []string{"--listen", "x:1"}, want: modeLocal},
+		{args: []string{"serve"}, wantErr: `unknown command "serve": want local or server`},
+		// A mode after the flags would otherwise be ignored.
+		{args: []string{"--listen", "x:1", "server"}, wantErr: `unexpected argument "server": the mode goes first`},
+	}
+	for _, tc := range tests {
+		got, err := parseArgs(tc.args, noEnv, io.Discard)
+		if tc.wantErr != "" {
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("parseArgs(%q) error = %v, want %q", tc.args, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil || got.mode != tc.want {
+			t.Errorf("parseArgs(%q) mode = %v, %v, want %v, nil", tc.args, got.mode, err, tc.want)
+		}
+	}
+}
+
+func TestServerPreset(t *testing.T) {
+	const noData = "server mode keeps no data; --data-dir is for local mode"
+	tests := []struct {
+		name    string
+		args    []string
+		env     map[string]string
+		wantErr string // empty wants no error
+	}{
+		{name: "no config", args: []string{"server"}, wantErr: "server mode needs --config"},
+		{name: "config from env", args: []string{"server"}, env: map[string]string{"LDAPLENS_CONFIG": "c.yaml"}},
+		{name: "data dir flag", args: []string{"server", "--config", "c.yaml", "--data-dir", "/d"}, wantErr: noData},
+		{name: "data dir env", args: []string{"server", "--config", "c.yaml"}, env: map[string]string{"LDAPLENS_DATA_DIR": "/d"}, wantErr: noData},
+		{name: "data dir in local mode", args: []string{"local", "--data-dir", "/d"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			getenv := func(k string) string { return tc.env[k] }
+			_, err := parseArgs(tc.args, getenv, io.Discard)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("parseArgs(%q) error = %v, want nil", tc.args, err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("parseArgs(%q) error = %v, want %q", tc.args, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCheckServer(t *testing.T) {
+	const token = "abcXYZ0129._~-ok" //nolint:gosec // test value, not a credential
+	configured := profile.Profile{Name: "corp", URL: "ldap://ldap.example.com", BindDN: "cn=reader,dc=example,dc=com", PasswordEnv: "CORP_PW"}
+	anonymous := profile.Profile{Name: "anon", URL: "ldap://ldap.example.com"}
+	template := profile.Profile{Name: "people", URL: "ldap://ldap.example.com", BindDNTemplate: "uid={user},dc=example,dc=com"}
+	typed := profile.Profile{Name: "admin", URL: "ldap://ldap.example.com", BindDN: "cn=admin,dc=example,dc=com"}
+	const tail = " binds with a configured password or anonymously; server mode needs --auth-token or --auth-token-file"
+	tests := []struct {
+		name     string
+		token    string
+		profiles []profile.Profile
+		wantErr  string // empty wants nil
+	}{
+		{name: "configured password without token", profiles: []profile.Profile{template, configured}, wantErr: "profile corp" + tail},
+		{name: "anonymous without token", profiles: []profile.Profile{anonymous}, wantErr: "profile anon" + tail},
+		{name: "configured password with token", token: token, profiles: []profile.Profile{configured}},
+		{name: "template only", profiles: []profile.Profile{template}},
+		{name: "typed bindDN only", profiles: []profile.Profile{typed}},
+		{name: "template and typed bindDN", profiles: []profile.Profile{template, typed}},
+	}
+	for _, tc := range tests {
+		err := checkServer(config{mode: modeServer, authToken: tc.token}, tc.profiles)
+		if tc.wantErr == "" {
+			if err != nil {
+				t.Errorf("%s: checkServer() = %v, want nil", tc.name, err)
+			}
+			continue
+		}
+		if err == nil || err.Error() != tc.wantErr {
+			t.Errorf("%s: checkServer() = %v, want %q", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
+// TestRunPresets checks the presets runTo applies before it listens. The
+// port is taken, so that runTo returns instead of serving: server mode
+// refuses an anonymous profile without a token, and local mode keeps a
+// token in its data dir.
+func TestRunPresets(t *testing.T) {
+	clearEnv(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer taken.Close()
+	addr := taken.Addr().String()
+
+	config := filepath.Join(t.TempDir(), "connections.yaml")
+	if err := os.WriteFile(config, []byte("connections:\n  - name: anon\n    url: ldap://ldap.example.com\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", config, err)
+	}
+	args := []string{"server", "--config", config, "--listen", addr}
+	want := "profile anon binds with a configured password or anonymously; server mode needs --auth-token or --auth-token-file"
+	if err := runTo(args, io.Discard); err == nil || err.Error() != want {
+		t.Errorf("runTo(%q) = %v, want %q", args, err, want)
+	}
+
+	dataDir := t.TempDir()
+	args = []string{"local", "--data-dir", dataDir, "--listen", addr}
+	if err := runTo(args, io.Discard); err == nil {
+		t.Errorf("runTo(%q) = nil, want the error of listening on a taken port", args)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "token")); err != nil {
+		t.Errorf("runTo(%q) kept no token: %v", args, err)
+	}
+}
+
+func TestLocalToken(t *testing.T) {
+	dir := t.TempDir()
+	first, err := localToken(dir)
+	if err != nil {
+		t.Fatalf("localToken() error = %v", err)
+	}
+	if !authTokenPattern.MatchString(first) {
+		t.Errorf("localToken() = %q, want a token matching %v", first, authTokenPattern)
+	}
+	path := filepath.Join(dir, "token")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat(%q) error = %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("localToken() created %s with mode %v, want 0600", path, got)
+	}
+	if second, err := localToken(dir); err != nil || second != first {
+		t.Errorf("localToken() second call = %q, %v, want %q, nil", second, err, first)
+	}
+
+	bad := t.TempDir()
+	path = filepath.Join(bad, "token")
+	if err := os.WriteFile(path, []byte("short\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+	if _, err := localToken(bad); err == nil || !strings.Contains(err.Error(), path) {
+		t.Errorf("localToken() with a bad token file error = %v, want an error naming %s", err, path)
+	}
+}
+
+func TestLocalDefaultDataDir(t *testing.T) {
+	tmp := t.TempDir()
+	got, err := defaultDataDir(func() (string, error) { return tmp, nil })
+	want := filepath.Join(tmp, "ldaplens")
+	if err != nil || got != want {
+		t.Fatalf("defaultDataDir() = %q, %v, want %q, nil", got, err, want)
+	}
+	info, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("os.Stat(%q) error = %v", want, err)
+	}
+	if perm := info.Mode().Perm(); !info.IsDir() || perm != 0o700 {
+		t.Errorf("defaultDataDir() made %s with mode %v, want a directory with 0700", want, info.Mode())
+	}
+
+	noDir := func() (string, error) { return "", errors.New("$HOME is not defined") }
+	if got, err := defaultDataDir(noDir); got != "" || err != nil {
+		t.Errorf("defaultDataDir() without a config dir = %q, %v, want \"\", nil", got, err)
+	}
+}
+
+func TestParseFlagsTrustedProxies(t *testing.T) {
 	env := map[string]string{"LDAPLENS_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.7,,2001:db8::1"}
 	getenv := func(k string) string { return env[k] }
-	got, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, getenv, io.Discard)
+	got, err := parseArgs(nil, getenv, io.Discard)
 	if err != nil {
-		t.Fatalf("parseFlags(--identity-header) error = %v", err)
-	}
-	if got.identityHeader != "X-Auth-Request-Email" {
-		t.Errorf("parseFlags(--identity-header) identityHeader = %q, want X-Auth-Request-Email", got.identityHeader)
+		t.Fatalf("parseArgs() error = %v", err)
 	}
 	want := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),
@@ -185,41 +368,21 @@ func TestParseFlagsIdentity(t *testing.T) {
 		netip.MustParsePrefix("2001:db8::1/128"),
 	}
 	if diff := cmp.Diff(want, got.trustedProxies, cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
-		t.Errorf("parseFlags() trustedProxies mismatch (-want +got):\n%s", diff)
+		t.Errorf("parseArgs() trustedProxies mismatch (-want +got):\n%s", diff)
 	}
 
 	noEnv := func(string) string { return "" }
-	if _, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, noEnv, io.Discard); err == nil {
-		t.Errorf("parseFlags(--identity-header without --trusted-proxies) error = nil, want error")
-	}
-	args := []string{"--identity-header", "X-Auth-Request-Email", "--trusted-proxies", "10.0.0.0/8,10.0.0.0/99"}
-	if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "10.0.0.0/99") {
-		t.Errorf("parseFlags(%q) error = %v, want an error naming 10.0.0.0/99", args, err)
-	}
-	// Headers that carry credentials would put them in the log.
-	for _, h := range []string{"Authorization", "proxy-authorization", "COOKIE"} {
-		args := []string{"--identity-header", h, "--trusted-proxies", "10.0.0.0/8"}
-		if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), h) {
-			t.Errorf("parseFlags(%q) error = %v, want an error naming %s", args, err, h)
-		}
+	args := []string{"--trusted-proxies", "10.0.0.0/8,10.0.0.0/99"}
+	if _, err := parseArgs(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "10.0.0.0/99") {
+		t.Errorf("parseArgs(%q) error = %v, want an error naming 10.0.0.0/99", args, err)
 	}
 }
 
-// TestRunIdentityUserNeedsHeader checks that a profile tied to the proxy's
-// identity is a startup error without --identity-header: nobody could
-// connect to it.
-func TestRunIdentityUserNeedsHeader(t *testing.T) {
-	clearEnv(t)
-	cfg := filepath.Join(t.TempDir(), "connections.yaml")
-	yaml := "connections:\n  - name: corp-ad\n    url: ldaps://dc1.corp.example:636\n    bindDNTemplate: \"{user}@corp.example\"\n    identityUser: localpart\n"
-	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Port -1 cannot be listened on, so that without the check run fails
-	// there instead of serving.
-	err := run([]string{"--config", cfg, "--listen", "127.0.0.1:-1"})
-	if err == nil || !strings.Contains(err.Error(), "corp-ad") || !strings.Contains(err.Error(), "--identity-header") {
-		t.Errorf("run(identityUser profile, no --identity-header) = %v, want an error naming corp-ad and --identity-header", err)
+func TestParseFlagsNoIdentityHeader(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	args := []string{"--identity-header", "X-User", "--trusted-proxies", "10.0.0.0/8"}
+	if _, err := parseArgs(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -identity-header") {
+		t.Errorf("parseArgs(%q) error = %v, want an unknown flag error", args, err)
 	}
 }
 
@@ -238,15 +401,15 @@ func TestParseFlagsAuthToken(t *testing.T) {
 	}
 	noEnv := func(string) string { return "" }
 	for _, tc := range tests {
-		got, err := parseFlags([]string{"--auth-token", tc.value}, noEnv, io.Discard)
+		got, err := parseArgs([]string{"--auth-token", tc.value}, noEnv, io.Discard)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("%s: parseFlags(--auth-token %q) error = nil, want error", tc.name, tc.value)
+				t.Errorf("%s: parseArgs(--auth-token %q) error = nil, want error", tc.name, tc.value)
 			}
 			continue
 		}
 		if err != nil || got.authToken != tc.value {
-			t.Errorf("%s: parseFlags(--auth-token %q) = %q, %v, want %q, nil", tc.name, tc.value, got.authToken, err, tc.value)
+			t.Errorf("%s: parseArgs(--auth-token %q) = %q, %v, want %q, nil", tc.name, tc.value, got.authToken, err, tc.value)
 		}
 	}
 
@@ -256,8 +419,8 @@ func TestParseFlagsAuthToken(t *testing.T) {
 		}
 		return ""
 	}
-	if _, err := parseFlags(nil, envShort, io.Discard); err == nil {
-		t.Errorf("parseFlags() with LDAPLENS_AUTH_TOKEN=short error = nil, want error")
+	if _, err := parseArgs(nil, envShort, io.Discard); err == nil {
+		t.Errorf("parseArgs() with LDAPLENS_AUTH_TOKEN=short error = nil, want error")
 	}
 }
 
@@ -271,16 +434,16 @@ func TestParseFlagsKeepsEnvTokenOutOfUsage(t *testing.T) {
 	}
 	for _, args := range [][]string{{"--bogus"}, {"-h"}} {
 		var usage bytes.Buffer
-		if _, err := parseFlags(args, getenv, &usage); err == nil {
-			t.Errorf("parseFlags(%q) error = nil, want error", args)
+		if _, err := parseArgs(args, getenv, &usage); err == nil {
+			t.Errorf("parseArgs(%q) error = nil, want error", args)
 		}
 		if strings.Contains(usage.String(), fromEnv) {
-			t.Errorf("parseFlags(%q) usage output contains the env auth token:\n%s", args, usage.String())
+			t.Errorf("parseArgs(%q) usage output contains the env auth token:\n%s", args, usage.String())
 		}
 	}
-	got, err := parseFlags(nil, getenv, io.Discard)
+	got, err := parseArgs(nil, getenv, io.Discard)
 	if err != nil || got.authToken != fromEnv {
-		t.Errorf("parseFlags() authToken = %q, %v, want %q from LDAPLENS_AUTH_TOKEN", got.authToken, err, fromEnv)
+		t.Errorf("parseArgs() authToken = %q, %v, want %q from LDAPLENS_AUTH_TOKEN", got.authToken, err, fromEnv)
 	}
 }
 
@@ -367,18 +530,18 @@ func TestParseFlagsTokenFile(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := func(k string) string { return tc.env[k] }
-			got, err := parseFlags(tc.args, getenv, io.Discard)
+			got, err := parseArgs(tc.args, getenv, io.Discard)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("parseFlags(%q) error = %v, want an error naming %q", tc.args, err, tc.wantErr)
+					t.Fatalf("parseArgs(%q) error = %v, want an error naming %q", tc.args, err, tc.wantErr)
 				}
 				if strings.Contains(err.Error(), "abc123") {
-					t.Errorf("parseFlags(%q) error = %v, want it not to echo the token", tc.args, err)
+					t.Errorf("parseArgs(%q) error = %v, want it not to echo the token", tc.args, err)
 				}
 				return
 			}
 			if err != nil || got.authToken != tc.want {
-				t.Errorf("parseFlags(%q) authToken = %q, %v, want %q, nil", tc.args, got.authToken, err, tc.want)
+				t.Errorf("parseArgs(%q) authToken = %q, %v, want %q, nil", tc.args, got.authToken, err, tc.want)
 			}
 		})
 	}
@@ -387,16 +550,16 @@ func TestParseFlagsTokenFile(t *testing.T) {
 func TestParseFlagsSessionIdleEnv(t *testing.T) {
 	env := map[string]string{"LDAPLENS_SESSION_IDLE": "5m"}
 	getenv := func(k string) string { return env[k] }
-	if got, err := parseFlags(nil, getenv, io.Discard); err != nil || got.sessionIdle != 5*time.Minute {
-		t.Errorf("parseFlags() with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 5m, nil", got.sessionIdle, err)
+	if got, err := parseArgs(nil, getenv, io.Discard); err != nil || got.sessionIdle != 5*time.Minute {
+		t.Errorf("parseArgs() with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 5m, nil", got.sessionIdle, err)
 	}
 	args := []string{"--session-idle", "1m"}
-	if got, err := parseFlags(args, getenv, io.Discard); err != nil || got.sessionIdle != time.Minute {
-		t.Errorf("parseFlags(%q) with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 1m, nil", args, got.sessionIdle, err)
+	if got, err := parseArgs(args, getenv, io.Discard); err != nil || got.sessionIdle != time.Minute {
+		t.Errorf("parseArgs(%q) with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 1m, nil", args, got.sessionIdle, err)
 	}
 	env["LDAPLENS_SESSION_IDLE"] = "soon"
-	if _, err := parseFlags(nil, getenv, io.Discard); err == nil {
-		t.Errorf("parseFlags() with LDAPLENS_SESSION_IDLE=soon error = nil, want error")
+	if _, err := parseArgs(nil, getenv, io.Discard); err == nil {
+		t.Errorf("parseArgs() with LDAPLENS_SESSION_IDLE=soon error = nil, want error")
 	}
 }
 
@@ -424,15 +587,15 @@ func TestParseFlagsSessionMaxAge(t *testing.T) {
 			}
 			return ""
 		}
-		got, err := parseFlags(tc.args, getenv, io.Discard)
+		got, err := parseArgs(tc.args, getenv, io.Discard)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("%s: parseFlags(%q) error = nil, want error", tc.name, tc.args)
+				t.Errorf("%s: parseArgs(%q) error = nil, want error", tc.name, tc.args)
 			}
 			continue
 		}
 		if err != nil || got.sessionMaxAge != tc.want {
-			t.Errorf("%s: parseFlags(%q) sessionMaxAge = %v, %v, want %v, nil", tc.name, tc.args, got.sessionMaxAge, err, tc.want)
+			t.Errorf("%s: parseArgs(%q) sessionMaxAge = %v, %v, want %v, nil", tc.name, tc.args, got.sessionMaxAge, err, tc.want)
 		}
 	}
 }
@@ -503,46 +666,39 @@ func TestServeDrainTimeout(t *testing.T) {
 	})
 }
 
-func TestKubernetesTokenWarning(t *testing.T) {
+func TestStartupLoginLink(t *testing.T) {
+	const token = "abcXYZ0129._~-ok" //nolint:gosec // test value, not a credential
 	catalog, err := profile.NewCatalog(nil, "")
 	if err != nil {
 		t.Fatalf("profile.NewCatalog() error = %v", err)
 	}
+	const link = "http://localhost:8080/?token=" + token
+	const noData = `msg="saving profiles disabled (no data dir)"`
 	tests := []struct {
-		name      string
-		generated bool
-		k8sHost   string
-		wantWarn  bool
+		name    string
+		cfg     config
+		link    bool
+		want    []string
+		wantNot []string
 	}{
-		{name: "generated in kubernetes", generated: true, k8sHost: "10.96.0.1", wantWarn: true},
-		{name: "generated outside kubernetes", generated: true},
-		{name: "set in kubernetes", k8sHost: "10.96.0.1"},
+		{name: "stored token", cfg: config{dataDir: "/d", authToken: token}, link: true, want: []string{link}, wantNot: []string{noData}},
+		{name: "token set", cfg: config{dataDir: "/d", authToken: token}, wantNot: []string{"token=", noData}},
+		{name: "no data dir", cfg: config{authToken: token}, link: true, want: []string{link, noData}},
+		{name: "server", cfg: config{mode: modeServer, authToken: token}, wantNot: []string{"token=", noData}},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			getenv := func(k string) string {
-				if k == "KUBERNETES_SERVICE_HOST" {
-					return tc.k8sHost
-				}
-				return ""
+		var logs bytes.Buffer
+		logStartup(slog.New(slog.NewTextHandler(&logs, nil)), tc.cfg, "[::]:8080", catalog, tc.link)
+		for _, s := range tc.want {
+			if !strings.Contains(logs.String(), s) {
+				t.Errorf("%s: logStartup() logs lack %q:\n%s", tc.name, s, logs.String())
 			}
-			var logs bytes.Buffer
-			cfg := config{listen: "0.0.0.0:8080", authToken: "abcXYZ0129._~-ok"} //nolint:gosec // test value, not a credential
-			logStartup(slog.New(slog.NewTextHandler(&logs, nil)), getenv, cfg, "[::]:8080", catalog, tc.generated)
-			var warn string
-			for _, line := range strings.Split(logs.String(), "\n") {
-				if strings.Contains(line, "level=WARN") {
-					warn = line
-				}
+		}
+		for _, s := range tc.wantNot {
+			if strings.Contains(logs.String(), s) {
+				t.Errorf("%s: logStartup() logs contain %q:\n%s", tc.name, s, logs.String())
 			}
-			if got := warn != ""; got != tc.wantWarn {
-				t.Fatalf("logStartup(generated=%v, KUBERNETES_SERVICE_HOST=%q) warned = %v, want %v; logs:\n%s",
-					tc.generated, tc.k8sHost, got, tc.wantWarn, logs.String())
-			}
-			if want := "set LDAPLENS_AUTH_TOKEN or LDAPLENS_AUTH_TOKEN_FILE from a Secret"; tc.wantWarn && !strings.Contains(warn, want) {
-				t.Errorf("logStartup() warning = %q, want it to contain %q", warn, want)
-			}
-		})
+		}
 	}
 }
 
@@ -563,35 +719,18 @@ func TestListeningLogFields(t *testing.T) {
 
 	var logs bytes.Buffer
 	cfg := config{basePath: "/ldap", dataDir: dir}
-	logStartup(slog.New(slog.NewJSONHandler(&logs, nil)), func(string) string { return "" }, cfg, "127.0.0.1:1234", catalog, false)
+	logStartup(slog.New(slog.NewJSONHandler(&logs, nil)), cfg, "127.0.0.1:1234", catalog, false)
 	var got map[string]any
 	if err := json.NewDecoder(&logs).Decode(&got); err != nil {
 		t.Fatalf("decoding the first log line: %v", err)
 	}
 	delete(got, "time")
 	want := map[string]any{
-		"level": "INFO", "msg": "listening", "version": "dev", "addr": "127.0.0.1:1234",
+		"level": "INFO", "msg": "listening", "version": "dev", "mode": "local", "addr": "127.0.0.1:1234",
 		"basePath": "/ldap", "profiles": 2.0, "saved": 1.0, "dataDir": dir,
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("logStartup() listening line mismatch (-want +got):\n%s", diff)
-	}
-}
-
-func TestIsLoopback(t *testing.T) {
-	tests := map[string]bool{
-		"127.0.0.1:8080": true,
-		"localhost:8080": true,
-		"[::1]:8080":     true,
-		"0.0.0.0:8080":   false,
-		":8080":          false,
-		"10.0.0.5:8080":  false,
-		"garbage":        false,
-	}
-	for addr, want := range tests {
-		if got := isLoopback(addr); got != want {
-			t.Errorf("isLoopback(%q) = %v, want %v", addr, got, want)
-		}
 	}
 }
 
@@ -627,25 +766,5 @@ func TestNewHTTPServerTimeouts(t *testing.T) {
 	}
 	if srv.Handler == nil {
 		t.Errorf("newHTTPServer().Handler = nil, want the given handler")
-	}
-}
-
-func TestNeedsToken(t *testing.T) {
-	tests := []struct {
-		listen       string
-		allowedHosts []string
-		want         bool
-	}{
-		{listen: "127.0.0.1:8080", want: false},
-		{listen: "[::1]:8080", want: false},
-		{listen: "localhost:8080", want: false},
-		{listen: "0.0.0.0:8080", want: true},
-		{listen: "127.0.0.1:8080", allowedHosts: []string{"ldap.example.com"}, want: true},
-		{listen: ":8080", want: true},
-	}
-	for _, tc := range tests {
-		if got := needsToken(tc.listen, tc.allowedHosts); got != tc.want {
-			t.Errorf("needsToken(%q, %q) = %v, want %v", tc.listen, tc.allowedHosts, got, tc.want)
-		}
 	}
 }
