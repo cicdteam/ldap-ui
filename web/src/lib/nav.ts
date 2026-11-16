@@ -20,10 +20,9 @@ export function reconnectURL(pathname: string, search: string, basename: string)
   return `/?${new URLSearchParams({ connect: decodeURIComponent(m[1]), next: path + search })}`
 }
 
+/** The result columns after Name, which every search shows first. */
 export function defaultColumns(info: Info): string[] {
-  return info.activeDirectory
-    ? ['cn', 'sAMAccountName', 'mail', 'objectClass']
-    : ['cn', 'uid', 'mail', 'objectClass']
+  return [info.activeDirectory ? 'sAMAccountName' : 'uid', 'mail']
 }
 
 export function parseColumns(text: string): string[] {

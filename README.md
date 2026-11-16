@@ -173,9 +173,17 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   the search base, the scope, a button that uses the selected entry as the
   base, and the result columns, picked from the schema's attribute names. Next
   to it, the filter builder and the recent and saved searches.
-- **Search results** (center): a search returns at most a limit of entries in
-  one request: 500, or the search API's `sizeLimit`, up to 5000. The
-  response says `more` when the search matches more. Nothing is kept on the
+- **Search results** (center): each row leads with the entry's name:
+  `displayName`, else `cn`, else the value of its RDN. The other columns are
+  `uid` (`sAMAccountName` on Active Directory) and `mail` until you pick
+  others. The header and the rows share one column layout, so they always
+  line up; more columns than the pane fits scroll sideways together. A row's
+  tooltip is its DN, and ⌘C / Ctrl+C in the list copies the DN of the
+  selected row (unless text is selected). A search also asks for
+  `displayName` and `cn` to show the name, so an LDIF export holds them too.
+
+  A search returns at most a limit of entries in one request: 500, or the
+  search API's `sizeLimit`, up to 5000. The response says `more` when the search matches more. Nothing is kept on the
   server between requests, so "Load more" runs the search again with the
   next limit: 1000, then 2000, then 5000; the rows shown stay until the
   bigger answer arrives. If it fails, the error offers Retry and "Show the
@@ -228,6 +236,7 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 | `/` | Focus the search bar (outside text fields) |
 | ↵ / Enter, ⌘↵ / Ctrl+Enter | Run the search or open the DN (in the search bar) |
 | ⇧⌥F / Shift+Alt+F | Format the filter (in the search bar) |
+| ⌘C / Ctrl+C | Copy the DN of the selected row (in the results list, with no text selected) |
 | `E` | Edit mode in the inspector (ignored while focus is in a text field, the tree, the results list or a dialog) |
 | ⌘S / Ctrl+S | Review the staged changes |
 | ⌘Z / Ctrl+Z, ⌘⇧Z / Ctrl+Shift+Z | Undo, redo a staged change (outside text fields) |

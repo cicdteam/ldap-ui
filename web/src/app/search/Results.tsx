@@ -5,11 +5,22 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
 import { cellValue, toCSV } from '../../lib/csv'
-import { parentDN, rdnDisplay, sameDN, splitDN } from '../../lib/dn'
+import { sameDN } from '../../lib/dn'
 import { entriesToLDIF } from '../../lib/ldif'
 import { defaultColumns } from '../../lib/nav'
 import { rowHeight, usePrefs } from '../../lib/prefs'
-import { RESULT_LIMITS, nextLimit, nextSort, sortEntries, type Sort } from '../../lib/results'
+import {
+  NAME_ATTRS,
+  NAME_COLUMN,
+  RESULT_LIMITS,
+  asText,
+  nameOf,
+  nextLimit,
+  nextSort,
+  sortEntries,
+  type Sort,
+} from '../../lib/results'
+import { isModKey } from '../../lib/shortcuts'
 import type { SearchState } from '../../lib/storage'
 import { ChangeDot } from '../../ui/Badge'
 import { Banner, ErrorBanner } from '../../ui/Banner'
@@ -26,6 +37,11 @@ import { searchKey } from '../queries'
 // this much at the bottom of the viewport. ponytail: assumes the 16px rem that h-7 is
 // based on; measure the header if the root font size ever changes.
 const HEADER_HEIGHT = 29
+
+// The smallest widths of the Name column and of each other column. Name, uid and mail fit a
+// 22rem pane; more columns scroll sideways, header and rows together.
+const NAME_REM = 10
+const COLUMN_REM = 6
 
 function Examples() {
   const ws = useWorkspace()
@@ -99,7 +115,8 @@ function Listing({ search }: { search: SearchState }) {
           base: search.base || ws.info.baseDN,
           scope: search.scope,
           filter: search.filter,
-          attributes: attrs,
+          // Duplicates are harmless: the server returns each attribute once.
+          attributes: [...NAME_ATTRS, ...attrs],
           sizeLimit: limit,
         },
         signal,
@@ -151,13 +168,20 @@ function Listing({ search }: { search: SearchState }) {
     } else if (e.key === 'Home' || e.key === 'End') {
       e.preventDefault()
       move(e.key === 'Home' ? 0 : rows.length - 1)
+    } else if (isModKey(e, 'c') && active >= 0 && !getSelection()?.toString()) {
+      // The row shows the name; Mod+C copies its DN unless text is selected.
+      void navigator.clipboard?.writeText(rows[active].dn)
     }
   }
 
-  const columns = ['dn', ...attrs]
+  const columns = [NAME_COLUMN, ...attrs]
+  // One template for the header and every row, all inside one box at least as wide as the
+  // columns' minimums, so the cells line up and the row backgrounds reach the last column.
   const grid = {
-    gridTemplateColumns: `minmax(16rem, 2fr) repeat(${attrs.length}, minmax(7rem, 1fr))`,
+    gridTemplateColumns: `minmax(${NAME_REM}rem, 2fr) repeat(${attrs.length}, minmax(${COLUMN_REM}rem, 1fr))`,
   }
+  const minWidth = `${NAME_REM + attrs.length * COLUMN_REM}rem`
+  const items = virt.getVirtualItems()
   const canceled = q.isPending && q.fetchStatus === 'idle'
 
   return (
@@ -198,7 +222,7 @@ function Listing({ search }: { search: SearchState }) {
             size="sm"
             variant="ghost"
             disabled={!rows.length}
-            title="Export loaded rows as LDIF (the selected columns only)"
+            title="Export loaded rows as LDIF (the columns, plus displayName and cn for the name)"
             onClick={() => download(`${ws.conn}-search.ldif`, entriesToLDIF(rows), 'text/plain')}
           >
             <Download className="h-3.5 w-3.5" /> LDIF
@@ -275,77 +299,81 @@ function Listing({ search }: { search: SearchState }) {
         onKeyDown={onKeyDown}
         className="min-h-0 flex-1 overflow-auto outline-none"
       >
-        <div
-          role="row"
-          style={grid}
-          className="sticky top-0 z-10 grid min-w-max border-b border-border bg-panel text-xs"
-        >
-          {columns.map((c) => {
-            const sorted = sort?.column === c
-            return (
-              <div
-                key={c}
-                role="columnheader"
-                aria-sort={sorted ? (sort.desc ? 'descending' : 'ascending') : 'none'}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSort(nextSort(sort, c))}
-                  className="flex h-7 w-full items-center gap-1 px-2 text-left font-semibold hover:bg-hover"
+        <div style={{ minWidth }}>
+          <div
+            role="row"
+            style={grid}
+            className="sticky top-0 z-10 grid border-b border-border bg-panel text-xs"
+          >
+            {columns.map((c) => {
+              const sorted = sort?.column === c
+              return (
+                <div
+                  key={c}
+                  role="columnheader"
+                  aria-sort={sorted ? (sort.desc ? 'descending' : 'ascending') : 'none'}
+                  className="min-w-0"
                 >
-                  {c === 'dn' ? 'Entry' : c}
-                  {sorted &&
-                    (sort.desc ? (
-                      <ArrowDown className="h-3 w-3" />
-                    ) : (
-                      <ArrowUp className="h-3 w-3" />
-                    ))}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-        {q.isSuccess && rows.length === 0 && <p className="p-4 text-muted">No entries match.</p>}
-        <div style={{ height: virt.getTotalSize(), position: 'relative' }} className="min-w-max">
-          {virt.getVirtualItems().map((v) => {
-            const e = rows[v.index]
-            const rdns = splitDN(e.dn)
-            const selected = v.index === active
-            return (
-              <div
-                key={e.dn}
-                id={`result-${v.index}`}
-                role="row"
-                aria-selected={selected}
-                onClick={() => ws.select(e.dn)}
-                style={{ ...grid, height: v.size, transform: `translateY(${v.start}px)` }}
-                className={cn(
-                  'absolute top-0 left-0 grid w-full cursor-default items-center border-b border-border/50 hover:bg-hover',
-                  selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
-                )}
-              >
-                <div role="gridcell" className="truncate px-2" title={e.dn}>
-                  {entryChanges(batch, e.dn) && (
-                    <span className="mr-1 align-middle">
-                      <ChangeDot />
-                    </span>
-                  )}
-                  <span className="font-medium">{rdns[0] ? rdnDisplay(rdns[0]) : e.dn}</span>
-                  <span className="ml-1 font-mono text-[11px] text-muted">{parentDN(e.dn)}</span>
-                </div>
-                {attrs.map((c) => (
-                  <div
-                    key={c}
-                    role="gridcell"
-                    className="truncate px-2 font-mono text-xs"
-                    title={cellValue(e, c)}
+                  <button
+                    type="button"
+                    onClick={() => setSort(nextSort(sort, c))}
+                    className="flex h-7 w-full items-center gap-1 px-2 text-left font-semibold hover:bg-hover"
                   >
-                    {cellValue(e, c)}
+                    <span className="truncate">{c === NAME_COLUMN ? 'Name' : c}</span>
+                    {sorted &&
+                      (sort.desc ? (
+                        <ArrowDown className="h-3 w-3 shrink-0" />
+                      ) : (
+                        <ArrowUp className="h-3 w-3 shrink-0" />
+                      ))}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          {q.isSuccess && rows.length === 0 && <p className="p-4 text-muted">No entries match.</p>}
+          {/* Rows stay in normal flow under the header; the padding stands in for the rows
+              scrolled past, the height for all of them. */}
+          <div style={{ height: virt.getTotalSize(), paddingTop: items[0]?.start ?? 0 }}>
+            {items.map((v) => {
+              const e = rows[v.index]
+              const selected = v.index === active
+              return (
+                <div
+                  key={e.dn}
+                  id={`result-${v.index}`}
+                  role="row"
+                  aria-selected={selected}
+                  title={e.dn}
+                  onClick={() => ws.select(e.dn)}
+                  style={{ ...grid, height: v.size }}
+                  className={cn(
+                    'grid cursor-default items-center border-b border-border/50 hover:bg-hover',
+                    selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
+                  )}
+                >
+                  <div role="gridcell" className="truncate px-2 font-medium">
+                    {entryChanges(batch, e.dn) && (
+                      <span className="mr-1 align-middle">
+                        <ChangeDot />
+                      </span>
+                    )}
+                    {nameOf(asText(e))}
                   </div>
-                ))}
-              </div>
-            )
-          })}
+                  {attrs.map((c) => (
+                    <div
+                      key={c}
+                      role="gridcell"
+                      className="truncate px-2 font-mono text-xs"
+                      title={cellValue(e, c)}
+                    >
+                      {cellValue(e, c)}
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>

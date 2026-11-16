@@ -94,7 +94,7 @@ test('a failed Load more gives the first rows back; running the search again sta
   )
   await connect(page, 'demo')
   // The demo's default columns, so Run below repeats this very search.
-  await page.goto(`c/demo/${search('(uid=flaky)', 'sub')}&attrs=cn,uid,mail,objectClass`)
+  await page.goto(`c/demo/${search('(uid=flaky)', 'sub')}&attrs=uid,mail`)
   const more = page.getByRole('button', exact('Load more'))
   await expect(count(page)).toHaveText('1 entry, more on the server')
   await more.click()
