@@ -12,7 +12,16 @@ test('plain text runs a name search', async ({ page }) => {
   await expect(page).toHaveURL(/filter=%28%7C%28cn%3D\*doe\*%29/)
   await expect(results(page).getByRole('row', { name: /Jane Doe/ })).toBeVisible()
   await expect(results(page).getByRole('row', { name: /Doe, John/ })).toBeVisible()
-  // The bar keeps the text as typed.
+  // The bar keeps the text as typed, also when the columns change and after a reload.
+  await expect(queryBar(page)).toHaveText('doe')
+  await page.getByRole('button', exact('Columns')).click()
+  const add = page.getByRole('combobox', exact('Add a column'))
+  await add.fill('description')
+  await add.press('Enter')
+  await page.keyboard.press('Escape')
+  await expect(page).toHaveURL(/attrs=uid%2Cmail%2Cdescription/)
+  await expect(queryBar(page)).toHaveText('doe')
+  await page.reload()
   await expect(queryBar(page)).toHaveText('doe')
 })
 
@@ -52,4 +61,32 @@ test('/ focuses the bar from the tree', async ({ page }) => {
   await expect(queryBar(page)).toBeFocused()
   // The key focuses, it does not type: the bar shows its placeholder.
   await expect(queryBar(page).locator('.cm-placeholder')).toBeVisible()
+})
+
+test('Recent and saved searches: save the current search, run it again', async ({ page }) => {
+  await connect(page, 'demo')
+  await queryBar(page).click()
+  await page.keyboard.type('doe')
+  await page.keyboard.press('Enter')
+  await expect(results(page).getByRole('row', { name: /Jane Doe/ })).toBeVisible()
+
+  const open = () => page.getByRole('button', exact('Recent and saved searches')).click()
+  const popover = page.getByRole('dialog')
+  await open()
+  // Recent shows the name as typed, not its filter.
+  await expect(popover.getByRole('button', { name: /^doe\s*sub under base DN$/ })).toBeVisible()
+  await popover.getByPlaceholder('Name this search').fill('Does')
+  await popover.getByRole('button', exact('Save')).click()
+  const saved = popover.getByRole('button', { name: /^Does\s*doe\s*sub/ })
+  await expect(saved).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('button', exact('Close the list')).click()
+  await expect(results(page)).toHaveCount(0)
+  await expect(queryBar(page).locator('.cm-placeholder')).toBeVisible()
+  await open()
+  await saved.click()
+  await expect(results(page).getByRole('row', { name: /Jane Doe/ })).toBeVisible()
+  await expect(page).toHaveURL(/filter=%28%7C%28cn%3D\*doe\*%29/)
+  await expect(queryBar(page)).toHaveText('doe')
 })

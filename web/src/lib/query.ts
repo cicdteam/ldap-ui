@@ -25,3 +25,17 @@ export function classifyQuery(text: string, baseDN: string): QueryKind {
   if (/[(=]/.test(t)) return { kind: 'filter', filter: t }
   return { kind: 'name', filter: nameFilter(t) }
 }
+
+/**
+ * The text whose name search is filter (nameFilter(text) === filter), so the bar, Recent and Saved
+ * show what was typed; null for any other filter, and for text the bar would not run as a name.
+ */
+export function nameQuery(filter: string): string | null {
+  // The escaped text holds no raw "*", "(" or ")".
+  const m = /^\(\|\(cn=\*([^*()]*)\*\)/.exec(filter)
+  if (!m) return null
+  const text = m[1].replace(/\\([0-9a-f]{2})/g, (_, hex: string) =>
+    String.fromCharCode(parseInt(hex, 16)),
+  )
+  return text && !/[(=]/.test(text) && nameFilter(text) === filter ? text : null
+}

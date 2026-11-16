@@ -182,7 +182,8 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 - **Search bar** (header): one line that takes three kinds of input; Enter
   runs it.
   - Plain text (`doe`, `John Doe`) searches by name: `cn` and `displayName`
-    containing it, `uid`, `sAMAccountName` and `mail` starting with it.
+    containing it, `uid`, `sAMAccountName` and `mail` starting with it. The
+    bar, Recent and Saved show the name, not the filter it runs.
   - Text with `=` or `(` is an RFC 4515 filter (`uid=jdoe`,
     `(&(objectClass=person)(cn=a*))`, `memberOf=cn=devs,ou=groups,dc=example,dc=org`),
     with highlighting, completion from the schema inside parentheses and inline

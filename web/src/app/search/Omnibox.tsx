@@ -3,7 +3,7 @@ import { ChevronDown, Crosshair, History, Search, SlidersHorizontal, Trash2, X }
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { format, fromGroup, parse, serialize, toGroup, type Group } from '../../lib/filter'
 import { defaultColumns } from '../../lib/nav'
-import { classifyQuery } from '../../lib/query'
+import { classifyQuery, nameQuery } from '../../lib/query'
 import { keys, pushHistory, type SavedSearch, type SearchState } from '../../lib/storage'
 import type { Scope } from '../../lib/types'
 import { Button } from '../../ui/Button'
@@ -25,9 +25,12 @@ interface Draft {
   columns: string[]
 }
 
+// A name search shows the name typed, not its filter.
+const queryText = (s: SearchState) => nameQuery(s.filter) ?? s.filter
+
 function toDraft(s: SearchState | null, fallbackColumns: string[]): Draft {
   return {
-    text: s?.filter ?? '',
+    text: s ? queryText(s) : '',
     base: s?.base ?? '',
     scope: s?.scope ?? 'sub',
     columns: s?.attrs.length ? s.attrs : fallbackColumns,
@@ -77,7 +80,7 @@ const heading = 'px-2 pt-1 text-[11px] font-semibold text-muted uppercase'
 function SearchLine({ s }: { s: SearchState }) {
   return (
     <>
-      <span className="block truncate font-mono text-xs">{s.filter}</span>
+      <span className="block truncate font-mono text-xs">{queryText(s)}</span>
       <span className="block truncate text-[11px] text-muted">
         {s.scope} {s.base ? `under ${s.base}` : 'under base DN'}
       </span>

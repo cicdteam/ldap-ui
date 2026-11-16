@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { nameFilter } from './filter'
-import { classifyQuery, type QueryKind } from './query'
+import { classifyQuery, nameQuery, type QueryKind } from './query'
 
 const base = 'dc=example,dc=org'
 
@@ -42,5 +42,31 @@ describe('classifyQuery', () => {
     ['cn=x,dc=other,dc=net', { kind: 'filter', filter: 'cn=x,dc=other,dc=net' }],
   ])('%j', (text, want) => {
     expect(classifyQuery(text, base)).toEqual(want)
+  })
+})
+
+describe('nameQuery', () => {
+  it.each(['doe', 'John Doe', 'j*doe', 'a\\b', 'Ёлкин', 'x)'])('gives back %j', (text) => {
+    expect(nameQuery(nameFilter(text))).toBe(text)
+    // And the bar runs the same search with it.
+    expect(classifyQuery(text, base)).toEqual({ kind: 'name', filter: nameFilter(text) })
+  })
+  it('gives back the text trimmed, as nameFilter takes it', () => {
+    expect(nameQuery(nameFilter('  doe '))).toBe('doe')
+  })
+  it.each([
+    '(objectClass=*)',
+    '(uid=doe*)',
+    nameFilter(''),
+    nameFilter('doe').replace('(uid=doe*)', '(uid=x*)'),
+    nameFilter('doe') + ' ',
+    // Upper-case hex: not what nameFilter writes.
+    nameFilter('a*b').replaceAll('\\2a', '\\2A'),
+    // The bar would run these as a filter, not as a name.
+    nameFilter('uid=x'),
+    nameFilter('j*(doe)'),
+    nameFilter('x)(objectClass=*'),
+  ])('is null for %j', (filter) => {
+    expect(nameQuery(filter)).toBeNull()
   })
 })
