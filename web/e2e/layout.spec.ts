@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eDN } from './fixture'
 import { attrRow, blur, connect, exact, openEntry, queryBar } from './helpers'
@@ -150,6 +151,15 @@ test('Columns and Export open from the list; Esc in them leaves the list open', 
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: /^CSV\b/ }).click()
   expect((await download).suggestedFilename()).toBe('demo-search.csv')
+
+  // LDIF holds the DN and the picked columns, not the cn the Name column asked for.
+  await page.getByRole('button', exact('Export')).click()
+  const ldif = page.waitForEvent('download')
+  await page.getByRole('button', { name: /^LDIF\b/ }).click()
+  const text = readFileSync((await (await ldif).path())!, 'utf8')
+  expect(text).toContain(`dn: ${DN}`)
+  expect(text).toContain('description: ')
+  expect(text).not.toMatch(/^(cn|displayName):/m)
 })
 
 test('with no entry open, closing the list focuses the tree', async ({ page }) => {

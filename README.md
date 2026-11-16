@@ -206,7 +206,8 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   line up; more columns than the pane fits scroll sideways together. A row's
   tooltip is its DN, and ⌘C / Ctrl+C in the list copies the DN of the
   selected row (unless text is selected). A search also asks for
-  `displayName` and `cn` to show the name, so an LDIF export holds them too.
+  `displayName` and `cn` to show the name; an LDIF export holds only the DN
+  and the picked columns.
 
   A search returns at most a limit of entries in one request: 500, or the
   search API's `sizeLimit`, up to 5000. The response says `more` when the search matches more. Nothing is kept on the

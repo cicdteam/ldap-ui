@@ -19,6 +19,7 @@ import {
   nextLimit,
   nextSort,
   sortEntries,
+  withColumns,
   type Sort,
 } from '../../lib/results'
 import { isModKey } from '../../lib/shortcuts'
@@ -252,10 +253,14 @@ function Listing({ search }: { search: SearchState }) {
                     type="button"
                     className={menuItem}
                     onClick={() =>
-                      download(`${ws.conn}-search.ldif`, entriesToLDIF(rows), 'text/plain')
+                      download(
+                        `${ws.conn}-search.ldif`,
+                        entriesToLDIF(withColumns(rows, attrs)),
+                        'text/plain',
+                      )
                     }
                   >
-                    LDIF <span className="text-xs text-muted">the columns, displayName and cn</span>
+                    LDIF <span className="text-xs text-muted">the selected columns only</span>
                   </button>
                 </Popover.Close>
               </Popover.Content>

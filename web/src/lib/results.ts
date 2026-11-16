@@ -16,6 +16,19 @@ export const NAME_COLUMN = ''
 /** The attributes the Name column reads; a search asks for them besides its columns. */
 export const NAME_ATTRS = ['displayName', 'cn']
 
+/**
+ * The entries as an export holds them: the DN and the columns. displayName and cn go unless
+ * picked as columns: the search asked for them only to show the Name column.
+ */
+export function withColumns(entries: Entry[], columns: string[]): Entry[] {
+  const picked = new Set(columns.map((c) => c.toLowerCase()))
+  const extra = new Set(NAME_ATTRS.map((a) => a.toLowerCase()).filter((a) => !picked.has(a)))
+  return entries.map((e) => ({
+    ...e,
+    attributes: e.attributes?.filter((a) => !extra.has(a.name.split(';')[0].toLowerCase())),
+  }))
+}
+
 /** The entry as nameOf takes it: each attribute's text values, binary ones left out. */
 export function asText(e: Entry): { dn: string; attrs: Record<string, string[]> } {
   const attrs: Record<string, string[]> = {}

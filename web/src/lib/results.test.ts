@@ -7,6 +7,7 @@ import {
   nextLimit,
   nextSort,
   sortEntries,
+  withColumns,
 } from './results'
 import type { Entry } from './types'
 
@@ -110,5 +111,34 @@ describe('sorting by the name', () => {
       'uid=zed,dc=x',
       'uid=b,dc=x',
     ])
+  })
+})
+
+describe('withColumns', () => {
+  const entry = (...names: string[]): Entry => ({
+    dn: 'uid=jdoe,dc=example,dc=org',
+    attributes: names.map((name) => ({ name, values: [{ text: name }] })),
+  })
+  const kept = (columns: string[], ...names: string[]) =>
+    withColumns([entry(...names)], columns)[0].attributes?.map((a) => a.name)
+
+  it('drops displayName and cn, which only the Name column asked for', () => {
+    expect(kept(['uid', 'mail'], 'displayName', 'cn', 'cn;lang-de', 'uid', 'mail')).toEqual([
+      'uid',
+      'mail',
+    ])
+  })
+  it('keeps them when picked as columns, whatever the case', () => {
+    expect(kept(['CN', 'mail'], 'displayName', 'cn', 'cn;lang-de', 'mail')).toEqual([
+      'cn',
+      'cn;lang-de',
+      'mail',
+    ])
+    expect(kept(['displayname'], 'DisplayName', 'cn')).toEqual(['DisplayName'])
+  })
+  it('keeps the DN and leaves the entries it was given alone', () => {
+    const e = entry('cn', 'uid')
+    expect(withColumns([e], ['uid'])[0].dn).toBe(e.dn)
+    expect(e.attributes?.map((a) => a.name)).toEqual(['cn', 'uid'])
   })
 })
