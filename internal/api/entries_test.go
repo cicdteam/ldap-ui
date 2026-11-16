@@ -148,6 +148,9 @@ func TestWriteWithoutConfirm(t *testing.T) {
 			if rec := env.do(t, http.MethodPost, "/api/c/dev/"+path, body); rec.Code != http.StatusOK {
 				t.Errorf("%s without confirm = %d %s, want 200", path, rec.Code, rec.Body)
 			}
+			if len(env.dir.writes)+len(env.dir.modified) == 0 {
+				t.Errorf("%s without confirm wrote nothing, want a write", path)
+			}
 		})
 	}
 }

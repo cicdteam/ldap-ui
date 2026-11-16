@@ -6,7 +6,7 @@ connections:
     passwordEnv: DEMO_LDAP_PASSWORD
   # The same directory, read-only: the header shows the READ-ONLY badge and
   # no editing is offered.
-  - name: demo-prod
+  - name: demo-readonly
     url: ldap://openldap:1389
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org

@@ -71,7 +71,7 @@ export function ConnectPage() {
                   </span>
                   <span className="block truncate font-mono text-xs text-muted">{p.url}</span>
                 </span>
-                <span className="flex gap-1">
+                <span className="flex gap-1 empty:hidden">
                   <ProfileBadges profile={p} />
                 </span>
               </button>

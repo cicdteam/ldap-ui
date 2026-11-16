@@ -98,7 +98,7 @@ one platform.
 
 Demo with a sample OpenLDAP and Samba AD, in local mode: `make demo-start`, then open
 <http://127.0.0.1:8080/?token=demo-token-not-secret>. It has two profiles on the
-OpenLDAP directory, `demo` (editable) and `demo-prod` (read-only),
+OpenLDAP directory, `demo` (editable) and `demo-readonly` (read-only),
 and `demo-ad` (Samba AD over LDAPS, editable, bound as Administrator; demo
 people 001-040 bind with `Demo-Passw0rd!`, 041-045 are disabled). The
 directories reset on every start. `make demo-stop` stops it; `make demo-start DEMO_PORT=8090` picks another port.

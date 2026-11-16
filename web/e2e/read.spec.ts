@@ -4,7 +4,7 @@ import { attrRow, blur, connect, openEntry, valueItems } from './helpers'
 
 test('stored password rejected: field, hint, focus, typed password connects', async ({ page }) => {
   await page.goto('./')
-  await page.getByRole('button', { name: /^prod-bad\b/ }).click()
+  await page.getByRole('button', { name: /^readonly-badpw\b/ }).click()
   const dialog = page.getByRole('dialog')
   const pw = dialog.locator('input[type=password]')
   await expect(pw).toBeVisible()
@@ -28,7 +28,7 @@ test('stored password rejected: field, hint, focus, typed password connects', as
   await expect(pw).toHaveAttribute('aria-describedby', /.+/)
   await pw.fill('adminpassword')
   await pw.press('Enter')
-  await expect(page).toHaveURL(/\/c\/prod-bad/)
+  await expect(page).toHaveURL(/\/c\/readonly-badpw/)
 })
 
 test('prompt-only profile shows no stored-password hint', async ({ page }) => {
@@ -43,13 +43,13 @@ test('prompt-only profile shows no stored-password hint', async ({ page }) => {
 
 test('badges and color come with info even when /profiles fails', async ({ page }) => {
   await page.goto('./')
-  await page.getByRole('button', { name: /^prod-bad\b/ }).click()
+  await page.getByRole('button', { name: /^readonly-badpw\b/ }).click()
   const pw = page.getByRole('dialog').locator('input[type=password]')
   await pw.fill('adminpassword')
   await pw.press('Enter')
-  await expect(page).toHaveURL(/\/c\/prod-bad/)
+  await expect(page).toHaveURL(/\/c\/readonly-badpw/)
   await page.route('**/api/profiles', (r) => r.abort())
-  await page.goto('c/prod-bad')
+  await page.goto('c/readonly-badpw')
   const header = page.locator('header')
   await expect(header.getByText('READ-ONLY', { exact: true })).toBeVisible()
   await expect(header.locator('a span').first()).toHaveCSS('background-color', 'rgb(221, 51, 51)')

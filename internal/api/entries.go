@@ -87,7 +87,7 @@ func (s *server) deleteEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("deleted", s.attributed(r, p, "profile", p.Name, "dn", logDN(req.DN, sch))...)
-	writeJSON(w, http.StatusOK, writeResult(req))
+	writeJSON(w, http.StatusOK, writeResult{DN: req.DN}) //nolint:staticcheck // S1016: a request and a result share a shape by chance, not by design
 }
 
 // renameEntry renames or moves one entry with one LDAP modrdn.

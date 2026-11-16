@@ -9,7 +9,7 @@ connections:
     url: ldap://127.0.0.1:1390
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
-  - name: prod-bad
+  - name: readonly-badpw
     url: ldap://127.0.0.1:1390
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org

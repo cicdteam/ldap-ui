@@ -114,12 +114,12 @@ test('an apply in flight freezes the review, posts once, and leaves no undo', as
 
 test('read-only profile: the server refuses a direct apply', async ({ page }) => {
   await page.goto('./')
-  await page.getByRole('button', { name: /^prod-bad\b/ }).click()
+  await page.getByRole('button', { name: /^readonly-badpw\b/ }).click()
   const pw = page.getByRole('dialog').locator('input[type=password]')
   await pw.fill('adminpassword')
   await pw.press('Enter')
-  await expect(page).toHaveURL(/\/c\/prod-bad/)
-  expect(await applyDirect(page, 'prod-bad')).toEqual({ status: 403, code: 'read_only' })
+  await expect(page).toHaveURL(/\/c\/readonly-badpw/)
+  expect(await applyDirect(page, 'readonly-badpw')).toEqual({ status: 403, code: 'read_only' })
 })
 
 test('a batch too large for sessionStorage stays in the tab, with a warning', async ({ page }) => {
