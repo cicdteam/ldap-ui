@@ -82,7 +82,7 @@ Local mode shows all of it.
 
 Release images for amd64 and arm64 are published as
 `ghcr.io/cicdteam/ldaplens:<version>` (for example `1.0.0`) and `:latest`.
-The image listens on `0.0.0.0:8080` and runs `server` unless told otherwise.
+The image listens on `0.0.0.0:8080` and runs `server` when given no arguments.
 
 The quickest start runs local mode with its data in a volume:
 
@@ -108,9 +108,10 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/cicdteam/ldaplens local
 ```
 
-Without `local`, the image runs server mode, which needs `LDAPLENS_CONFIG`
+With no arguments, the image runs `server`, which needs `LDAPLENS_CONFIG`
 (or `--config`) and writes nothing, so it runs with a read-only root
-filesystem and no volume.
+filesystem and no volume. Arguments replace that default, so start them with
+`server` or `local`: `--config=...` alone runs local mode.
 
 To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
@@ -374,6 +375,10 @@ and the server runs without the lock and logs the warning `data dir is not
 writable; saving profiles will fail` with its `dir`. Without either, keeping
 a new token there fails startup.
 
+Back up `profiles.json` (it holds no passwords), and always before an
+upgrade: after a rollback, the older version drops the settings it does not
+know at its next save.
+
 ## Flags
 
 | Flag | Env | Mode | Default |
@@ -426,7 +431,7 @@ UI closes it, so the next request uses the new settings. A typed password,
 whether the profile has none configured or the configured one failed, and a
 `bindDNTemplate` profile give the browser a connection of its own in its
 session, which only the process holding that session knows: those need one
-replica or sticky sessions.
+replica or sticky sessions (see [Running for a team](#running-for-a-team)).
 
 Five wrong passwords (LDAP result 49, invalid credentials) for one bind DN
 within 60 seconds refuse further connects as that DN with 429
@@ -561,42 +566,57 @@ password, and both the directory and ldaplens log their DN.
 
 ## Running for a team
 
-ldaplens keeps sessions in memory and saved connections in one file with one
-writer, so a shared instance is one process. In Kubernetes, run one replica
-with `strategy: Recreate`: a second replica does not know the first one's
-sessions (connections with a typed password or per-user login; a shared
-profile works on any replica, see [Flags](#flags)), and the default rolling
-update starts the new pod while the old one still holds the data dir, so the
-new pod exits (see [Saved connections](#saved-connections)) and the rollout
-stalls. Every restart ends all sessions, and users connect again; a shared
-profile is dialed again at its next request.
+For a team, run `ldaplens server`, for example in Kubernetes (see
+[Kubernetes](#kubernetes) for a manifest). It serves only the profiles in
+`connections.yaml`, keeps nothing on disk and runs as several replicas
+behind one ingress. Server mode is for the OpenLDAP family: OpenLDAP and
+directories like it, such as 389 Directory Server. Active Directory is
+supported in local mode.
 
-- **Fixed profiles with per-user login** is the recommended setup for a
-  shared instance: put every connection in `connections.yaml` with a
-  `bindDNTemplate` (see [Per-user login](#per-user-login)), run `ldaplens
-  server`, and keep the token or an SSO proxy in front.
-  Everyone then works as themselves,
-  and no service account password is stored in the deployment. The UI
-  offers no saving, and a save fails with 403 `saving_disabled`; connect opens
-  only the profiles from that file, so nobody can make the server open
-  connections to other hosts and ports it reaches, or change a shared
-  profile so that the next person's password goes to a server of their
-  choosing. No volume is needed.
-- **With UI-saved profiles** anyone who has the token can do both; every
-  save is logged as `profile saved`, with the old and the new URL. Mount a
-  volume at `/data`: in Kubernetes a PVC with `securityContext.fsGroup:
-  65532`, which makes a root-owned volume writable for the image's user
-  (UID 65532). A `hostPath` ignores `fsGroup`, and the `restricted` policy
-  refuses it. An `emptyDir` forgets the profiles when the pod is replaced.
-  Without a volume, local mode keeps them, and its token, in the container,
-  so they are lost when it is replaced.
-- **Back up `profiles.json`** (it holds no passwords), and always before an
-  upgrade: after a rollback, the older version drops the settings it does
-  not know at its next save.
-- **The token** comes from a Secret through `LDAPLENS_AUTH_TOKEN_FILE` (or
-  `LDAPLENS_AUTH_TOKEN`). Server mode never makes one; the one local mode
-  keeps in its data dir is printed only in the log. The token file is read
-  at startup: restart after rotating it.
+- **Per-user login** is the recommended setup: give every profile a
+  `bindDNTemplate` (see [Per-user login](#per-user-login)). Everyone then
+  works as themselves, no service account password is stored in the
+  deployment, and server mode needs no token. The UI offers no saving, and a
+  save fails with 403 `saving_disabled`; connect opens only the profiles in
+  `connections.yaml`, so nobody can make the server open connections to
+  other hosts and ports it reaches, or change a profile so that the next
+  person's password goes to a server of their choosing.
+- **A shared profile**, one that binds with a configured password
+  (`passwordFile` from a Secret, or `passwordEnv`) or anonymously, serves
+  anyone who reaches ldaplens, so server mode then needs a token, from a
+  Secret through `LDAPLENS_AUTH_TOKEN_FILE` (see [Two modes](#two-modes)).
+  Server mode never makes one. The token file is read at startup: restart
+  after rotating it.
+- **Two replicas**, a rolling update that starts a new pod before it stops an
+  old one (`maxSurge: 1`, `maxUnavailable: 0`) and a PodDisruptionBudget with
+  `minAvailable: 1` keep the UI up through a rollout or a node drain. Each
+  replica dials its own connection for a shared profile, so any replica
+  answers for it (see [Flags](#flags)), and shared profiles need no affinity.
+  A per-user or typed-password connection lives in the browser's session on
+  the pod where it was made, so the ingress must keep each browser on one
+  pod with an affinity cookie (see [Behind a reverse
+  proxy](#behind-a-reverse-proxy) for ingress-nginx and Traefik). When that
+  pod goes away, in a rollout, a drain or a crash, its sessions go with it,
+  and their users sign in again.
+- **TLS ends at the ingress**, and ldaplens speaks plain HTTP behind it. The
+  ingress sends `X-Forwarded-Proto: https`, which makes the cookies Secure:
+  no flag is needed. `kubectl port-forward` over plain HTTP works as is, for
+  example `kubectl -n ldaplens port-forward svc/ldaplens 8080:80` and then
+  `http://localhost:8080`; it reaches one pod, so it needs no affinity.
+- **The client address**: set `--trusted-proxies` to the pod network where
+  the ingress controller runs, for example `10.244.0.0/16` (use yours), so
+  that the logs and the per-client limit see the client behind the ingress
+  (see [Behind a reverse proxy](#behind-a-reverse-proxy)). The ingress
+  controller must see it too: behind a load balancer that hides it, such as
+  a Service with `externalTrafficPolicy: Cluster`, clients share the nodes'
+  addresses, and their wrong passwords add up.
+- **The failed sign-in limits are per replica.** Each replica keeps its own
+  counts (see [Flags](#flags)) and forgets them when it restarts, and a
+  client that sends no affinity cookie spreads its tries over all of them:
+  with two replicas, up to 10 wrong passwords a minute for one DN and 40 from
+  one address. The directory's own lockout policy is the real limit (in
+  OpenLDAP, the ppolicy overlay with `pwdLockout`); the limits of ldaplens
+  only slow guessing down.
 - **Memory**: ldaplens uses about 10 MiB, plus about 55 MiB for each Apply of
   4 MiB of photos in flight. A large read holds up to 64 MiB of values per
   response, several times over while it is converted and encoded. Set a memory
@@ -604,7 +624,7 @@ profile is dialed again at its next request.
   Go does not read the container's limit by itself. `GOMEMLIMIT` makes the
   garbage collector work harder near the limit, which makes an OOM kill
   less likely, but it does not prevent one when live memory exceeds the
-  limit. An OOM kill ends everyone's session.
+  limit. An OOM kill ends the sessions on that pod.
 
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
@@ -793,6 +813,10 @@ metadata:
     # An Apply may run 4 minutes; the default is 60 seconds.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     # No rewrite-target. For a sub-path, set LDAPLENS_BASE_PATH to it.
+    # Keeps each browser on the pod that holds its per-user or typed-password
+    # connections; persistent: a scale-up, as in a rollout, moves nobody.
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/affinity-mode: persistent
 spec:
   ingressClassName: nginx
   tls:
@@ -808,18 +832,34 @@ spec:
               service: {name: ldaplens, port: {name: http}}
 ```
 
+Traefik as the ingress controller sets no body size limit or backend timeout
+by default, so its Ingress needs no annotations. Its affinity cookie is set
+on the Service in [Kubernetes](#kubernetes) instead:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldaplens
+  namespace: ldaplens
+  annotations:
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+```
+
+A Traefik IngressRoute takes `sticky: {cookie: {}}` on its service.
+
 ### Kubernetes
 
-The manifest below runs ldaplens under the `restricted` Pod Security Standard
-(`runAsNonRoot`, `readOnlyRootFilesystem`, all capabilities dropped,
-`seccompProfile: RuntimeDefault`), with the token and a bind password in a
-Secret, `connections.yaml` and the directory's CA in a ConfigMap, a PVC for
-UI-saved profiles, and a NetworkPolicy that lets in only the ingress
-controller (ingress-nginx here: adjust the labels to yours). It runs local
-mode, which keeps its data in `/data/ldaplens` on the PVC. For fixed profiles
-only, run server mode instead: replace `local` with `server` in `args`, and
-drop the PVC, the `data` volume and its mount. Pin the image by digest in
-production.
+The manifest below runs `ldaplens server` in two replicas under the
+`restricted` Pod Security Standard (`runAsNonRoot`, `readOnlyRootFilesystem`,
+all capabilities dropped, `seccompProfile: RuntimeDefault`), with
+`connections.yaml` and the directory's CA in a ConfigMap, the shared
+profile's password and the token in a Secret, and a NetworkPolicy that lets
+in only the ingress controller (ingress-nginx here: adjust the labels to
+yours). Server mode writes nothing, so there is no volume. `args` start with
+`server`, because arguments replace the image's default. The Ingress, with
+its affinity cookie, is under [Behind a reverse
+proxy](#behind-a-reverse-proxy). Pin the image by digest in production.
 
 ```yaml
 apiVersion: v1
@@ -830,11 +870,13 @@ metadata:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
 ---
-# The placeholders fail closed: ldaplens does not start until auth-token holds
-# a real token. Better, create the Secret with
+# Only the shared profile needs this Secret: without one, drop it, its
+# volume and mount, and LDAPLENS_AUTH_TOKEN_FILE. The placeholders fail
+# closed: ldaplens does not start until auth-token holds a real token.
+# Better, create it with
 #   kubectl -n ldaplens create secret generic ldaplens \
 #     --from-literal=auth-token="$(openssl rand -hex 32)" \
-#     --from-file=corp-ad=./corp-ad.password
+#     --from-file=people-reader=./people-reader.password
 apiVersion: v1
 kind: Secret
 metadata:
@@ -843,7 +885,7 @@ metadata:
 type: Opaque
 stringData:
   auth-token: "<openssl rand -hex 32>"
-  corp-ad: "<bind password of cn=reader>"
+  people-reader: "<bind password of cn=ldaplens-reader>"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -853,12 +895,20 @@ metadata:
 data:
   connections.yaml: |
     connections:
-      - name: corp-ad
-        url: ldaps://dc1.corp.example:636
+      # Everyone signs in as themselves: no token, no stored password.
+      - name: people
+        url: ldaps://ldap.corp.example:636
         baseDN: dc=corp,dc=example
-        bindDN: cn=reader,ou=svc,dc=corp,dc=example
+        bindDNTemplate: uid={user},ou=people,dc=corp,dc=example
+        caFile: /etc/ldaplens/config/corp-ca.pem
+      # Shared: binds with the password from the Secret, so ldaplens needs
+      # the token.
+      - name: people-reader
+        url: ldaps://ldap.corp.example:636
+        baseDN: dc=corp,dc=example
+        bindDN: cn=ldaplens-reader,ou=services,dc=corp,dc=example
         # Read at every dial: a rotated Secret is used without a restart.
-        passwordFile: /etc/ldaplens/secrets/corp-ad
+        passwordFile: /etc/ldaplens/secrets/people-reader
         caFile: /etc/ldaplens/config/corp-ca.pem
         readOnly: true
   corp-ca.pem: |
@@ -866,28 +916,18 @@ data:
     (the directory's CA certificate)
     -----END CERTIFICATE-----
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ldaplens-data
-  namespace: ldaplens
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ldaplens
   namespace: ldaplens
 spec:
-  # Sessions live in memory and the data dir has one writer: one replica,
-  # and Recreate, so that two pods never run at once.
-  replicas: 1
+  # A new pod is ready before an old one stops. Per-user and typed-password
+  # sessions end with their pod; shared profiles work on any replica.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
   revisionHistoryLimit: 3
   selector:
     matchLabels: {app.kubernetes.io/name: ldaplens}
@@ -908,19 +948,18 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
-        # Makes a root-owned volume (EBS, PD, Azure Disk) writable for 65532.
+        # Lets the app's group read the Secret's files, which are 0440 below.
         fsGroup: 65532
-        fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: ldaplens
           image: ghcr.io/cicdteam/ldaplens:<version>
-          args: [local, --config=/etc/ldaplens/config/connections.yaml]
+          args: [server, --config=/etc/ldaplens/config/connections.yaml]
           env:
+            # Only for a shared profile.
             - {name: LDAPLENS_AUTH_TOKEN_FILE, value: /etc/ldaplens/secrets/auth-token}
             # The host name users open; ldaplens answers 403 to any other Host.
             - {name: LDAPLENS_ALLOWED_HOSTS, value: ldaplens.corp.example}
-            - {name: LDAPLENS_SECURE_COOKIES, value: "true"}
             # The pod network, where the ingress controller runs, so that its
             # X-Forwarded-For names the client; it differs between clusters:
             # use yours. The NetworkPolicy below keeps other pods out.
@@ -947,15 +986,22 @@ spec:
             # Directories, not subPath: a subPath file never sees an update.
             - {name: config, mountPath: /etc/ldaplens/config, readOnly: true}
             - {name: secrets, mountPath: /etc/ldaplens/secrets, readOnly: true}
-            - {name: data, mountPath: /data}
       volumes:
         - name: config
           configMap: {name: ldaplens-connections}
         - name: secrets
-          # 0440 is enough: fsGroup gives the group read access.
           secret: {secretName: ldaplens, defaultMode: 0440}
-        - name: data
-          persistentVolumeClaim: {claimName: ldaplens-data}
+---
+# A node drain or another voluntary eviction leaves one pod running.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ldaplens
+  namespace: ldaplens
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: ldaplens}
 ---
 # Only the ingress controller reaches ldaplens. The kubelet's probes come from
 # the node, which a NetworkPolicy does not block.
@@ -1093,20 +1139,18 @@ journald keeps the login link it logs at every start. Passwords for
 
 - **Logs** go to stdout, one `key=value` line per event (see [Logs and
   accountability](#logs-and-accountability)): `kubectl -n ldaplens logs
-  deploy/ldaplens`, or `journalctl -u ldaplens` for the systemd unit. A startup
+  -l app.kubernetes.io/name=ldaplens --prefix` for every replica, or
+  `journalctl -u ldaplens` for the systemd unit. A startup
   error is one line on stderr that starts with `ldaplens:`, and the process
   exits with status 1; for a pod in CrashLoopBackOff, add `--previous` to
-  `kubectl logs`.
+  `kubectl logs <pod>`.
 - **A broken `profiles.json`** is moved to `profiles.json.bad` next to it
   (`/data/ldaplens` in the image, `/var/lib/ldaplens` with the unit), and
   ldaplens starts without saved profiles and logs `profiles file was
   invalid and was moved aside` with its `path` and `error`. The next broken
   file replaces it. To
   put a fixed copy back, stop ldaplens first, because it rewrites the file
-  from its own list at the next save. In Kubernetes: scale the Deployment to
-  0, mount the PVC in a helper pod with the same `securityContext` (on the
-  same node for a ReadWriteOnce volume), copy the file in with `kubectl cp`,
-  delete the helper and scale back to 1.
+  from its own list at the next save.
 - **Debugging** the image, which has no shell: attach a debug container
   that runs as the app's user. `--custom` sets that user even when the pod
   sets none, because the `restricted` policy refuses busybox's root.
@@ -1118,7 +1162,7 @@ journald keeps the login link it logs at every start. Passwords for
   ```
 
   The app's files are under `/proc/1/root/` there, for example
-  `/proc/1/root/data/ldaplens/profiles.json.bad`.
+  `/proc/1/root/etc/ldaplens/config/connections.yaml`.
 
 ## Development
 
