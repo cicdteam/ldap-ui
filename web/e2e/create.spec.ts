@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eDN } from './fixture'
-import { attrRow, blur, openEntry, postJSON } from './helpers'
+import { attrRow, blur, openEntry } from './helpers'
 
 const createButton = { name: 'Create', exact: true }
 
@@ -84,28 +84,4 @@ test('clone leaves the RDN, uid and mail out, and holds while it writes', async 
   await expect(page).toHaveURL(/dn=uid%3Dclonecopy%2Cou%3De2e/)
   await expect(attrRow(page, 'cn')).toContainText('E2E clonesrc')
   await expect(attrRow(page, 'mail')).toHaveCount(0)
-})
-
-test('prod-rw: create asks for the connection name, and so does the server', async ({ page }) => {
-  await openEntry(page, 'prod-rw', E2E_OU)
-  const body = {
-    dn: `ou=prodnew,${E2E_OU}`,
-    attributes: [
-      { name: 'objectClass', values: ['organizationalUnit'] },
-      { name: 'ou', values: ['prodnew'] },
-    ],
-  }
-  expect(await postJSON(page, 'api/c/prod-rw/entries/add', body)).toEqual({
-    status: 409,
-    code: 'confirmation_required',
-  })
-  const dialog = await openNewChild(page)
-  await dialog.getByLabel('Structural class').selectOption('organizationalUnit')
-  await dialog.getByLabel('RDN value').fill('prodnew')
-  const create = dialog.getByRole('button', createButton)
-  await expect(create).toBeDisabled()
-  await dialog.getByLabel('Type prod-rw to confirm').fill('prod-rw')
-  await create.click()
-  await expect(dialog).toBeHidden()
-  await expect(page).toHaveURL(/dn=ou%3Dprodnew/)
 })

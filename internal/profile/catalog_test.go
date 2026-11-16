@@ -36,8 +36,8 @@ func TestCatalogSaveAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Find(lab) error = %v", err)
 	}
-	if got.URL != "ldap://lab:389" || got.Environment != Dev {
-		t.Errorf("Find(lab) = %+v, want url ldap://lab:389 and environment dev", got)
+	if got.URL != "ldap://lab:389" || got.ConnectTimeout != defaultConnectTimeout {
+		t.Errorf("Find(lab) = %+v, want url ldap://lab:389 and the default connect timeout", got)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestCatalogFind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := c.Find("corp"); err != nil || p.Environment != Dev {
+	if p, err := c.Find("corp"); err != nil || p.ConnectTimeout != defaultConnectTimeout {
 		t.Errorf("Find(corp) = %+v, %v, want normalized profile", p, err)
 	}
 	if _, err := c.Find("nope"); !errors.Is(err, ErrNotFound) {
@@ -162,7 +162,7 @@ func TestSaveLimit(t *testing.T) {
 	dir := t.TempDir()
 	full := make([]Profile, MaxSaved)
 	for i := range full {
-		full[i] = Profile{Name: fmt.Sprintf("p%d", i), URL: "ldap://h", Environment: Dev}
+		full[i] = Profile{Name: fmt.Sprintf("p%d", i), URL: "ldap://h"}
 	}
 	b, err := json.Marshal(full)
 	if err != nil {
@@ -261,7 +261,7 @@ func TestNewCatalogKeepsUnreadableFileError(t *testing.T) {
 }
 
 func TestNewCatalogReadsOldFile(t *testing.T) {
-	// profiles.json as v1.1.0 wrote it.
+	// profiles.json as v1.1.0 wrote it; environment is ignored.
 	const old = `[
   {
     "name": "lab",
@@ -284,7 +284,6 @@ func TestNewCatalogReadsOldFile(t *testing.T) {
 ]`
 	dir := t.TempDir()
 	writePath(t, filepath.Join(dir, "profiles.json"), old)
-	want := readProfiles(t, dir)
 
 	c := newCatalog(t, dir)
 	if got, reason := c.Quarantined(); got != "" || reason != nil {
@@ -293,10 +292,18 @@ func TestNewCatalogReadsOldFile(t *testing.T) {
 	if _, err := c.Save(Profile{Name: "new", URL: "ldap://new"}); err != nil {
 		t.Fatalf("Save(new) error = %v", err)
 	}
-	want = append(want, map[string]any{
-		"name": "new", "url": "ldap://new", "startTLS": false,
-		"insecureSkipVerify": false, "environment": "dev",
-	})
+	want := []map[string]any{
+		{
+			"name": "lab", "url": "ldap://lab:389", "startTLS": true,
+			"baseDN": "dc=lab,dc=example", "bindDN": "cn=admin,dc=lab,dc=example",
+			"insecureSkipVerify": false, "readOnly": false,
+		},
+		{
+			"name": "corp", "url": "ldaps://corp:636", "startTLS": false,
+			"insecureSkipVerify": true, "color": "red", "readOnly": false,
+		},
+		{"name": "new", "url": "ldap://new", "startTLS": false, "insecureSkipVerify": false, "readOnly": false},
+	}
 	if diff := cmp.Diff(want, readProfiles(t, dir)); diff != "" {
 		t.Errorf("profiles.json after Save mismatch (-want +got):\n%s", diff)
 	}

@@ -3,10 +3,9 @@
 
 import type { Op } from './changes'
 
-export type Environment = 'dev' | 'stage' | 'prod'
 export type Scope = 'base' | 'one' | 'sub'
 
-/** A profile as GET /api/profiles returns it. readOnly is computed by the server. */
+/** A profile as GET /api/profiles returns it. */
 export interface Profile {
   name: string
   url: string
@@ -15,7 +14,6 @@ export interface Profile {
   bindDN?: string
   caPEM?: string
   insecureSkipVerify: boolean
-  environment: Environment
   color?: string
   readOnly: boolean
   /** Saved from the UI (true) or fixed in connections.yaml (false). */
@@ -36,9 +34,8 @@ export interface ProfileInput {
   bindDN?: string
   caPEM?: string
   insecureSkipVerify: boolean
-  environment: Environment
   color?: string
-  readOnly?: boolean
+  readOnly: boolean
 }
 
 /** A connection's info plus the profile settings its badges show. */
@@ -56,7 +53,6 @@ export interface Info {
   passwordModify: boolean
   /** ldaps:// or StartTLS. */
   encrypted: boolean
-  environment: Environment
   readOnly: boolean
   insecureSkipVerify: boolean
   color?: string
@@ -170,9 +166,8 @@ export interface ApiErrorBody {
   attribute?: string
 }
 
-/** Body of POST /api/c/{conn}/changes/apply; confirm is the profile name on prod. */
+/** Body of POST /api/c/{conn}/changes/apply. */
 export interface ApplyRequest {
-  confirm?: string
   entries: { dn: string; changes: Op[] }[]
 }
 
@@ -189,22 +184,19 @@ export interface TextAttribute {
   base64?: boolean
 }
 
-/** Body of POST /api/c/{conn}/entries/add; confirm is the profile name on prod. */
+/** Body of POST /api/c/{conn}/entries/add. */
 export interface AddRequest {
-  confirm?: string
   dn: string
   attributes: TextAttribute[]
 }
 
 /** Body of POST /api/c/{conn}/entries/delete. */
 export interface DeleteRequest {
-  confirm?: string
   dn: string
 }
 
 /** Body of POST /api/c/{conn}/entries/rename; newParent only for a move. */
 export interface RenameRequest {
-  confirm?: string
   dn: string
   newRDN: string
   newParent?: string
@@ -221,7 +213,6 @@ export type PasswordMethod = 'server' | 'ssha'
 
 /** Body of POST /api/c/{conn}/entries/password; Active Directory ignores method. */
 export interface PasswordRequest {
-  confirm?: string
   dn: string
   password: string
   method?: PasswordMethod

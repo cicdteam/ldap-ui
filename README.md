@@ -98,7 +98,7 @@ one platform.
 
 Demo with a sample OpenLDAP and Samba AD, in local mode: `make demo-start`, then open
 <http://127.0.0.1:8080/?token=demo-token-not-secret>. It has two profiles on the
-OpenLDAP directory, `demo` (dev, editable) and `demo-prod` (prod, read-only),
+OpenLDAP directory, `demo` (editable) and `demo-prod` (read-only),
 and `demo-ad` (Samba AD over LDAPS, editable, bound as Administrator; demo
 people 001-040 bind with `Demo-Passw0rd!`, 041-045 are disabled). The
 directories reset on every start. `make demo-stop` stops it; `make demo-start DEMO_PORT=8090` picks another port.
@@ -191,9 +191,8 @@ on non-Latin keyboard layouts.
   "N changes", and staged entries get a dot in the tree and in the results.
   The batch is kept per connection for the browser tab and survives a reload.
 - **Review** (⌘S / Ctrl+S, or the header badge) shows the batch as LDIF to
-  read or copy; **Apply** writes it. A prod profile asks you to type its name
-  first. A read-only profile (prod by default, or `readOnly: true`) has no
-  Edit, and the server refuses its writes.
+  read or copy; **Apply** writes it. A read-only profile (`readOnly: true`)
+  has no Edit, and the server refuses its writes.
 - If an entry changed since you read it, the apply stops at that entry:
   "Reload entry" marks the staged changes that no longer fit as stale,
   "Drop stale changes" removes them. A value the server rejects shows its
@@ -204,9 +203,8 @@ on non-Latin keyboard layouts.
 - **Actions** (in the inspector, or the command palette): **New child** (`N`),
   **Clone** (`C`), **Rename/Move** (`R` or F2) and **Delete** (`Delete` or
   ⌘⌫ / Ctrl+Backspace). Each opens a dialog with the DN and the LDIF it
-  writes, and writes at once; it is not staged. A prod profile asks for its
-  name first; a read-only profile has no Actions, and the server refuses these
-  writes too.
+  writes, and writes at once; it is not staged. A read-only profile has no
+  Actions, and the server refuses these writes too.
 - **New child** picks a structural class (common ones first), auxiliary
   classes, the RDN attribute and value, and asks for the MUST attributes.
   **Clone** starts from the entry, staged changes included, binary values
@@ -226,8 +224,7 @@ on non-Latin keyboard layouts.
   entries whose classes allow `userPassword`, which needs the schema (on
   Active Directory, for `user` entries only). It asks for the new password
   twice and sets it at once: it is never staged, kept in the browser or
-  logged, and the dialog shows no LDIF. A prod profile asks for its name
-  first. On OpenLDAP the server hashes it by its own policy through the
+  logged, and the dialog shows no LDIF. On OpenLDAP the server hashes it by its own policy through the
   Password Modify operation (the default, when the server offers it), or
   ldaplens stores it as SSHA. Active Directory takes it as `unicodePwd`, only
   over ldaps:// or StartTLS.
@@ -282,8 +279,15 @@ connections:
     bindDN: cn=reader,ou=svc,dc=corp,dc=example
     passwordEnv: CORP_AD_PASSWORD # or passwordFile, or type it in the UI
     caFile: /etc/ldaplens/corp-ca.pem
-    environment: prod # prod profiles are read-only by default
+    readOnly: true
+    color: "#d33"
 ```
+
+`readOnly` and `color` are the only safety and marking options. A profile is
+writable unless it sets `readOnly: true`: then the UI offers no Edit or
+Actions and the server refuses its writes with 403 `read_only`. `color` (a
+hex color such as `#d33`, or a CSS color name) puts a colored dot next to the
+profile in the connection list and in the workspace header.
 
 ### Signing in with your own username
 
@@ -826,7 +830,7 @@ data:
         # Read at every dial: a rotated Secret is used without a restart.
         passwordFile: /etc/ldaplens/secrets/corp-ad
         caFile: /etc/ldaplens/config/corp-ca.pem
-        environment: prod
+        readOnly: true
   corp-ca.pem: |
     -----BEGIN CERTIFICATE-----
     (the directory's CA certificate)

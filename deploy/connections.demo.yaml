@@ -4,15 +4,14 @@ connections:
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
     passwordEnv: DEMO_LDAP_PASSWORD
-    environment: dev
-  # The same directory as a prod profile: read-only by default, so the header
-  # shows the PROD and READ-ONLY badges and no editing is offered.
+  # The same directory, read-only: the header shows the READ-ONLY badge and
+  # no editing is offered.
   - name: demo-prod
     url: ldap://openldap:1389
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
     passwordEnv: DEMO_LDAP_PASSWORD
-    environment: prod
+    readOnly: true
   # Samba AD (LDAPS, test CA). Bind as Administrator; demo people use
   # Demo-Passw0rd!.
   - name: demo-ad
@@ -21,4 +20,3 @@ connections:
     bindDN: CN=Administrator,CN=Users,DC=corp,DC=example,DC=test
     passwordEnv: AD_LDAP_PASSWORD
     caFile: /etc/ldaplens/ad-ca.pem
-    environment: dev

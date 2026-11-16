@@ -29,11 +29,6 @@ const (
 	setBody = `{"dn":"uid=n,dc=example,dc=org","password":"secret-value","method":"ssha"}`
 )
 
-// withConfirm adds the prod confirmation to a JSON object body.
-func withConfirm(body, name string) string {
-	return strings.Replace(body, "{", `{"confirm":"`+name+`",`, 1)
-}
-
 func TestWriteEntries(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -111,11 +106,6 @@ func TestWriteEntriesGuard(t *testing.T) {
 			{name: "read-only", connect: `{"profile":"manual","password":"x"}`, conn: "manual", body: body, wantStatus: http.StatusForbidden, wantCode: "read_only"},
 			// The profile is refused before the body is read.
 			{name: "read-only with a bad body", connect: `{"profile":"manual","password":"x"}`, conn: "manual", body: `{"x":1}`, wantStatus: http.StatusForbidden, wantCode: "read_only"},
-			{name: "prod without confirm", connect: `{"profile":"prodrw"}`, conn: "prodrw", body: body, wantStatus: http.StatusConflict, wantCode: "confirmation_required"},
-			{name: "prod with another name", connect: `{"profile":"prodrw"}`, conn: "prodrw", body: withConfirm(body, "dev"), wantStatus: http.StatusConflict, wantCode: "confirmation_required"},
-			// An invalid request is refused before the confirmation is asked for.
-			{name: "prod with an invalid body", connect: `{"profile":"prodrw"}`, conn: "prodrw", body: `{"dn":""}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
-			{name: "prod with confirm", connect: `{"profile":"prodrw"}`, conn: "prodrw", body: withConfirm(body, "prodrw"), wantStatus: http.StatusOK},
 		}
 		for _, tc := range tests {
 			t.Run(path+": "+tc.name, func(t *testing.T) {
@@ -125,12 +115,6 @@ func TestWriteEntriesGuard(t *testing.T) {
 				if rec.Code != tc.wantStatus {
 					t.Fatalf("%s = %d %s, want %d", path, rec.Code, rec.Body, tc.wantStatus)
 				}
-				if tc.wantStatus == http.StatusOK {
-					if len(env.dir.writes) != 1 {
-						t.Errorf("writes = %v, want one", env.dir.writes)
-					}
-					return
-				}
 				if code := errorCode(t, rec); code != tc.wantCode {
 					t.Errorf("%s code = %q, want %q", path, code, tc.wantCode)
 				}
@@ -139,6 +123,32 @@ func TestWriteEntriesGuard(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestWriteWithoutConfirm checks that writes take no typed confirmation:
+// a body without one is written, and a body with a confirm field is
+// refused like any other unknown field.
+func TestWriteWithoutConfirm(t *testing.T) {
+	bodies := map[string]string{
+		"changes/apply": twoEntries, "entries/add": addBody, "entries/delete": deleteBody,
+		"entries/rename": renameBody, "entries/password": setBody,
+	}
+	for path, body := range bodies {
+		t.Run(path, func(t *testing.T) {
+			env := newTestEnv(t)
+			connectTo(t, env, `{"profile":"dev"}`)
+			confirmed := strings.Replace(body, "{", `{"confirm":"dev",`, 1)
+			if rec := env.do(t, http.MethodPost, "/api/c/dev/"+path, confirmed); rec.Code != http.StatusBadRequest || errorCode(t, rec) != "bad_request" {
+				t.Errorf("%s with confirm = %d %s, want 400 bad_request", path, rec.Code, rec.Body)
+			}
+			if len(env.dir.writes)+len(env.dir.modified) != 0 {
+				t.Errorf("writes = %v, modified = %v, want none", env.dir.writes, env.dir.modified)
+			}
+			if rec := env.do(t, http.MethodPost, "/api/c/dev/"+path, body); rec.Code != http.StatusOK {
+				t.Errorf("%s without confirm = %d %s, want 200", path, rec.Code, rec.Body)
+			}
+		})
 	}
 }
 

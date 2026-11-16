@@ -1,18 +1,15 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { CopyButton } from '../../ui/CopyButton'
 import { COPY_LDIF_HINT } from '../../lib/ldif'
 import { LdifView } from '../../ui/LdifView'
 import { Dialog } from '../../ui/Dialog'
-import { Input } from '../../ui/Input'
 import { Spinner } from '../../ui/Spinner'
-import { useWorkspace } from '../context'
 
 /**
  * The frame of an entry write: the DN it writes, its fields, its LDIF to read or copy (none for a
- * password, which it would show), the prod confirmation and the action. It stays open while the
- * request runs.
+ * password, which it would show) and the action. It stays open while the request runs.
  */
 export function WriteDialog({
   title,
@@ -36,14 +33,11 @@ export function WriteDialog({
   pending: boolean
   /** Shown as a banner; an error the dialog shows at a field is not passed here. */
   error: unknown
-  onSubmit: (confirm: string | undefined) => void
+  onSubmit: () => void
   close: () => void
   children: ReactNode
 }) {
-  const ws = useWorkspace()
-  const prod = ws.info.environment === 'prod'
-  const [confirm, setConfirm] = useState('')
-  const ok = ready && !pending && (!prod || confirm === ws.conn)
+  const ok = ready && !pending
   return (
     <Dialog
       open
@@ -57,7 +51,7 @@ export function WriteDialog({
         className="space-y-3"
         onSubmit={(e) => {
           e.preventDefault()
-          if (ok) onSubmit(prod ? confirm : undefined)
+          if (ok) onSubmit()
         }}
       >
         <div className="font-mono text-xs break-all">{target}</div>
@@ -75,18 +69,6 @@ export function WriteDialog({
           </details>
         )}
         {error ? <ErrorBanner error={error} /> : null}
-        {prod && (
-          <label className="flex flex-col gap-1 text-xs">
-            Type {ws.conn} to confirm
-            <Input
-              mono
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-        )}
         <div className="flex items-center justify-end gap-2">
           {pending && <Spinner />}
           <Button type="submit" variant={danger ? 'danger' : 'primary'} disabled={!ok}>

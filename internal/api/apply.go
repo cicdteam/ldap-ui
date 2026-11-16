@@ -27,19 +27,7 @@ const (
 	maxRequestValues   = 10000
 )
 
-// confirmation is part of every write request body.
-type confirmation struct {
-	// Confirm must equal the profile name for prod profiles.
-	Confirm string `json:"confirm"`
-}
-
-func (c confirmation) typed() string { return c.Confirm }
-
-// writeRequest is a write request body; every one embeds confirmation.
-type writeRequest interface{ typed() string }
-
 type applyRequest struct {
-	confirmation
 	Entries []applyEntry `json:"entries"`
 }
 
@@ -61,10 +49,10 @@ type applyFailure struct {
 // guard runs the checks every write shares, in this order: a session for
 // {conn}; a writable profile (403 read_only), read from the catalog so that
 // an edit applies without reconnecting; a body of at most limit bytes that
-// decodes into req (400); validate (400 bad_request); on prod, the profile
-// name in confirm (409 confirmation_required). It writes the first refusal
-// and returns false, so nothing is written before every check has passed.
-func (s *server) guard(w http.ResponseWriter, r *http.Request, req writeRequest, limit int64, validate func(Directory) (apiError, bool)) (Directory, profile.Profile, bool) {
+// decodes into req (400); validate (400 bad_request). It writes the first
+// refusal and returns false, so nothing is written before every check has
+// passed.
+func (s *server) guard(w http.ResponseWriter, r *http.Request, req any, limit int64, validate func(Directory) (apiError, bool)) (Directory, profile.Profile, bool) {
 	d, ok := s.directory(w, r)
 	if !ok {
 		return nil, profile.Profile{}, false
@@ -82,7 +70,7 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request, req writeRequest,
 		writeError(w, status, e)
 		return nil, profile.Profile{}, false
 	}
-	if p.IsReadOnly() {
+	if p.ReadOnly {
 		return refuse(http.StatusForbidden, apiError{Code: "read_only", Message: "this profile is read-only"})
 	}
 	if !decode(w, r, req, limit) {
@@ -90,12 +78,6 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request, req writeRequest,
 	}
 	if e, ok := validate(d); !ok {
 		return refuse(http.StatusBadRequest, e)
-	}
-	if p.Environment == profile.Prod && req.typed() != p.Name {
-		return refuse(http.StatusConflict, apiError{
-			Code:    "confirmation_required",
-			Message: "type the connection name to write to a prod profile",
-		})
 	}
 	return d, p, true
 }

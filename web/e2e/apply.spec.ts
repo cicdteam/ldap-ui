@@ -16,15 +16,14 @@ async function editDescription(page: Page, text: string) {
 }
 
 /** POSTs a valid one-entry batch straight to changes/apply, bypassing the UI. */
-async function applyDirect(page: Page, conn: string, confirm?: string) {
+async function applyDirect(page: Page, conn: string) {
   // The fetch path is relative to <base href>, which is /ldap/.
   return page.evaluate(
-    async ({ conn, confirm }) => {
+    async ({ conn }) => {
       const r = await fetch(`api/c/${conn}/changes/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          confirm,
           entries: [
             {
               dn: 'uid=x,dc=example,dc=org',
@@ -35,7 +34,7 @@ async function applyDirect(page: Page, conn: string, confirm?: string) {
       })
       return { status: r.status, code: ((await r.json()) as { code?: string }).code }
     },
-    { conn, confirm },
+    { conn },
   )
 }
 
@@ -111,31 +110,6 @@ test('an apply in flight freezes the review, posts once, and leaves no undo', as
   await expect(page.getByRole('button', { name: /Review \d+ change/ })).toHaveCount(0)
   await page.reload()
   await expect(attrRow(page, 'description')).toContainText('in flight')
-})
-
-test('prod profile applies only after typing its name', async ({ page }) => {
-  await openEntry(page, 'prod-rw', e2eDN('prodrw'))
-  // The server refuses a bypassed UI without the exact name.
-  expect(await applyDirect(page, 'prod-rw')).toEqual({
-    status: 409,
-    code: 'confirmation_required',
-  })
-  expect(await applyDirect(page, 'prod-rw', 'prod-r')).toEqual({
-    status: 409,
-    code: 'confirmation_required',
-  })
-  await editDescription(page, 'prod edit')
-  await page.getByRole('button', { name: 'Review 1 change' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Review changes' })
-  const apply = dialog.getByRole('button', applyButton)
-  await expect(apply).toBeDisabled()
-  await dialog.getByLabel('Type prod-rw to apply').fill('prod-r')
-  await expect(apply).toBeDisabled()
-  await dialog.getByLabel('Type prod-rw to apply').fill('prod-rw')
-  await apply.click()
-  await expect(dialog).toBeHidden()
-  await page.reload()
-  await expect(attrRow(page, 'description')).toContainText('prod edit')
 })
 
 test('read-only profile: the server refuses a direct apply', async ({ page }) => {

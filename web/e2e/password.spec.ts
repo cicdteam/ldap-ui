@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { e2eDN } from './fixture'
-import { attrRow, blur, canBind, openEntry, postJSON } from './helpers'
+import { attrRow, blur, canBind, openEntry } from './helpers'
 
 const setButton = { name: 'Set', exact: true }
 
@@ -55,21 +55,4 @@ test('set a password with SSHA and with Password Modify; the entry can bind with
   await expect(dialog).toBeHidden()
   await expect(attrRow(page, 'userPassword')).toContainText('hidden (1 value)')
   expect(canBind(e2eDN('pwserver'), typed)).toBe(true)
-})
-
-test('prod-rw: a password needs the connection name, and so does the server', async ({ page }) => {
-  const dn = e2eDN('pwprod')
-  await openEntry(page, 'prod-rw', dn)
-  expect(
-    await postJSON(page, 'api/c/prod-rw/entries/password', { dn, password: 'x', method: 'ssha' }),
-  ).toEqual({ status: 409, code: 'confirmation_required' })
-  const dialog = await openSetPassword(page)
-  await dialog.getByLabel('New password').fill('prod pass')
-  await dialog.getByLabel('Repeat').fill('prod pass')
-  const set = dialog.getByRole('button', setButton)
-  await expect(set).toBeDisabled()
-  await dialog.getByLabel('Type prod-rw to confirm').fill('prod-rw')
-  await set.click()
-  await expect(dialog).toBeHidden()
-  await expect(attrRow(page, 'userPassword')).toContainText('hidden (1 value)')
 })

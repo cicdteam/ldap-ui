@@ -35,7 +35,8 @@ connections:
     baseDN: dc=corp,dc=example
     bindDN: cn=reader,dc=corp,dc=example
     passwordEnv: CORP_PW
-    environment: prod
+    readOnly: true
+    color: red
     searchTimeout: 1m
   - name: local
     url: ldap://localhost:389
@@ -49,11 +50,11 @@ connections:
 		{
 			Name: "corp-ad", URL: "ldaps://dc1.corp.example:636",
 			BaseDN: "dc=corp,dc=example", BindDN: "cn=reader,dc=corp,dc=example",
-			PasswordEnv: "CORP_PW", Environment: Prod,
+			PasswordEnv: "CORP_PW", ReadOnly: true, Color: "red",
 			ConnectTimeout: 10 * time.Second, SearchTimeout: time.Minute,
 		},
 		{
-			Name: "local", URL: "ldap://localhost:389", StartTLS: true, Environment: Dev,
+			Name: "local", URL: "ldap://localhost:389", StartTLS: true,
 			ConnectTimeout: 10 * time.Second, SearchTimeout: 30 * time.Second,
 		},
 	}
@@ -71,7 +72,6 @@ func TestLoadRejects(t *testing.T) {
 		{name: "bad scheme", yaml: "connections: [{name: a, url: 'http://h'}]", wantInvalid: true},
 		{name: "starttls with ldaps", yaml: "connections: [{name: a, url: 'ldaps://h', startTLS: true}]", wantInvalid: true},
 		{name: "no host", yaml: "connections: [{name: a, url: 'ldap:///dc=x'}]", wantInvalid: true},
-		{name: "bad environment", yaml: "connections: [{name: a, url: 'ldap://h', environment: qa}]", wantInvalid: true},
 		{name: "bad name", yaml: "connections: [{name: 'a b', url: 'ldap://h'}]", wantInvalid: true},
 		{name: "duplicate", yaml: "connections: [{name: a, url: 'ldap://h'}, {name: a, url: 'ldap://g'}]", wantInvalid: true},
 		{name: "url credentials", yaml: "connections: [{name: a, url: 'ldap://cn=admin:s3cret@h:389'}]", wantInvalid: true},
@@ -104,21 +104,21 @@ func TestLoadErrorHidesURLPassword(t *testing.T) {
 	}
 }
 
-func TestIsReadOnly(t *testing.T) {
-	yes, no := true, false
-	tests := []struct {
-		name string
-		p    Profile
-		want bool
-	}{
-		{name: "prod default", p: Profile{Environment: Prod}, want: true},
-		{name: "dev default", p: Profile{Environment: Dev}, want: false},
-		{name: "prod opted out", p: Profile{Environment: Prod, ReadOnly: &no}, want: false},
-		{name: "dev opted in", p: Profile{Environment: Dev, ReadOnly: &yes}, want: true},
+func TestLoadRejectsEnvironment(t *testing.T) {
+	_, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://h', environment: prod}]"))
+	if err == nil || !strings.Contains(err.Error(), "field environment not found") {
+		t.Errorf("Load(environment) error = %v, want an unknown field error", err)
 	}
-	for _, tc := range tests {
-		if got := tc.p.IsReadOnly(); got != tc.want {
-			t.Errorf("%s: IsReadOnly() = %v, want %v", tc.name, got, tc.want)
+}
+
+func TestReadOnlyDefault(t *testing.T) {
+	got, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://h'}, {name: b, url: 'ldap://h', readOnly: true}]"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	for i, want := range []bool{false, true} {
+		if got[i].ReadOnly != want {
+			t.Errorf("Load() profile %s ReadOnly = %v, want %v", got[i].Name, got[i].ReadOnly, want)
 		}
 	}
 }

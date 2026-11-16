@@ -161,12 +161,10 @@ func newTestEnv(t *testing.T) *testEnv {
 func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Helper()
 	t.Setenv("LDAPLENS_TEST_PW", "from-env")
-	no := false
 	cat, err := profile.NewCatalog([]profile.Profile{
 		{Name: "dev", URL: "ldap://dev:389", BindDN: "cn=admin,dc=example,dc=org", PasswordEnv: "LDAPLENS_TEST_PW"}, //nolint:gosec // env var name, not a credential
-		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", Environment: profile.Prod, InsecureSkipVerify: true, Color: "red"},
+		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", ReadOnly: true, InsecureSkipVerify: true, Color: "red"},
 		{Name: "anon", URL: "ldap://anon:389"},
-		{Name: "prodrw", URL: "ldap://prodrw:389", Environment: profile.Prod, ReadOnly: &no},
 		{Name: "people", URL: "ldap://people:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"},
 	}, t.TempDir())
 	if err != nil {
@@ -323,12 +321,11 @@ func TestInternalErrorHidesDetails(t *testing.T) {
 func TestInfoCarriesProfileFlags(t *testing.T) {
 	type flags struct {
 		BaseDN             string `json:"baseDN"`
-		Environment        string `json:"environment"`
 		ReadOnly           bool   `json:"readOnly"`
 		InsecureSkipVerify bool   `json:"insecureSkipVerify"`
 		Color              string `json:"color"`
 	}
-	want := flags{BaseDN: "dc=example,dc=org", Environment: "prod", ReadOnly: true, InsecureSkipVerify: true, Color: "red"}
+	want := flags{BaseDN: "dc=example,dc=org", ReadOnly: true, InsecureSkipVerify: true, Color: "red"}
 	check := func(name string, rec *httptest.ResponseRecorder) {
 		t.Helper()
 		if rec.Code != http.StatusOK {
@@ -489,7 +486,7 @@ func boolStr(b bool) string {
 
 func TestSaveProfile(t *testing.T) {
 	env := newTestEnv(t)
-	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389","environment":"stage"}`)
+	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"editable":true`) {
 		t.Errorf("save = %d %s, want 200 editable", rec.Code, rec.Body)
 	}
@@ -702,8 +699,8 @@ func TestSaveProfileLogged(t *testing.T) {
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 	for _, body := range []string{
-		`{"name":"lab","url":"ldap://lab:389","environment":"prod"}`,
-		`{"name":"lab","url":"ldap://evil.example:389","environment":"prod","readOnly":false,"insecureSkipVerify":true}`,
+		`{"name":"lab","url":"ldap://lab:389","readOnly":true}`,
+		`{"name":"lab","url":"ldap://evil.example:389","insecureSkipVerify":true}`,
 	} {
 		if rec := env.do(t, http.MethodPost, "/api/profiles", body); rec.Code != http.StatusOK {
 			t.Fatalf("save %s = %d %s, want 200", body, rec.Code, rec.Body)

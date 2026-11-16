@@ -18,16 +18,6 @@ import (
 	"github.com/go-ldap/ldap/v3"
 )
 
-// Environment tells the user how careful to be with a connection.
-type Environment string
-
-// Known environments.
-const (
-	Dev   Environment = "dev"
-	Stage Environment = "stage"
-	Prod  Environment = "prod"
-)
-
 const (
 	defaultConnectTimeout = 10 * time.Second
 	defaultSearchTimeout  = 30 * time.Second
@@ -67,20 +57,10 @@ type Profile struct {
 	CAFile             string        `yaml:"caFile" json:"-"`
 	CAPEM              string        `yaml:"caPEM" json:"caPEM,omitempty"`
 	InsecureSkipVerify bool          `yaml:"insecureSkipVerify" json:"insecureSkipVerify"`
-	Environment        Environment   `yaml:"environment" json:"environment"`
 	Color              string        `yaml:"color" json:"color,omitempty"`
-	ReadOnly           *bool         `yaml:"readOnly" json:"readOnly,omitempty"`
+	ReadOnly           bool          `yaml:"readOnly" json:"readOnly"`
 	ConnectTimeout     time.Duration `yaml:"connectTimeout" json:"-"`
 	SearchTimeout      time.Duration `yaml:"searchTimeout" json:"-"`
-}
-
-// IsReadOnly reports whether writes are disabled. Prod profiles are
-// read-only unless the profile sets readOnly: false explicitly.
-func (p Profile) IsReadOnly() bool {
-	if p.ReadOnly != nil {
-		return *p.ReadOnly
-	}
-	return p.Environment == Prod
 }
 
 // normalize validates p and fills in defaults. It is idempotent.
@@ -111,13 +91,6 @@ func (p *Profile) normalize() error {
 	}
 	if u.User != nil {
 		return fmt.Errorf("%w: %s: url must not contain credentials", ErrInvalid, p.Name)
-	}
-	switch p.Environment {
-	case "":
-		p.Environment = Dev
-	case Dev, Stage, Prod:
-	default:
-		return fmt.Errorf("%w: %s: environment must be dev, stage or prod, got %q", ErrInvalid, p.Name, p.Environment)
 	}
 	if p.BindDNTemplate != "" {
 		if strings.Count(p.BindDNTemplate, userPlaceholder) != 1 {

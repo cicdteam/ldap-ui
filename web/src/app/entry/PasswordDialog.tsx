@@ -31,8 +31,7 @@ export function PasswordDialog({ dn, close }: { dn: string; close: () => void })
     // The password reaches the request through this closure, not the mutation's variables. The
     // mutation cache keeps both until gcTime after the dialog lets go: 0 drops them at once.
     gcTime: 0,
-    mutationFn: (confirm: string | undefined) =>
-      api.setPassword(ws.conn, { confirm, dn, password, method: ad ? undefined : method }),
+    mutationFn: () => api.setPassword(ws.conn, { dn, password, method: ad ? undefined : method }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: entryKey(ws.conn, dn) })
       close()
@@ -50,7 +49,7 @@ export function PasswordDialog({ dn, close }: { dn: string; close: () => void })
       ready={!plain && problem === ''}
       pending={m.isPending}
       error={m.error}
-      onSubmit={(c) => m.mutate(c)}
+      onSubmit={() => m.mutate()}
       close={close}
     >
       {plain ? (

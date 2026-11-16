@@ -78,7 +78,7 @@ demo-start: ## Start the demo: OpenLDAP and Samba AD with sample data, and ldapl
 	$(DEMO_COMPOSE) up -d --build --wait
 	@echo
 	@echo "ldaplens demo: $(DEMO_URL)"
-	@echo "Profiles: demo (dev, editable), demo-prod (prod, read-only), demo-ad (Samba AD, editable). Stop with: make demo-stop"
+	@echo "Profiles: demo (editable), demo-prod (read-only), demo-ad (Samba AD, editable). Stop with: make demo-stop"
 
 demo-stop: ## Stop the demo (the directories reset on the next start)
 	$(DEMO_COMPOSE) rm -fsv

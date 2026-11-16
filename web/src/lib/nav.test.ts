@@ -31,7 +31,6 @@ describe('columns', () => {
     paging: true,
     passwordModify: false,
     encrypted: false,
-    environment: 'dev',
     readOnly: false,
     insecureSkipVerify: false,
   })

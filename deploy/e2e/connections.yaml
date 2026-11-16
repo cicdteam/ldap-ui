@@ -5,32 +5,22 @@ connections:
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
     passwordEnv: DEMO_LDAP_PASSWORD
-    environment: dev
   - name: demo-pw
     url: ldap://127.0.0.1:1390
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
-    environment: dev
   - name: prod-bad
     url: ldap://127.0.0.1:1390
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
     passwordEnv: BAD_LDAP_PASSWORD
-    environment: prod
+    readOnly: true
     color: "#d33"
-  - name: prod-rw
-    url: ldap://127.0.0.1:1390
-    baseDN: dc=example,dc=org
-    bindDN: cn=admin,dc=example,dc=org
-    passwordEnv: DEMO_LDAP_PASSWORD
-    environment: prod
-    readOnly: false
   - name: demo-ro
     url: ldap://127.0.0.1:1390
     baseDN: dc=example,dc=org
     bindDN: cn=admin,dc=example,dc=org
     passwordEnv: DEMO_LDAP_PASSWORD
-    environment: dev
     readOnly: true
   - name: ad
     url: ldaps://127.0.0.1:1637
@@ -38,15 +28,12 @@ connections:
     bindDN: CN=Administrator,CN=Users,DC=corp,DC=example,DC=test
     passwordEnv: AD_LDAP_PASSWORD
     caFile: ../deploy/ad-test/tls/ca.pem # serve.sh runs from web/
-    environment: dev
   - name: people # each person signs in with a username (peruser.spec.ts)
     url: ldap://127.0.0.1:1390
     baseDN: dc=example,dc=org
     bindDNTemplate: uid={user},ou=people,dc=example,dc=org
-    environment: dev
   - name: ad-people
     url: ldaps://127.0.0.1:1637
     baseDN: DC=corp,DC=example,DC=test
     bindDNTemplate: "{user}@corp.example.test"
     caFile: ../deploy/ad-test/tls/ca.pem # serve.sh runs from web/
-    environment: dev

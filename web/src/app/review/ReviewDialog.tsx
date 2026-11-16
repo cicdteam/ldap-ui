@@ -1,5 +1,5 @@
 import { useIsMutating, useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { api } from '../../lib/api'
 import { batches } from '../../lib/batchStore'
 import { dropEntry, toLDIF, type EntryChanges } from '../../lib/changes'
@@ -12,7 +12,6 @@ import { CopyButton } from '../../ui/CopyButton'
 import { COPY_LDIF_HINT } from '../../lib/ldif'
 import { LdifView } from '../../ui/LdifView'
 import { Dialog } from '../../ui/Dialog'
-import { Input } from '../../ui/Input'
 import { Spinner } from '../../ui/Spinner'
 import { applyKey, useBatch, useBatchError } from '../batch'
 import { useWorkspace } from '../context'
@@ -38,7 +37,7 @@ export function ReviewDialog({
       title="Review changes"
       wide
     >
-      {/* Mounted only while open: entries load and the prod confirm resets per opening. */}
+      {/* Mounted only while open: entries load per opening. */}
       <Review applying={applying} close={() => onOpenChange(false)} />
     </Dialog>
   )
@@ -49,8 +48,6 @@ function Review({ applying, close }: { applying: boolean; close: () => void }) {
   const { conn } = ws
   const qc = useQueryClient()
   const batch = useBatch(conn)
-  const [confirm, setConfirm] = useState('')
-  const prod = ws.info.environment === 'prod'
 
   // Every staged entry is loaded, so validation does not depend on what happens to be cached.
   const entries = useQueries({
@@ -84,13 +81,13 @@ function Review({ applying, close }: { applying: boolean; close: () => void }) {
   })
 
   if (!batch.length) return <p className="text-muted">No changes to review.</p>
-  const ready = !loading && !applying && canApply({ batch, invalid, prod, confirm, conn })
+  const ready = !loading && !applying && canApply({ batch, invalid })
   return (
     <form
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault()
-        if (ready) apply.mutate({ confirm, entries: batch })
+        if (ready) apply.mutate({ entries: batch })
       }}
     >
       {!batches.persisted(conn) && (
@@ -106,18 +103,6 @@ function Review({ applying, close }: { applying: boolean; close: () => void }) {
         </p>
       )}
       {apply.isError && <ErrorBanner error={apply.error} />}
-      {prod && (
-        <label className="flex flex-col gap-1 text-xs">
-          Type {conn} to apply
-          <Input
-            mono
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-      )}
       <div className="flex items-center gap-1">
         <CopyButton text={toLDIF(batch)} label="Copy all LDIF" />
         <Button variant="ghost" disabled={applying} onClick={() => batches.clear(conn)}>

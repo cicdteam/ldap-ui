@@ -46,7 +46,6 @@ type server struct {
 // profileView is a profile as the UI sees it.
 type profileView struct {
 	profile.Profile
-	ReadOnly    bool `json:"readOnly"`
 	Editable    bool `json:"editable"`
 	HasPassword bool `json:"hasPassword"` // the server can bind without asking
 	Connected   bool `json:"connected"`
@@ -59,7 +58,6 @@ type profileView struct {
 func (s *server) view(p profile.Profile, editable bool, connected map[string]bool) profileView {
 	return profileView{
 		Profile:     p,
-		ReadOnly:    p.IsReadOnly(),
 		Editable:    editable,
 		HasPassword: p.PasswordEnv != "" || p.PasswordFile != "",
 		Connected:   connected[p.Name],
@@ -114,7 +112,7 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		s.shared.drop(saved.Name)
 		s.log.Info("profile saved", slices.Concat([]any{
 			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
-			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
+			"readOnly", saved.ReadOnly, "insecureSkipVerify", saved.InsecureSkipVerify,
 		}, s.who(r))...)
 		writeJSON(w, http.StatusOK, s.view(saved, true, nil))
 	}
@@ -125,17 +123,15 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 // with, a separate profiles request.
 type infoView struct {
 	ldapx.Info
-	Environment        profile.Environment `json:"environment"`
-	ReadOnly           bool                `json:"readOnly"`
-	InsecureSkipVerify bool                `json:"insecureSkipVerify"`
-	Color              string              `json:"color,omitempty"`
+	ReadOnly           bool   `json:"readOnly"`
+	InsecureSkipVerify bool   `json:"insecureSkipVerify"`
+	Color              string `json:"color,omitempty"`
 }
 
 func newInfoView(info ldapx.Info, p profile.Profile) infoView {
 	return infoView{
 		Info:               info,
-		Environment:        p.Environment,
-		ReadOnly:           p.IsReadOnly(),
+		ReadOnly:           p.ReadOnly,
 		InsecureSkipVerify: p.InsecureSkipVerify,
 		Color:              p.Color,
 	}

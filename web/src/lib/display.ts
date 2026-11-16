@@ -10,12 +10,10 @@ export function safeColor(c?: string): string | undefined {
 
 export type Tone = 'neutral' | 'danger' | 'warn' | 'ok' | 'accent'
 
-export function envBadges(
-  p: Pick<Profile, 'environment' | 'readOnly' | 'insecureSkipVerify'>,
+export function profileBadges(
+  p: Pick<Profile, 'readOnly' | 'insecureSkipVerify'>,
 ): { label: string; tone: Tone }[] {
-  const tone: Tone =
-    p.environment === 'prod' ? 'danger' : p.environment === 'stage' ? 'warn' : 'neutral'
-  const out: { label: string; tone: Tone }[] = [{ label: p.environment.toUpperCase(), tone }]
+  const out: { label: string; tone: Tone }[] = []
   if (p.readOnly) out.push({ label: 'READ-ONLY', tone: 'neutral' })
   if (p.insecureSkipVerify) out.push({ label: 'INSECURE TLS', tone: 'danger' })
   return out

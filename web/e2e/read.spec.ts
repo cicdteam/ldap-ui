@@ -51,7 +51,6 @@ test('badges and color come with info even when /profiles fails', async ({ page 
   await page.route('**/api/profiles', (r) => r.abort())
   await page.goto('c/prod-bad')
   const header = page.locator('header')
-  await expect(header.getByText('PROD', { exact: true })).toBeVisible()
   await expect(header.getByText('READ-ONLY', { exact: true })).toBeVisible()
   await expect(header.locator('a span').first()).toHaveCSS('background-color', 'rgb(221, 51, 51)')
 })

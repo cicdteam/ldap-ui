@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { byteLength, envBadges, formatDisplay, imageType, safeColor, shownValues } from './display'
+import {
+  byteLength,
+  formatDisplay,
+  imageType,
+  profileBadges,
+  safeColor,
+  shownValues,
+} from './display'
 
 describe('safeColor', () => {
   it.each([
@@ -18,19 +25,13 @@ describe('safeColor', () => {
   })
 })
 
-describe('envBadges', () => {
-  it('labels with text, not only color', () => {
-    expect(envBadges({ environment: 'prod', readOnly: true, insecureSkipVerify: true })).toEqual([
-      { label: 'PROD', tone: 'danger' },
+describe('profileBadges', () => {
+  it('labels with text, not only color, and names no environment', () => {
+    expect(profileBadges({ readOnly: true, insecureSkipVerify: true })).toEqual([
       { label: 'READ-ONLY', tone: 'neutral' },
       { label: 'INSECURE TLS', tone: 'danger' },
     ])
-    expect(envBadges({ environment: 'dev', readOnly: false, insecureSkipVerify: false })).toEqual([
-      { label: 'DEV', tone: 'neutral' },
-    ])
-    expect(
-      envBadges({ environment: 'stage', readOnly: false, insecureSkipVerify: false })[0].tone,
-    ).toBe('warn')
+    expect(profileBadges({ readOnly: false, insecureSkipVerify: false })).toEqual([])
   })
 })
 

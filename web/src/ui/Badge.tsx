@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { envBadges, safeColor, type Tone } from '../lib/display'
+import { profileBadges, safeColor, type Tone } from '../lib/display'
 import type { Profile } from '../lib/types'
 import { cn } from './cn'
 
@@ -51,15 +51,15 @@ export function ColorDot({ color }: { color?: string }) {
   )
 }
 
-/** Environment, read-only and insecure-TLS labels: text, never color alone. */
+/** Read-only and insecure-TLS labels: text, never color alone. */
 export function ProfileBadges({
   profile,
 }: {
-  profile: Pick<Profile, 'environment' | 'readOnly' | 'insecureSkipVerify'>
+  profile: Pick<Profile, 'readOnly' | 'insecureSkipVerify'>
 }) {
   return (
     <>
-      {envBadges(profile).map((b) => (
+      {profileBadges(profile).map((b) => (
         <Badge key={b.label} tone={b.tone}>
           {b.label}
         </Badge>

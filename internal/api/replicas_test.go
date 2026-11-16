@@ -168,14 +168,11 @@ func TestSharedWritesGuarded(t *testing.T) {
 	if rec := b.do(t, http.MethodPost, "/api/c/ro/entries/delete", deleteBody); rec.Code != http.StatusForbidden || errorCode(t, rec) != "read_only" {
 		t.Errorf("delete on a read-only shared profile = %d %s, want 403 read_only", rec.Code, rec.Body)
 	}
-	if rec := b.do(t, http.MethodPost, "/api/c/prodrw/entries/delete", deleteBody); rec.Code != http.StatusConflict || errorCode(t, rec) != "confirmation_required" {
-		t.Errorf("delete on prod without confirm = %d %s, want 409 confirmation_required", rec.Code, rec.Body)
-	}
 	if len(a.dir.writes) != 0 {
 		t.Errorf("writes = %q, want none", a.dir.writes)
 	}
-	if rec := b.do(t, http.MethodPost, "/api/c/prodrw/entries/delete", `{"dn":"uid=n,dc=example,dc=org","confirm":"prodrw"}`); rec.Code != http.StatusOK {
-		t.Errorf("delete on prod with confirm = %d %s, want 200", rec.Code, rec.Body)
+	if rec := b.do(t, http.MethodPost, "/api/c/anon/entries/delete", deleteBody); rec.Code != http.StatusOK {
+		t.Errorf("delete on a writable shared profile = %d %s, want 200", rec.Code, rec.Body)
 	}
 }
 

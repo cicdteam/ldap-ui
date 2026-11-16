@@ -121,7 +121,7 @@ describe('request', () => {
       dn: 'uid=a,dc=x',
       attributes: [{ name: 'objectClass', values: ['top'] }],
     })
-    await api.deleteEntry('demo', { confirm: 'demo', dn: 'uid=a,dc=x' })
+    await api.deleteEntry('demo', { dn: 'uid=a,dc=x' })
     await expect(api.renameEntry('demo', { dn: 'uid=a,dc=x', newRDN: 'uid=b' })).resolves.toEqual({
       dn: 'uid=a,dc=x',
     })
@@ -131,7 +131,6 @@ describe('request', () => {
       '/ldap/api/c/demo/entries/rename',
     ])
     expect(JSON.parse((post.mock.calls[1][1] as RequestInit).body as string)).toEqual({
-      confirm: 'demo',
       dn: 'uid=a,dc=x',
     })
   })
@@ -237,7 +236,6 @@ describe('toProfileInput', () => {
       url: 'ldaps://h',
       startTLS: false,
       insecureSkipVerify: false,
-      environment: 'prod',
       readOnly: true,
       editable: true,
       hasPassword: false,
@@ -250,7 +248,6 @@ describe('toProfileInput', () => {
       url: 'ldaps://h',
       startTLS: false,
       insecureSkipVerify: false,
-      environment: 'prod',
       readOnly: true,
       caPEM: 'pem',
       baseDN: undefined,

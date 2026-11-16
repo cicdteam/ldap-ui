@@ -207,18 +207,7 @@ export const api = {
 
 /** The fields POST /api/profiles accepts; it rejects the computed ones. */
 export function toProfileInput(p: Profile): ProfileInput {
-  const {
-    name,
-    url,
-    startTLS,
-    baseDN,
-    bindDN,
-    caPEM,
-    insecureSkipVerify,
-    environment,
-    color,
-    readOnly,
-  } = p
+  const { name, url, startTLS, baseDN, bindDN, caPEM, insecureSkipVerify, color, readOnly } = p
   return {
     name,
     url,
@@ -227,7 +216,6 @@ export function toProfileInput(p: Profile): ProfileInput {
     bindDN,
     caPEM,
     insecureSkipVerify,
-    environment,
     color,
     readOnly,
   }
