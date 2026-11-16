@@ -67,17 +67,19 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   point `caFile` at it).
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
   A container shows its first 200 children; a bigger one ends with
-  "More entries…", which lists all of them as a one-level search.
+  "More entries…", which opens its children as a one-level search.
 - **Search** (center): RFC 4515 filter editor with highlighting, completion
   from the schema and inline errors, or a visual builder; base DN, scope and
   columns sit next to it. A search returns at most a limit of entries in
   one request: 500, or the search API's `sizeLimit`, up to 5000. The
   response says `more` when the search matches more. Nothing is kept on the
-  server between requests, so loading more runs the search again with a
-  bigger limit. A search that matches more than 5000 entries shows the
-  first 5000; refine the search (a narrower filter or base DN) to see the
-  rest. Sorting by column and export to CSV or LDIF
-  act on the rows loaded. A search the server cut with its own size or time
+  server between requests, so "Load more" runs the search again with the
+  next limit: 1000, then 2000, then 5000; the rows shown stay until the
+  bigger answer arrives. A search that matches more than 5000 entries shows
+  the first 5000 with the note "Showing the first 5,000 entries; refine the
+  search to see the rest": narrow the filter or the base DN. Sorting by
+  column and export to CSV or LDIF act on the rows loaded. A search the
+  server cut with its own size or time
   limit, or one past ldaplens's cap of 64 MiB of attribute values, shows
   what arrived and is marked truncated ("The search stopped early"). One
   server message (an entry) over 64 MiB fails the request instead. Recent and saved

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError } from './api'
-import { collect, isCursorExpired, nextSort, sortEntries } from './results'
+import { RESULT_LIMITS, nextLimit, nextSort, sortEntries } from './results'
 import type { Entry } from './types'
 
 const e = (dn: string, cn?: string): Entry => ({
@@ -8,16 +7,13 @@ const e = (dn: string, cn?: string): Entry => ({
   attributes: cn === undefined ? [] : [{ name: 'cn', values: [{ text: cn }] }],
 })
 
-describe('collect', () => {
-  it('flattens pages and merges flags', () => {
-    expect(
-      collect([
-        { entries: [e('cn=a')], cursor: 'x' },
-        { entries: [e('cn=b')], truncated: true, referrals: ['ldap://other/'] },
-        {},
-      ]),
-    ).toEqual({ entries: [e('cn=a'), e('cn=b')], truncated: true, referrals: ['ldap://other/'] })
-    expect(collect([])).toEqual({ entries: [], truncated: false, referrals: [] })
+describe('nextLimit', () => {
+  it('steps through the limits and stops at the last', () => {
+    expect(RESULT_LIMITS).toEqual([500, 1000, 2000, 5000])
+    expect(nextLimit(500)).toBe(1000)
+    expect(nextLimit(1000)).toBe(2000)
+    expect(nextLimit(2000)).toBe(5000)
+    expect(nextLimit(5000)).toBeNull()
   })
 })
 
@@ -50,13 +46,5 @@ describe('sorting', () => {
       'cn=none',
     ])
     expect(sortEntries(list, null)).toBe(list)
-  })
-})
-
-describe('isCursorExpired', () => {
-  it('recognizes the 410 code', () => {
-    expect(isCursorExpired(new ApiError(410, { code: 'cursor_expired', message: '' }))).toBe(true)
-    expect(isCursorExpired(new ApiError(400, { code: 'bad_request', message: '' }))).toBe(false)
-    expect(isCursorExpired(new Error('x'))).toBe(false)
   })
 })

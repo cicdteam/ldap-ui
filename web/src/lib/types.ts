@@ -90,8 +90,8 @@ export interface Entry {
 
 export interface Page {
   entries?: Entry[]
-  /** Empty on the last page. Single use: pass it once to get the next page. */
-  cursor?: string
+  /** The search matches more entries than its sizeLimit; a bigger one returns them. */
+  more?: boolean
   truncated?: boolean
   referrals?: string[]
 }
@@ -102,7 +102,7 @@ export interface SearchRequest {
   filter: string
   attributes?: string[]
   pageSize?: number
-  cursor?: string
+  /** Entries wanted: 0 means 500, at most 5000. */
   sizeLimit?: number
 }
 

@@ -1,21 +1,12 @@
-import { isApiError } from './api'
 import { cellValue } from './csv'
-import type { Entry, Page } from './types'
+import type { Entry } from './types'
 
-export const RESULT_PAGE = 500
+/** Entries a search asks for: the first, then one step up per "Load more". */
+export const RESULT_LIMITS = [500, 1000, 2000, 5000]
 
-export interface Listing {
-  entries: Entry[]
-  truncated: boolean
-  referrals: string[]
-}
-
-export function collect(pages: Page[]): Listing {
-  return {
-    entries: pages.flatMap((p) => p.entries ?? []),
-    truncated: pages.some((p) => p.truncated),
-    referrals: pages.flatMap((p) => p.referrals ?? []),
-  }
+/** The limit after current, or null at the last. */
+export function nextLimit(current: number): number | null {
+  return RESULT_LIMITS.find((l) => l > current) ?? null
 }
 
 export type Sort = { column: string; desc: boolean } | null
@@ -35,8 +26,4 @@ export function sortEntries(entries: Entry[], sort: Sort): Entry[] {
     return sort.desc ? -c : c
   })
   return keyed.map((x) => x.e)
-}
-
-export function isCursorExpired(e: unknown): boolean {
-  return isApiError(e) && e.code === 'cursor_expired'
 }

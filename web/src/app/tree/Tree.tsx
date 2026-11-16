@@ -107,8 +107,7 @@ export function Tree() {
               scope: 'one',
               filter: '(objectClass=*)',
               attributes: ['objectClass', 'hasSubordinates', 'numSubordinates'],
-              // A size limit, not a page size: a bigger container comes back
-              // truncated instead of pinning a server-side cursor nobody reads.
+              // A bigger container comes back with more set: the "more" row.
               sizeLimit: TREE_PAGE,
             },
             signal,
