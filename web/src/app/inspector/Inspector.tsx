@@ -279,7 +279,7 @@ function CardHeader({
       <div className="col-start-3 row-start-1 flex items-center gap-1.5">{children}</div>
       <div className="col-[2/-1] flex min-w-0 items-center gap-1">
         <Breadcrumbs dn={dn} base={ws.info.baseDN} onSelect={ws.select} />
-        <CopyButton text={dn} label="Copy DN" className="h-5! w-5!" />
+        <CopyButton text={dn} label="Copy DN from the path" className="h-5! w-5!" />
       </div>
       <div className="col-[2/-1] mt-1 flex min-w-0 flex-wrap items-center gap-1">
         {classes.map((c) => (

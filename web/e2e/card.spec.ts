@@ -24,8 +24,8 @@ test('uid=jdoe: the card leads with who it is, then the Pinned section', async (
   ])
   await expect(page.getByText('inetOrgPerson', { exact: true }).first()).toBeVisible()
   await expect(page.getByText(/^Modified .+ by \S+=/)).toBeVisible()
-  for (const name of ['Edit', 'Add to group', 'Copy DN', 'More'])
-    await expect(page.getByRole('button', { name, exact: true }).first()).toBeVisible()
+  for (const name of ['Edit', 'Add to group', 'Copy DN', 'More', 'Copy DN from the path'])
+    await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
 
   // Pinned first, in the person's order, and not repeated below; Operational starts closed.
   await expect(page.locator('[role=tabpanel] button[aria-expanded]')).toHaveText([
