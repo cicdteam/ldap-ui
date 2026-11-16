@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
@@ -119,6 +120,30 @@ func TestSharedTypedPassword(t *testing.T) {
 	}
 	if env.dials != 2 || env.password != "from-env" {
 		t.Errorf("dials, last password = %d, %q, want 2, the configured one", env.dials, env.password)
+	}
+}
+
+// TestSharedTypedPasswordClosed checks that a browser's own connection to a
+// shared profile, once ldapx closes it for good, gives way to the shared
+// one: the list stops showing it, and the next request dials the configured
+// password instead of failing not_connected, which would send the UI back
+// to the connect dialog over and over.
+func TestSharedTypedPasswordClosed(t *testing.T) {
+	env := newTestEnv(t)
+	connectTo(t, env, `{"profile":"dev","password":"typed"}`)
+	env.dir.closed, env.dir.err = true, net.ErrClosed
+	env.dir = &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}
+	if diff := cmp.Diff([]string(nil), connectedNames(t, env)); diff != "" {
+		t.Errorf("connected profiles with a closed connection mismatch (-want +got):\n%s", diff)
+	}
+	if rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)"}`); rec.Code != http.StatusOK {
+		t.Errorf("search = %d %s, want 200", rec.Code, rec.Body)
+	}
+	if env.dials != 2 || env.password != "from-env" {
+		t.Errorf("dials, last password = %d, %q, want 2, the configured one", env.dials, env.password)
+	}
+	if diff := cmp.Diff([]string{"dev"}, connectedNames(t, env)); diff != "" {
+		t.Errorf("connected profiles after the search mismatch (-want +got):\n%s", diff)
 	}
 }
 

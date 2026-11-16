@@ -195,6 +195,43 @@ func (m *Manager[C]) Names(id string) []string {
 	return names
 }
 
+// Conns returns the connections of session id that are within the maximum
+// age, by name, without marking the session used.
+func (m *Manager[C]) Conns(id string) map[string]C {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return nil
+	}
+	now := m.now()
+	conns := map[string]C{}
+	for name, e := range s.conns {
+		if !m.tooOld(e, now) {
+			conns[name] = e.c
+		}
+	}
+	return conns
+}
+
+// DropConn closes and forgets the connection stored under name only while
+// it is c, so that a connection Put in its place meanwhile stays.
+func (m *Manager[C]) DropConn(id, name string, c C) {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	if ok {
+		e, found := s.conns[name]
+		ok = found && any(e.c) == any(c)
+	}
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	delete(s.conns, name)
+	m.mu.Unlock()
+	_ = c.Close()
+}
+
 // Drop closes and forgets one connection.
 func (m *Manager[C]) Drop(id, name string) {
 	m.mu.Lock()

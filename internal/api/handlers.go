@@ -95,8 +95,8 @@ func (s *server) view(p profile.Profile, editable bool, connected map[string]boo
 func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	fixed, saved := s.catalog.All()
 	connected := map[string]bool{}
-	for _, n := range s.sessions.Names(sessionID(r)) {
-		connected[n] = true
+	for n, d := range s.sessions.Conns(sessionID(r)) {
+		connected[n] = !d.Closed()
 	}
 	for _, p := range slices.Concat(fixed, saved) {
 		if p.Shared() && s.shared.connected(p.Name) {
@@ -453,10 +453,16 @@ func (s *server) refs(w http.ResponseWriter, r *http.Request, list func(Director
 // directory returns the connection named by the {conn} path segment, or
 // writes an error and returns false. Without one in the browser's session,
 // a shared profile gets this process's connection, dialed by the first
-// request that needs it.
+// request that needs it. One in the session that ldapx closed for good, as
+// a typed password the server refused at a reconnect, is dropped and counts
+// as none.
 func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, bool) {
 	name := r.PathValue("conn")
 	d, err := s.sessions.Get(sessionID(r), name)
+	if err == nil && d.Closed() {
+		s.sessions.DropConn(sessionID(r), name, d)
+		err = session.ErrNotConnected
+	}
 	if err != nil {
 		if p, ferr := s.catalog.Find(name); ferr == nil && p.Shared() {
 			d, err = s.sharedDir(r.Context(), p)
