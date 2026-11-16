@@ -16,7 +16,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 // MaxValue bounds one attribute value, in bytes once decoded: a photo or a

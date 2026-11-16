@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrei Taranik
 
-// Package api serves the ldapui HTTP API and the embedded web UI.
+// Package api serves the ldaplens HTTP API and the embedded web UI.
 package api
 
 import (
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/profile"
-	"github.com/cicdteam/ldap-ui/internal/schema"
-	"github.com/cicdteam/ldap-ui/internal/session"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/session"
 )
 
 // Directory is an open LDAP connection. *ldapx.Conn implements it.

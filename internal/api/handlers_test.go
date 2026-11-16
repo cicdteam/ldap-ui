@@ -29,10 +29,10 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/profile"
-	"github.com/cicdteam/ldap-ui/internal/schema"
-	"github.com/cicdteam/ldap-ui/internal/session"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/session"
 )
 
 // The real connection must keep satisfying Directory.
@@ -157,10 +157,10 @@ func newTestEnv(t *testing.T) *testEnv {
 // last dial are then unused.
 func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Helper()
-	t.Setenv("LDAPUI_TEST_PW", "from-env")
+	t.Setenv("LDAPLENS_TEST_PW", "from-env")
 	no := false
 	cat, err := profile.NewCatalog([]profile.Profile{
-		{Name: "dev", URL: "ldap://dev:389", BindDN: "cn=admin,dc=example,dc=org", PasswordEnv: "LDAPUI_TEST_PW"}, //nolint:gosec // env var name, not a credential
+		{Name: "dev", URL: "ldap://dev:389", BindDN: "cn=admin,dc=example,dc=org", PasswordEnv: "LDAPLENS_TEST_PW"}, //nolint:gosec // env var name, not a credential
 		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", Environment: profile.Prod, InsecureSkipVerify: true, Color: "red"},
 		{Name: "anon", URL: "ldap://anon:389"},
 		{Name: "prodrw", URL: "ldap://prodrw:389", Environment: profile.Prod, ReadOnly: &no},
@@ -285,14 +285,14 @@ func TestConnectErrors(t *testing.T) {
 func TestConnectHidesPasswordSource(t *testing.T) {
 	var logs bytes.Buffer
 	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	if err := os.Unsetenv("LDAPUI_TEST_PW"); err != nil { // t.Setenv restores it
+	if err := os.Unsetenv("LDAPLENS_TEST_PW"); err != nil { // t.Setenv restores it
 		t.Fatal(err)
 	}
 	rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"dev"}`)
-	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "password_unavailable" || strings.Contains(rec.Body.String(), "LDAPUI_TEST_PW") {
+	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "password_unavailable" || strings.Contains(rec.Body.String(), "LDAPLENS_TEST_PW") {
 		t.Errorf("connect without env password = %d %s, want 500 password_unavailable without the env var name", rec.Code, rec.Body)
 	}
-	if !strings.Contains(logs.String(), "LDAPUI_TEST_PW") {
+	if !strings.Contains(logs.String(), "LDAPLENS_TEST_PW") {
 		t.Errorf("server log = %q, want the env var name", logs.String())
 	}
 }
@@ -441,7 +441,7 @@ func TestProfilesNeverExposeSecrets(t *testing.T) {
 	env := connected(t)
 	rec := env.do(t, http.MethodGet, "/api/profiles", "")
 	body := rec.Body.String()
-	if rec.Code != http.StatusOK || strings.Contains(body, "from-env") || strings.Contains(body, "LDAPUI_TEST_PW") {
+	if rec.Code != http.StatusOK || strings.Contains(body, "from-env") || strings.Contains(body, "LDAPLENS_TEST_PW") {
 		t.Fatalf("profiles = %d %s, want 200 without password or env name", rec.Code, body)
 	}
 	var views []struct {

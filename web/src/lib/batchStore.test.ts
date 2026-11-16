@@ -17,7 +17,7 @@ describe('batch store', () => {
       setItem: (k: string, v: string) => void m.set(k, v),
     })
     createBatchStore().stage('p', DN, { kind: 'add', attr: 'mail', value: 'z' })
-    expect(JSON.parse(m.get('ldapui:batch:p') ?? '')).toHaveLength(1)
+    expect(JSON.parse(m.get('ldaplens:batch:p') ?? '')).toHaveLength(1)
     expect(createBatchStore().get('p')).toHaveLength(1)
   })
   it('stages, notifies, keeps identity until a change', () => {
@@ -151,9 +151,9 @@ describe('batch store', () => {
       { op: 'add', attr: 'jpegPhoto', values: [big], base64: true },
     ])
     // A reload would find no batch rather than the older one.
-    expect(m.get('ldapui:batch:p')).toBe('[]')
+    expect(m.get('ldaplens:batch:p')).toBe('[]')
     expect(s.undo('p')).toBe(true)
     expect(s.persisted('p')).toBe(true)
-    expect(JSON.parse(m.get('ldapui:batch:p') ?? '')).toHaveLength(1)
+    expect(JSON.parse(m.get('ldaplens:batch:p') ?? '')).toHaveLength(1)
   })
 })

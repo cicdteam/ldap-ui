@@ -10,7 +10,7 @@ import (
 	"net/netip"
 	"slices"
 
-	"github.com/cicdteam/ldap-ui/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/profile"
 )
 
 // maxUser bounds the identity header value in a log line, in bytes.

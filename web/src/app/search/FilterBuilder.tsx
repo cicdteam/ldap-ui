@@ -16,7 +16,7 @@ const OPS: { value: OpChoice; label: string }[] = [
   { value: ':=', label: 'extensible' },
 ]
 
-const ATTR_LIST = 'ldapui-attr-names'
+const ATTR_LIST = 'ldaplens-attr-names'
 
 function CmpRow({ node, onChange }: { node: Cmp; onChange: (n: Cmp) => void }) {
   const present = node.op === '=' && node.value === '*'

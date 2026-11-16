@@ -76,7 +76,7 @@ const messages = new Map([
     'invalid_username',
     'A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long.',
   ],
-  ['identity_required', 'Open ldapui through its sign-in proxy to use this connection.'],
+  ['identity_required', 'Open ldaplens through its sign-in proxy to use this connection.'],
   ['identity_mismatch', 'Use the username you signed in to the proxy with.'],
   // ponytail: a fixed wait, not Retry-After; read the header into ApiError to show the seconds.
   ['too_many_attempts', 'Too many failed sign-ins for this account. Wait a minute and try again.'],
@@ -138,7 +138,7 @@ async function request<T>(
     })
   } catch (e) {
     if (signal?.aborted) throw e
-    throw new ApiError(0, { code: 'offline', message: 'Cannot reach the ldapui server' })
+    throw new ApiError(0, { code: 'offline', message: 'Cannot reach the ldaplens server' })
   }
   const text = await res.text()
   let data: unknown

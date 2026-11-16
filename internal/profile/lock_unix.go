@@ -28,7 +28,7 @@ func lockDir(dir string) (*os.File, error) {
 	switch err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); {
 	case errors.Is(err, syscall.EWOULDBLOCK):
 		_ = f.Close()
-		return nil, fmt.Errorf("data dir %s is in use by another ldapui process", dir)
+		return nil, fmt.Errorf("data dir %s is in use by another ldaplens process", dir)
 	case err != nil:
 		_ = f.Close()
 		return nil, fmt.Errorf("lock data dir %s: %w", dir, err)

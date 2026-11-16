@@ -17,9 +17,9 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/ad"
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/session"
+	"github.com/cicdteam/ldaplens/internal/ad"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/session"
 )
 
 // apiError is the body of every error response. Code is stable and meant

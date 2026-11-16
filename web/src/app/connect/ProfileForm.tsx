@@ -173,7 +173,7 @@ export function ProfileForm({
           />
         </label>
         <p className="col-span-2 text-xs text-muted">
-          Passwords are never saved: ldapui asks for one when you connect.
+          Passwords are never saved: ldaplens asks for one when you connect.
         </p>
         {save.isError && (
           <div className="col-span-2">

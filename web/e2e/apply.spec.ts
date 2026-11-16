@@ -153,7 +153,7 @@ test('a batch too large for sessionStorage stays in the tab, with a warning', as
   await page.addInitScript(() => {
     const setItem = Storage.prototype.setItem
     Storage.prototype.setItem = function (key: string, value: string) {
-      if (key.startsWith('ldapui:batch:') && value !== '[]')
+      if (key.startsWith('ldaplens:batch:') && value !== '[]')
         throw new DOMException('quota exceeded', 'QuotaExceededError')
       setItem.call(this, key, value)
     }
@@ -164,5 +164,5 @@ test('a batch too large for sessionStorage stays in the tab, with a warning', as
   const dialog = page.getByRole('dialog', { name: 'Review changes' })
   await expect(dialog.getByText('This batch is too large to survive a reload')).toBeVisible()
   await expect(dialog).toContainText('description: kept in the tab')
-  expect(await page.evaluate(() => sessionStorage.getItem('ldapui:batch:demo'))).toBe('[]')
+  expect(await page.evaluate(() => sessionStorage.getItem('ldaplens:batch:demo'))).toBe('[]')
 })

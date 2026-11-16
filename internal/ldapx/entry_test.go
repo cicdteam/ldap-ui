@@ -10,7 +10,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 func TestConvertAttribute(t *testing.T) {

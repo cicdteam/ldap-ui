@@ -10,9 +10,9 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/profile"
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 type addRequest struct {

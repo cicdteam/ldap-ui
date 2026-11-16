@@ -58,7 +58,7 @@ func TestSPAHandlerNotBuilt(t *testing.T) {
 }
 
 func TestSPAAssets(t *testing.T) {
-	js := strings.Repeat("console.log('ldapui');\n", 200)
+	js := strings.Repeat("console.log('ldaplens');\n", 200)
 	ui := fstest.MapFS{
 		"index.html":       {Data: []byte(`<html><head><base href="/"></head></html>`)},
 		"assets/app-1.js":  {Data: []byte(js)},

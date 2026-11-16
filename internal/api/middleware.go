@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const tokenCookie = "ldapui_token" //nolint:gosec // cookie name, not a credential
+const tokenCookie = "ldaplens_token" //nolint:gosec // cookie name, not a credential
 
 // contentSecurityPolicy allows only this origin, plus data: images (photos
 // and the favicon) and inline styles, which CodeMirror and the dialogs'
@@ -88,7 +88,7 @@ func hostCheck(extra []string, next http.Handler) http.Handler {
 	})
 }
 
-// requireToken admits requests carrying token as the ldapui_token cookie or
+// requireToken admits requests carrying token as the ldaplens_token cookie or
 // as a bearer token. A GET with ?token= sets the cookie and redirects to the
 // same URL without it, so the login link printed at startup just works. An
 // empty token disables the check. A refusal logs "auth failed" with the

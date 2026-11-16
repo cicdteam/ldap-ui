@@ -12,10 +12,10 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
-// Caps on one search response, so that a server cannot make ldapui hold an
+// Caps on one search response, so that a server cannot make ldaplens hold an
 // unbounded result in memory. A response past one ends early as truncated.
 const (
 	maxResponseEntries = 5000

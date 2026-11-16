@@ -34,7 +34,7 @@ import (
 	tclog "github.com/testcontainers/testcontainers-go/log"
 	"github.com/testcontainers/testcontainers-go/modules/openldap"
 
-	"github.com/cicdteam/ldap-ui/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/profile"
 )
 
 const (

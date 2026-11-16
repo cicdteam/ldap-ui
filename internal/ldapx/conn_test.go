@@ -28,8 +28,8 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/profile"
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 // fakeServer accepts TCP connections and hands each one to serve with its
@@ -165,7 +165,7 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "ldapui test"},
+		Subject:               pkix.Name{CommonName: "ldaplens test"},
 		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
@@ -460,7 +460,7 @@ func TestReadRetriesDroppedConnection(t *testing.T) {
 
 // TestRedialInvalidCredentialsCloses checks that a redial whose bind the
 // directory refuses with invalid credentials, as after a password change,
-// closes the Conn: the password is never sent again, so ldapui cannot lock
+// closes the Conn: the password is never sent again, so ldaplens cannot lock
 // the account under a lockout policy. Any other failed bind leaves the Conn
 // open, and the next read redials.
 func TestRedialInvalidCredentialsCloses(t *testing.T) {

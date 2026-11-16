@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrei Taranik
 
-// Package ldapx is ldapui's LDAP client. It wraps go-ldap with paging,
+// Package ldapx is ldaplens's LDAP client. It wraps go-ldap with paging,
 // reconnects, Active Directory decoding and group membership queries.
 package ldapx
 
@@ -16,8 +16,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/ad"
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/ad"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 // Value is one attribute value.

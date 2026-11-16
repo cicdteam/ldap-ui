@@ -23,13 +23,13 @@ export function save(key: string, value: unknown, area: 'local' | 'session' = 'l
 }
 
 export const keys = {
-  theme: 'ldapui:theme',
-  density: 'ldapui:density',
-  raw: 'ldapui:raw',
-  history: (profile: string) => `ldapui:history:${profile}`,
-  saved: (profile: string) => `ldapui:saved:${profile}`,
-  expanded: (profile: string) => `ldapui:expanded:${profile}`,
-  batch: (profile: string) => `ldapui:batch:${profile}`,
+  theme: 'ldaplens:theme',
+  density: 'ldaplens:density',
+  raw: 'ldaplens:raw',
+  history: (profile: string) => `ldaplens:history:${profile}`,
+  saved: (profile: string) => `ldaplens:saved:${profile}`,
+  expanded: (profile: string) => `ldaplens:expanded:${profile}`,
+  batch: (profile: string) => `ldaplens:batch:${profile}`,
 }
 
 export interface SearchState {

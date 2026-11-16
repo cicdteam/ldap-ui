@@ -10,7 +10,7 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 // Search scopes accepted in SearchRequest.Scope. Empty means ScopeSub.

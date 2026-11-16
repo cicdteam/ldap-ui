@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/ad"
+	"github.com/cicdteam/ldaplens/internal/ad"
 )
 
 // maxRangeFetches caps the follow-up requests for one ranged attribute, so a

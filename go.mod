@@ -1,4 +1,4 @@
-module github.com/cicdteam/ldap-ui
+module github.com/cicdteam/ldaplens
 
 go 1.26.11
 
