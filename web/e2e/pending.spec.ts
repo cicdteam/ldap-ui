@@ -21,6 +21,12 @@ test('the pending bar names the connection; Review applies to it; no header badg
     (await status.boundingBox())!.y,
   )
   await expect(page.getByRole('banner').getByRole('button', { name: /Review/ })).toHaveCount(0)
+  // In a narrow window the text gives way: the bar fits and Review stays on screen.
+  await page.setViewportSize({ width: 400, height: 900 })
+  expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0)
+  const review = (await reviewButton(page).boundingBox())!
+  expect(review.x + review.width).toBeLessThanOrEqual(400)
+  await page.setViewportSize({ width: 1400, height: 900 })
 
   await reviewButton(page).click()
   const dialog = page.getByRole('dialog', { name: 'Review changes' })

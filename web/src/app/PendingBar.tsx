@@ -42,12 +42,14 @@ export function PendingBar() {
     <div
       role="status"
       aria-label="Pending changes"
-      className="flex h-11 shrink-0 items-center gap-2 border-t border-warn/45 bg-warn/10 pr-2.5 pl-4 whitespace-nowrap"
+      className="flex h-11 min-w-0 shrink-0 items-center gap-2 overflow-hidden border-t border-warn/45 bg-warn/10 pr-2.5 pl-4 whitespace-nowrap"
     >
       <span className={cn('h-2 w-2 shrink-0 rounded-full', invalid ? 'bg-danger' : 'bg-warn')} />
-      <span className="font-semibold">{pendingText(n, batch.length, ws.conn)}</span>
+      <span className="truncate font-semibold">{pendingText(n, batch.length, ws.conn)}</span>
       <span className="min-w-0 truncate font-mono text-xs text-muted">{ws.info.url}</span>
-      {invalid && <span className="text-xs text-danger">Some changes fail validation</span>}
+      {invalid && (
+        <span className="truncate text-xs text-danger">Some changes fail validation</span>
+      )}
       <span className="flex-1" />
       <Button variant="ghost" size="sm" title="Drop every staged change" onClick={discard}>
         Discard
