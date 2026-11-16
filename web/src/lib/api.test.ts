@@ -77,6 +77,13 @@ describe('request', () => {
     expect(err.code).toBe('offline')
   })
 
+  it('reads the mode from api/server', async () => {
+    const fetch = respond(200, { mode: 'server' })
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.server()).resolves.toEqual({ mode: 'server' })
+    expect(new URL(fetch.mock.calls[0][0] as string).pathname).toBe('/ldap/api/server')
+  })
+
   it('handles 204', async () => {
     vi.stubGlobal('fetch', respond(204, ''))
     await expect(api.disconnect('demo')).resolves.toBeUndefined()
@@ -241,6 +248,7 @@ describe('toProfileInput', () => {
       hasPassword: false,
       connected: true,
       userLogin: false,
+      needsPassword: false,
       caPEM: 'pem',
     }
     expect(toProfileInput(p)).toEqual({

@@ -95,11 +95,13 @@ func New(opts Options) http.Handler {
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
 		shared:         &sharedConns{m: opts.Shared, conns: map[string]sharedConn{}, dials: map[string]chan struct{}{}},
 		trustedProxies: opts.TrustedProxies,
+		serverMode:     opts.Server,
 		attempts:       newAttemptLimiter(5, time.Minute, 10000, time.Now),
 		clients:        newAttemptLimiter(20, time.Minute, 10000, time.Now),
 	}
 
 	app := http.NewServeMux()
+	app.HandleFunc("GET /api/server", s.mode)
 	app.HandleFunc("GET /api/profiles", s.listProfiles)
 	app.HandleFunc("POST /api/profiles", s.saveProfile)
 	app.HandleFunc("POST /api/connect", s.connect)

@@ -49,6 +49,28 @@ password or anonymously would serve anyone who reaches ldaplens, so it fails
 startup with `profile <name> binds with a configured password or
 anonymously; server mode needs --auth-token or --auth-token-file`.
 
+**Server mode shows only what it takes to connect.** The UI learns the mode
+from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`). In server
+mode:
+
+- the profile list (`GET /api/profiles`) gives each profile's `name`,
+  `color`, `readOnly`, `connected`, `userLogin` and `needsPassword` only,
+  nothing about where or how it binds: no URL, base DN, bind DN, CA or TLS
+  settings;
+- the UI has no "New connection", no profile editing and no "Trust this CA
+  and connect"; a save answers 403 `saving_disabled` with `this server keeps
+  no saved connections`;
+- the connect dialog of a profile with a bind DN and no configured password
+  asks for a "Password", without naming the DN;
+- a refused sign-in (LDAP result 49) answers 401 `invalid_credentials` with
+  `invalid username or password`, and no `diagnostic`, `reason` or
+  `matchedDN`: the directory's message, and the reason decoded from it, such
+  as Active Directory's `account locked out`, would tell anyone who tries a
+  name that the account exists. The server log keeps the full error in
+  `connect failed`.
+
+Local mode shows all of it.
+
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
@@ -107,13 +129,14 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 ## Using the UI
 
 - **Connections** (`/`): profiles from `connections.yaml` (marked `yaml`) and
-  ones saved in the UI. Passwords are never stored: a profile with a bind DN
+  ones saved in the UI (local mode; server mode shows less, see [Two
+  modes](#two-modes)). Passwords are never stored: a profile with a bind DN
   but no `passwordEnv`/`passwordFile` asks for one at connect time, and so
   does one whose configured password the server rejects or cannot read. A
   `bindDNTemplate` profile asks for a username and a password (see [Per-user
   login](#per-user-login)). An
-  untrusted TLS certificate shows its chain and fingerprints; "Trust this CA"
-  stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
+  untrusted TLS certificate shows its chain and fingerprints; "Trust this CA
+  and connect" stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
   point `caFile` at it).
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
   A container shows its first 200 children; a bigger one ends with
@@ -546,8 +569,8 @@ profile is dialed again at its next request.
   `bindDNTemplate` (see [Per-user login](#per-user-login)), run `ldaplens
   server`, and keep the token or an SSO proxy in front.
   Everyone then works as themselves,
-  and no service account password is stored in the deployment. Saving in
-  the UI fails with 409 `saving_disabled`, and connect opens
+  and no service account password is stored in the deployment. The UI
+  offers no saving, and a save fails with 403 `saving_disabled`; connect opens
   only the profiles from that file, so nobody can make the server open
   connections to other hosts and ports it reaches, or change a shared
   profile so that the next person's password goes to a server of their

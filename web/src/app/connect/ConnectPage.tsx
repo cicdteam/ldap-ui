@@ -17,6 +17,9 @@ export function ConnectPage() {
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api.profiles() })
+  // Server mode saves no profiles: no new ones, no edits, no yaml marks.
+  const mode = useQuery({ queryKey: ['server'], queryFn: () => api.server(), staleTime: Infinity })
+  const local = mode.data?.mode === 'local'
   const [editing, setEditing] = useState<Profile | 'new' | null>(null)
   const target = params.get('connect')
   const next = safeNext(params.get('next'))
@@ -37,9 +40,11 @@ export function ConnectPage() {
           <span className="text-muted">Connections</span>
           <div className="ml-auto flex items-center gap-1">
             <PrefsToggles />
-            <Button size="sm" onClick={() => setEditing('new')}>
-              <Plus className="h-3.5 w-3.5" /> New connection
-            </Button>
+            {local && (
+              <Button size="sm" onClick={() => setEditing('new')}>
+                <Plus className="h-3.5 w-3.5" /> New connection
+              </Button>
+            )}
           </div>
         </header>
         {target && next && (
@@ -51,8 +56,13 @@ export function ConnectPage() {
         {profiles.isError && <ErrorBanner error={profiles.error} />}
         {profiles.data?.length === 0 && (
           <p className="text-muted">
-            No connections yet. Create one, or mount a{' '}
-            <span className="font-mono">connections.yaml</span>.
+            No connections yet.
+            {local && (
+              <>
+                {' '}
+                Create one, or mount a <span className="font-mono">connections.yaml</span>.
+              </>
+            )}
           </p>
         )}
         <ul className="divide-y divide-border rounded-lg border border-border">
@@ -86,12 +96,14 @@ export function ConnectPage() {
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
               ) : (
-                <span
-                  className="w-7 text-center text-[10px] text-muted"
-                  title="Defined in connections.yaml"
-                >
-                  yaml
-                </span>
+                local && (
+                  <span
+                    className="w-7 text-center text-[10px] text-muted"
+                    title="Defined in connections.yaml"
+                  >
+                    yaml
+                  </span>
+                )
               )}
             </li>
           ))}

@@ -41,6 +41,18 @@ type server struct {
 	// trustedProxies are the reverse proxies whose X-Forwarded-For names
 	// the client (see clientAddr).
 	trustedProxies []netip.Prefix
+	// serverMode is Options.Server.
+	serverMode bool
+}
+
+// mode tells the UI the mode, so that it hides what server mode does not
+// offer.
+func (s *server) mode(w http.ResponseWriter, _ *http.Request) {
+	mode := "local"
+	if s.serverMode {
+		mode = "server"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
 }
 
 // profileView is a profile as the UI sees it.
@@ -52,16 +64,31 @@ type profileView struct {
 	// UserLogin is set for a bindDNTemplate profile, which asks for a
 	// username.
 	UserLogin bool `json:"userLogin"`
+	// NeedsPassword is set when connect asks for a password: a
+	// bindDNTemplate profile, or a bindDN without a configured password.
+	NeedsPassword bool `json:"needsPassword"`
+}
+
+// serverProfileView is a profile as the UI sees it in server mode: what the
+// connect page needs, and nothing about where or how the profile binds.
+type serverProfileView struct {
+	Name          string `json:"name"`
+	Color         string `json:"color,omitempty"`
+	ReadOnly      bool   `json:"readOnly"`
+	Connected     bool   `json:"connected"`
+	UserLogin     bool   `json:"userLogin"`
+	NeedsPassword bool   `json:"needsPassword"`
 }
 
 // view is p as the UI sees it.
 func (s *server) view(p profile.Profile, editable bool, connected map[string]bool) profileView {
 	return profileView{
-		Profile:     p,
-		Editable:    editable,
-		HasPassword: p.PasswordEnv != "" || p.PasswordFile != "",
-		Connected:   connected[p.Name],
-		UserLogin:   p.UserLogin(),
+		Profile:       p,
+		Editable:      editable,
+		HasPassword:   p.PasswordEnv != "" || p.PasswordFile != "",
+		Connected:     connected[p.Name],
+		UserLogin:     p.UserLogin(),
+		NeedsPassword: !p.Shared(),
 	}
 }
 
@@ -83,10 +110,25 @@ func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	for _, p := range saved {
 		views = append(views, s.view(p, true, connected))
 	}
+	if s.serverMode {
+		short := make([]serverProfileView, len(views))
+		for i, v := range views {
+			short[i] = serverProfileView{
+				Name: v.Name, Color: v.Color, ReadOnly: v.ReadOnly,
+				Connected: v.Connected, UserLogin: v.UserLogin, NeedsPassword: v.NeedsPassword,
+			}
+		}
+		writeJSON(w, http.StatusOK, short)
+		return
+	}
 	writeJSON(w, http.StatusOK, views)
 }
 
 func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
+	if s.serverMode {
+		writeError(w, http.StatusForbidden, apiError{Code: "saving_disabled", Message: "this server keeps no saved connections"})
+		return
+	}
 	var p profile.Profile
 	if !decode(w, r, &p, maxBody) {
 		return
@@ -160,8 +202,7 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	if p.Shared() && req.Password == "" {
 		d, err := s.sharedDir(r.Context(), p)
 		if err != nil {
-			s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
-			s.fail(w, err)
+			s.connectFailed(w, r, p, err)
 			return
 		}
 		s.log.Info("connected", s.attributed(r, p, "profile", p.Name)...)
@@ -225,8 +266,7 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
 			endClient, endAccount = (*attemptLimiter).fail, (*attemptLimiter).fail
 		}
-		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
-		s.fail(w, err)
+		s.connectFailed(w, r, p, err)
 		return
 	}
 	endAccount = (*attemptLimiter).succeed
@@ -246,6 +286,19 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	lr.Header.Set("Cookie", sessionCookie+"="+id)
 	s.log.Info("connected", s.attributed(lr, p, "profile", p.Name, "previous", fingerprint(sessionID(r)))...)
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
+}
+
+// connectFailed logs and answers a failed connect to p. In server mode a
+// refused bind (result 49) says only that: the diagnostic, and the reason
+// decoded from it, would tell a stranger that an account exists, is locked
+// or is disabled. The log keeps the full error.
+func (s *server) connectFailed(w http.ResponseWriter, r *http.Request, p profile.Profile, err error) {
+	s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
+	if s.serverMode && ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+		writeError(w, http.StatusUnauthorized, apiError{Code: "invalid_credentials", Message: "invalid username or password"})
+		return
+	}
+	s.fail(w, err)
 }
 
 // userLogin checks a connect to the bindDNTemplate profile p, in this

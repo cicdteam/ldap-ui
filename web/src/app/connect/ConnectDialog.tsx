@@ -26,8 +26,7 @@ export function ConnectDialog({
   const qc = useQueryClient()
   const [password, setPassword] = useState('')
   const [username, setUsername] = useState('')
-  const needsPassword =
-    !!profile && (profile.userLogin || (!profile.hasPassword && !!profile.bindDN))
+  const needsPassword = !!profile?.needsPassword
   // Kept across retries: a pending connect clears the error, not the field.
   // The first one wins: it comes from the stored password, later ones from typed ones.
   const [hint, setHint] = useState<string>()
@@ -113,12 +112,12 @@ export function ConnectDialog({
             )}
             <label className="block space-y-1">
               <span className="text-xs text-muted">
-                {profile.userLogin ? (
-                  'Password'
-                ) : (
+                {profile.bindDN ? (
                   <>
                     Password for <span className="font-mono">{profile.bindDN}</span>
                   </>
+                ) : (
+                  'Password'
                 )}
               </span>
               {/* autoFocus also focuses the field when an error makes it appear. */}

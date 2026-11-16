@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -505,6 +506,119 @@ func TestSaveProfile(t *testing.T) {
 		rec := env.do(t, http.MethodPost, "/api/profiles", tc.body)
 		if rec.Code != tc.wantStatus || errorCode(t, rec) != tc.wantCode {
 			t.Errorf("%s: save = %d %s, want %d %s", tc.name, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
+		}
+	}
+}
+
+func TestServerModeRefusesSaving(t *testing.T) {
+	env := newTestEnvWith(t, Options{Server: true})
+	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`)
+	var got apiError
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body, err)
+	}
+	want := apiError{Code: "saving_disabled", Message: "this server keeps no saved connections"}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("save in server mode = %d, want 403", rec.Code)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("save in server mode body mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestServerModeProfileView checks that server mode tells the UI only what
+// its connect page needs, nothing about where or how a profile binds.
+func TestServerModeProfileView(t *testing.T) {
+	env := newTestEnvWith(t, Options{Server: true})
+	rec := env.do(t, http.MethodGet, "/api/profiles", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("profiles = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var views []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &views); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body, err)
+	}
+	got := map[string][]string{}
+	for _, v := range views {
+		got[v["name"].(string)] = slices.Sorted(maps.Keys(v))
+	}
+	keys := []string{"connected", "name", "needsPassword", "readOnly", "userLogin"}
+	want := map[string][]string{
+		"dev":    keys,
+		"manual": {"color", "connected", "name", "needsPassword", "readOnly", "userLogin"},
+		"anon":   keys,
+		"people": keys,
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("profile keys mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNeedsPassword(t *testing.T) {
+	tests := []struct {
+		name string
+		p    profile.Profile
+		want bool
+	}{
+		{name: "template", p: profile.Profile{BindDNTemplate: "uid={user},dc=x"}, want: true},
+		{name: "bindDN without a configured password", p: profile.Profile{BindDN: "cn=a,dc=x"}, want: true},
+		{name: "passwordFile", p: profile.Profile{BindDN: "cn=a,dc=x", PasswordFile: "/run/pw"}, want: false},
+		{name: "anonymous", want: false},
+	}
+	for _, tc := range tests {
+		b, err := json.Marshal(new(server).view(tc.p, false, nil))
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", tc.name, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatalf("%s: decode %s: %v", tc.name, b, err)
+		}
+		if got["needsPassword"] != tc.want {
+			t.Errorf("%s: view needsPassword = %v, want %v", tc.name, got["needsPassword"], tc.want)
+		}
+	}
+}
+
+// TestServerModeGenericBindError checks that in server mode a refused
+// sign-in tells the browser nothing about the account, while the log keeps
+// the full error; local mode still decodes AD's reason.
+func TestServerModeGenericBindError(t *testing.T) {
+	adErr := "80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 775, v4563"
+	tests := []struct {
+		name   string
+		server bool
+		want   map[string]any
+	}{
+		{
+			name: "server", server: true,
+			want: map[string]any{"code": "invalid_credentials", "message": "invalid username or password"},
+		},
+		{
+			name: "local",
+			want: map[string]any{
+				"code": "invalid_credentials", "message": "LDAP Result Code 49 \"Invalid Credentials\": " + adErr,
+				"ldapResultCode": float64(49), "diagnostic": adErr, "reason": "account locked out",
+			},
+		},
+	}
+	for _, tc := range tests {
+		var logs bytes.Buffer
+		env := newTestEnvWith(t, Options{Server: tc.server, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		env.dialErr = ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New(adErr))
+		rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"wrong"}`)
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%s: decode %q: %v", tc.name, rec.Body, err)
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s: connect = %d, want 401", tc.name, rec.Code)
+		}
+		if diff := cmp.Diff(tc.want, got); diff != "" {
+			t.Errorf("%s: connect body mismatch (-want +got):\n%s", tc.name, diff)
+		}
+		if !strings.Contains(logs.String(), "data 775") {
+			t.Errorf("%s: server log = %q, want the full error", tc.name, logs.String())
 		}
 	}
 }

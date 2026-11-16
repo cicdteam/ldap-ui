@@ -14,6 +14,7 @@ import type {
   RenameRequest,
   Schema,
   SearchRequest,
+  ServerInfo,
   WriteResult,
 } from './types'
 
@@ -165,6 +166,7 @@ const conn = (c: string) => `api/c/${encodeURIComponent(c)}`
 const query = (params: Record<string, string>) => new URLSearchParams(params).toString()
 
 export const api = {
+  server: () => request<ServerInfo>('GET', 'api/server'),
   profiles: () => request<Profile[]>('GET', 'api/profiles'),
   saveProfile: (p: ProfileInput) => request<Profile>('POST', 'api/profiles', p),
   /** username is for a userLogin profile; without one the body has no username key. */
@@ -205,17 +207,20 @@ export const api = {
     request<WriteResult>('POST', `${conn(c)}/entries/password`, req),
 }
 
-/** The fields POST /api/profiles accepts; it rejects the computed ones. */
+/**
+ * The fields POST /api/profiles accepts; it rejects the computed ones. Only
+ * an editable profile gets here, and local mode sends every field of it.
+ */
 export function toProfileInput(p: Profile): ProfileInput {
   const { name, url, startTLS, baseDN, bindDN, caPEM, insecureSkipVerify, color, readOnly } = p
   return {
     name,
-    url,
-    startTLS,
+    url: url ?? '',
+    startTLS: !!startTLS,
     baseDN,
     bindDN,
     caPEM,
-    insecureSkipVerify,
+    insecureSkipVerify: !!insecureSkipVerify,
     color,
     readOnly,
   }

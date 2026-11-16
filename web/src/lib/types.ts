@@ -5,24 +5,34 @@ import type { Op } from './changes'
 
 export type Scope = 'base' | 'one' | 'sub'
 
-/** A profile as GET /api/profiles returns it. */
+/** GET /api/server: server mode serves only the profiles in its config. */
+export interface ServerInfo {
+  mode: 'local' | 'server'
+}
+
+/**
+ * A profile as GET /api/profiles returns it. Server mode sends only name,
+ * color, readOnly, connected, userLogin and needsPassword.
+ */
 export interface Profile {
   name: string
-  url: string
-  startTLS: boolean
+  url?: string
+  startTLS?: boolean
   baseDN?: string
   bindDN?: string
   caPEM?: string
-  insecureSkipVerify: boolean
+  insecureSkipVerify?: boolean
   color?: string
   readOnly: boolean
   /** Saved from the UI (true) or fixed in connections.yaml (false). */
-  editable: boolean
+  editable?: boolean
   /** The server can bind without asking for a password. */
-  hasPassword: boolean
+  hasPassword?: boolean
   connected: boolean
   /** A bindDNTemplate profile: each person signs in with a username. */
   userLogin: boolean
+  /** Connect asks for a password (and, for userLogin, a username). */
+  needsPassword: boolean
 }
 
 /** Body of POST /api/profiles; the server rejects unknown fields. */
