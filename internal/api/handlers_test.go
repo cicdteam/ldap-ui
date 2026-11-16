@@ -410,6 +410,16 @@ func TestSearchRejectsSecretFilter(t *testing.T) {
 	}
 }
 
+// TestSearchRejectsCursorField checks that a search answers in one request:
+// a paging cursor from a client is an unknown field.
+func TestSearchRejectsCursorField(t *testing.T) {
+	env := connected(t)
+	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)","cursor":"SOMEID"}`)
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "bad_request" {
+		t.Errorf("search with cursor = %d %s, want 400 bad_request", rec.Code, rec.Body)
+	}
+}
+
 func TestMembership(t *testing.T) {
 	env := connected(t)
 	rec := env.do(t, http.MethodGet, "/api/c/dev/memberof?dn=uid%3Da&nested=true", "")

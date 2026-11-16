@@ -167,9 +167,7 @@ func (c *Conn) memberValues(ctx context.Context, dn string) ([]string, error) {
 // allDNs returns the DNs of the entries under the base DN that match
 // filter, at most limit of them. truncated is set when a server limit, the
 // limit argument or, without paging, maxResponseEntries cut the scan short.
-// It pages on the shared connection
-// taken out of its slot, like the first page of a listing, but keeps the
-// paging cookie to itself: it neither uses nor evicts the cursors of Search.
+// It walks the pages like Search (see walk), 1000 at a time.
 // ponytail: Members(nested) lists every group under the base DN to know
 // which members are groups, so member groups beyond the first
 // maxGroupIndex (200000) groups are not followed (the result is marked
@@ -180,67 +178,19 @@ func (c *Conn) allDNs(ctx context.Context, filter string, limit int) (dns []stri
 		BaseDN: c.info.BaseDN, Scope: ldap.ScopeWholeSubtree, DerefAliases: ldap.NeverDerefAliases,
 		TimeLimit: searchTimeLimit(c.prof.SearchTimeout), Filter: filter, Attributes: []string{"1.1"},
 	}
-	if !c.info.Paging {
+	if c.info.Paging {
+		req.Controls = []ldap.Control{ldap.NewControlPaging(1000)}
+	} else {
 		req.SizeLimit = limit
-		var res *result
-		err := c.read(ctx, func(lc *ldap.Conn) error {
-			var err error
-			res, err = searchOnce(ctx, lc, req)
-			return err
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		for _, e := range res.entries {
-			dns = append(dns, e.DN)
-		}
-		return dns, res.truncated, nil
 	}
-	paging := ldap.NewControlPaging(1000)
-	req.Controls = []ldap.Control{paging}
-	lc, err := retry(ctx, c.take, func(lc *ldap.Conn) error {
-		dns, truncated = nil, false
-		paging.SetCookie(nil)
-		// At most limit pages, so a server that keeps sending cookies
-		// with empty pages cannot keep us looping.
-		for range limit {
-			res, err := searchOnce(ctx, lc, req)
-			if err != nil {
-				return err
-			}
-			truncated = truncated || res.truncated
-			for _, e := range res.entries {
-				dns = append(dns, e.DN)
-			}
-			var cookie []byte
-			if ctl, ok := ldap.FindControl(res.controls, ldap.ControlTypePaging).(*ldap.ControlPaging); ok {
-				cookie = ctl.Cookie
-			}
-			paging.SetCookie(cookie)
-			if len(cookie) == 0 || len(dns) >= limit {
-				break
-			}
-		}
-		return nil
-	})
+	res, err := c.walk(ctx, req, limit)
 	if err != nil {
-		if lc != nil {
-			_ = lc.Close() // it may still be running a paged search
-		}
 		return nil, false, err
 	}
-	if len(paging.Cookie) > 0 {
-		truncated = true
-		// Stopped early with the paged search still open on the server.
-		// Page size 0 with the cookie abandons it (RFC 2696); if that
-		// fails, lc is closed rather than shared while still paging.
-		paging.PagingSize = 0
-		if _, err := searchOnce(ctx, lc, req); err != nil {
-			_ = lc.Close()
-		}
+	for _, e := range res.entries {
+		dns = append(dns, e.DN)
 	}
-	c.release(lc) // closes lc instead when it is closing
-	return dns[:min(len(dns), limit)], truncated || len(dns) > limit, nil
+	return dns, res.truncated || res.more, nil
 }
 
 // normDN returns a comparison key for dn.

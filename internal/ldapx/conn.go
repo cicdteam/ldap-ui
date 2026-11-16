@@ -5,7 +5,6 @@ package ldapx
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -24,19 +23,6 @@ import (
 	"github.com/cicdteam/ldaplens/internal/profile"
 	"github.com/cicdteam/ldaplens/internal/schema"
 )
-
-const (
-	// maxCursors bounds the paged listings one Conn keeps open, each on its
-	// own server connection.
-	maxCursors = 8
-	// cursorIdle is how long an unused cursor survives.
-	cursorIdle = 5 * time.Minute
-)
-
-// ErrCursorExpired reports a paging cursor that is unknown, idle for too
-// long, evicted by newer listings or rejected by the server. The client
-// should restart the listing from the first page.
-var ErrCursorExpired = errors.New("cursor expired, restart the listing")
 
 // rfc3062OID names the Password Modify extended operation (RFC 3062)
 // in a root DSE's supportedExtension.
@@ -76,27 +62,20 @@ func (e *UntrustedCertError) Error() string { return "untrusted server certifica
 
 func (e *UntrustedCertError) Unwrap() error { return e.Err }
 
-// cursor is a paged listing in progress. Servers such as OpenLDAP keep one
-// paged-results state per connection, so each cursor owns its connection.
-type cursor struct {
-	lc     *ldap.Conn
-	cookie []byte
-	used   time.Time
-}
-
 // Conn is an authenticated LDAP connection. It is safe for concurrent use.
 // Read operations share one server connection and redial once if it was
-// lost; each open paging cursor holds a connection of its own.
+// lost. Servers such as OpenLDAP keep one paged-results state per
+// connection, so a paged search takes the shared connection for itself
+// while it runs (see take) and other reads dial another.
 type Conn struct {
 	prof     profile.Profile
 	password string
 	info     Info
 
-	mu      sync.Mutex
-	lc      *ldap.Conn // shared; nil until the next read dials one
-	closed  bool
-	cursors map[string]*cursor
-	schema  *schema.Schema
+	mu     sync.Mutex
+	lc     *ldap.Conn // shared; nil until the next read dials one
+	closed bool
+	schema *schema.Schema
 
 	// dialFn replaces dial when set, so that tests can stall a redial.
 	dialFn func(ctx context.Context, password string) (*ldap.Conn, error)
@@ -118,18 +97,16 @@ func Dial(ctx context.Context, p profile.Profile, password string) (*Conn, error
 	return c, nil
 }
 
-// Close closes all server connections and forgets the password. Later
+// Close closes the shared server connection and forgets the password. A
+// paged search running meanwhile closes its connection when it ends. Later
 // operations fail with net.ErrClosed.
 func (c *Conn) Close() error {
 	c.mu.Lock()
 	c.closed = true
 	c.password = ""
-	lc, cursors := c.lc, c.cursors
-	c.lc, c.cursors = nil, nil
+	lc := c.lc
+	c.lc = nil
 	c.mu.Unlock()
-	for _, cur := range cursors {
-		_ = cur.lc.Close()
-	}
 	if lc == nil {
 		return nil
 	}
@@ -285,7 +262,7 @@ func networkError(err error) error {
 	var untrusted *UntrustedCertError
 	if err == nil || errors.As(err, &le) || errors.As(err, &untrusted) ||
 		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, net.ErrClosed) || errors.Is(err, ErrCursorExpired) || errors.Is(err, ErrInvalidRequest) {
+		errors.Is(err, net.ErrClosed) || errors.Is(err, ErrInvalidRequest) {
 		return err
 	}
 	return ldap.NewError(ldap.ErrorNetwork, err)
@@ -351,7 +328,7 @@ func (c *Conn) loadInfo(ctx context.Context) error {
 
 // current returns the shared connection, dialing a new one when there is
 // none or it was lost. The dial runs outside mu, so that a slow server
-// holds up neither Close nor the cursors. Of two concurrent dials, the
+// does not hold up Close. Of two concurrent dials, the
 // first to finish is installed and the other is closed. A dial whose bind
 // fails with invalid credentials closes c: the password was changed or
 // reset since connect, and sending it again at every request could lock
@@ -397,8 +374,8 @@ func (c *Conn) current(ctx context.Context) (*ldap.Conn, error) {
 
 // take removes the shared connection from its slot so that nobody else
 // starts a paged search on it; the next shared read dials a new one. The
-// caller hands it back with release or keeps it with pin. A connection
-// that left the slot meanwhile, taken or replaced, is not returned.
+// caller hands it back with release or closes it. A connection that left
+// the slot meanwhile, taken or replaced, is not returned.
 func (c *Conn) take(ctx context.Context) (*ldap.Conn, error) {
 	for {
 		lc, err := c.current(ctx)
@@ -454,64 +431,4 @@ func retry(ctx context.Context, get func(context.Context) (*ldap.Conn, error), f
 		return nil, err
 	}
 	return lc, fn(lc)
-}
-
-// pin keeps lc for the next page of a listing and returns the cursor ID.
-// Beyond maxCursors the least recently used cursor is closed.
-func (c *Conn) pin(lc *ldap.Conn, cookie []byte) (string, error) {
-	id := rand.Text()
-	now := time.Now()
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		_ = lc.Close()
-		return "", net.ErrClosed
-	}
-	var evicted *ldap.Conn
-	if len(c.cursors) >= maxCursors {
-		oldest := ""
-		for k, cur := range c.cursors {
-			if oldest == "" || cur.used.Before(c.cursors[oldest].used) {
-				oldest = k
-			}
-		}
-		evicted = c.cursors[oldest].lc
-		delete(c.cursors, oldest)
-	}
-	if c.cursors == nil {
-		c.cursors = make(map[string]*cursor)
-	}
-	c.cursors[id] = &cursor{lc: lc, cookie: cookie, used: now}
-	c.mu.Unlock()
-	if evicted != nil {
-		_ = evicted.Close()
-	}
-	return id, nil
-}
-
-// unpin removes the cursor id and returns it, or nil when it does not
-// exist. Each page gets a new cursor ID, so a cursor works only once.
-func (c *Conn) unpin(id string) *cursor {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cur := c.cursors[id]
-	delete(c.cursors, id)
-	return cur
-}
-
-// expireCursors closes the cursors unused for longer than cursorIdle.
-func (c *Conn) expireCursors() {
-	now := time.Now()
-	var stale []*ldap.Conn
-	c.mu.Lock()
-	for id, cur := range c.cursors {
-		if now.Sub(cur.used) > cursorIdle {
-			stale = append(stale, cur.lc)
-			delete(c.cursors, id)
-		}
-	}
-	c.mu.Unlock()
-	for _, lc := range stale {
-		_ = lc.Close()
-	}
 }

@@ -70,13 +70,17 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   "More entries…", which lists all of them as a one-level search.
 - **Search** (center): RFC 4515 filter editor with highlighting, completion
   from the schema and inline errors, or a visual builder; base DN, scope and
-  columns sit next to it. Results load 500 at a time; sorting by column and
-  export to CSV or LDIF act on the rows loaded so far. A page the server cut
-  with a size or time limit, or one past ldaplens's caps on a single response
-  (5000 entries, 64 MiB of attribute values), shows what arrived and is
-  marked truncated ("The search stopped early"); a listing cut by a cap has
-  no further pages. One server message (an entry) over 64 MiB fails the
-  request instead. Recent and saved
+  columns sit next to it. A search returns at most a limit of entries in
+  one request: 500, or the search API's `sizeLimit`, up to 5000. The
+  response says `more` when the search matches more. Nothing is kept on the
+  server between requests, so loading more runs the search again with a
+  bigger limit. A search that matches more than 5000 entries shows the
+  first 5000; refine the search (a narrower filter or base DN) to see the
+  rest. Sorting by column and export to CSV or LDIF
+  act on the rows loaded. A search the server cut with its own size or time
+  limit, or one past ldaplens's cap of 64 MiB of attribute values, shows
+  what arrived and is marked truncated ("The search stopped early"). One
+  server message (an entry) over 64 MiB fails the request instead. Recent and saved
   searches are kept per connection in the browser. A filter can test a
   password or secret attribute for presence (`(userPassword=*)`) but not
   match on its values: equality, substring, ordering, approximate and

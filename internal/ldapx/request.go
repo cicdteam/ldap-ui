@@ -21,8 +21,10 @@ const (
 )
 
 const (
-	defaultPageSize = 500
-	maxPageSize     = 5000
+	// defaultSizeLimit is the number of entries a search returns when its
+	// request names none.
+	defaultSizeLimit = 500
+	defaultPageSize  = 500
 
 	// go-ldap compiles filters recursively and slows down sharply on deep
 	// nesting, so filters are capped before they reach it.
@@ -37,26 +39,29 @@ var ErrInvalidRequest = errors.New("invalid request")
 // attribute: its results would let a search guess the secret.
 var ErrSecretFilter = errors.New("filter tests a secret attribute")
 
-// SearchRequest describes one page of a search. Cursor is Page.Cursor from
-// the previous page of the same search on the same Conn; the other fields
-// must be repeated unchanged.
+// SearchRequest describes a search. SizeLimit is the number of entries
+// wanted: 0 means defaultSizeLimit, and more than maxResponseEntries means
+// maxResponseEntries. PageSize is a hint for the LDAP page size on servers
+// with paging.
 type SearchRequest struct {
 	BaseDN     string   `json:"base"`
 	Scope      string   `json:"scope"`
 	Filter     string   `json:"filter"`
 	Attributes []string `json:"attributes,omitempty"`
 	PageSize   int      `json:"pageSize,omitempty"`
-	Cursor     string   `json:"cursor,omitempty"`
 	SizeLimit  int      `json:"sizeLimit,omitempty"`
 }
 
-// Page is one page of search results. Cursor is empty on the last page.
+// Page is the result of a search.
 type Page struct {
 	Entries []Entry `json:"entries"`
-	Cursor  string  `json:"cursor,omitempty"`
-	// Truncated is set when the server stopped early because of a size or
-	// time limit, or the response passed maxResponseEntries entries or
-	// maxResponseBytes value bytes; Entries holds what arrived before that.
+	// More is set when the search matches more entries than its size
+	// limit; the same search with a bigger one returns them.
+	More bool `json:"more,omitempty"`
+	// Truncated is set when the server stopped early because of its own
+	// size or time limit, or a server response passed maxResponseEntries
+	// entries or maxResponseBytes value bytes; Entries holds what arrived
+	// before that.
 	Truncated bool     `json:"truncated,omitempty"`
 	Referrals []string `json:"referrals,omitempty"`
 }
@@ -68,55 +73,53 @@ var scopes = map[string]int{
 	ScopeSub:  ldap.ScopeWholeSubtree,
 }
 
-// buildRequest validates r and turns it into a go-ldap request. Without
-// server-side paging the page size becomes a size limit, so huge
-// containers are cut off and reported as truncated instead of hanging.
-func buildRequest(r SearchRequest, paging bool) (*ldap.SearchRequest, error) {
+// buildRequest validates r and turns it into a go-ldap request for
+// Conn.walk and the number of entries wanted. With paging, pages are no
+// bigger than that number. Without, it becomes the size limit, so a huge
+// container is cut off at it instead of hanging.
+func buildRequest(r SearchRequest, paging bool) (*ldap.SearchRequest, int, error) {
 	scope, ok := scopes[r.Scope]
 	if !ok {
-		return nil, fmt.Errorf("%w: scope %q must be base, one or sub", ErrInvalidRequest, r.Scope)
+		return nil, 0, fmt.Errorf("%w: scope %q must be base, one or sub", ErrInvalidRequest, r.Scope)
 	}
 	if r.SizeLimit < 0 {
-		return nil, fmt.Errorf("%w: sizeLimit must not be negative", ErrInvalidRequest)
+		return nil, 0, fmt.Errorf("%w: sizeLimit must not be negative", ErrInvalidRequest)
 	}
 	filter := r.Filter
 	if filter == "" {
 		filter = "(objectClass=*)"
 	}
 	if len(filter) > maxFilterLength {
-		return nil, fmt.Errorf("%w: filter is longer than %d bytes", ErrInvalidRequest, maxFilterLength)
+		return nil, 0, fmt.Errorf("%w: filter is longer than %d bytes", ErrInvalidRequest, maxFilterLength)
 	}
 	if filterDepth(filter) > maxFilterDepth {
-		return nil, fmt.Errorf("%w: filter nests deeper than %d levels", ErrInvalidRequest, maxFilterDepth)
+		return nil, 0, fmt.Errorf("%w: filter nests deeper than %d levels", ErrInvalidRequest, maxFilterDepth)
 	}
 	if _, err := ldap.CompileFilter(filter); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	limit := r.SizeLimit
+	if limit == 0 {
+		limit = defaultSizeLimit
+	}
+	limit = min(limit, maxResponseEntries)
 	size := r.PageSize
 	if size <= 0 {
 		size = defaultPageSize
 	}
-	size = min(size, maxPageSize)
 	req := &ldap.SearchRequest{
 		BaseDN:       r.BaseDN,
 		Scope:        scope,
 		DerefAliases: ldap.NeverDerefAliases,
-		SizeLimit:    r.SizeLimit,
 		Filter:       filter,
 		Attributes:   r.Attributes,
 	}
 	if !paging {
-		if r.Cursor != "" {
-			return nil, fmt.Errorf("%w: the server does not support paging", ErrInvalidRequest)
-		}
-		if req.SizeLimit == 0 || req.SizeLimit > size {
-			req.SizeLimit = size
-		}
-		return req, nil
+		req.SizeLimit = limit
+		return req, limit, nil
 	}
-	// The cookie for r.Cursor is set by Conn.Search, which keeps it.
-	req.Controls = []ldap.Control{ldap.NewControlPaging(uint32(size))} //nolint:gosec // size is clamped to maxPageSize
-	return req, nil
+	req.Controls = []ldap.Control{ldap.NewControlPaging(uint32(min(size, limit)))} //nolint:gosec // at most maxResponseEntries
+	return req, limit, nil
 }
 
 // filterDepth returns the deepest parenthesis nesting in f. RFC 4515

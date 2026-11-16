@@ -258,46 +258,50 @@ func TestSchemaFromServer(t *testing.T) {
 	}
 }
 
+// TestSearchPaging checks that a search with more matches than its size
+// limit walks the pages up to the limit and reports more.
 func TestSearchPaging(t *testing.T) {
-	c := dialAdmin(t)
-	req := SearchRequest{BaseDN: testPeople, Scope: ScopeOne, Filter: "(objectClass=inetOrgPerson)", Attributes: []string{"uid"}, PageSize: 1000}
-	total, pages := 0, 0
-	for {
-		p, err := c.Search(context.Background(), req)
-		if err != nil {
-			t.Fatalf("Search() page %d error = %v", pages, err)
-		}
-		total += len(p.Entries)
-		pages++
-		if p.Cursor == "" {
-			break
-		}
-		req.Cursor = p.Cursor
+	p, err := dialAdmin(t).Search(context.Background(), peopleListing(1000, 5000))
+	if err != nil {
+		t.Fatalf("Search(sizeLimit 5000) error = %v", err)
 	}
-	if total != testUsers || pages < 2 {
-		t.Errorf("Search() = %d entries in %d pages, want %d in several", total, pages, testUsers)
+	if len(p.Entries) != 5000 || !p.More || p.Truncated {
+		t.Errorf("Search(sizeLimit 5000) = %d entries, more %v, truncated %v; want 5000, more, not truncated", len(p.Entries), p.More, p.Truncated)
+	}
+}
+
+// TestSearchPagesToEnd checks that a search with fewer matches than its size
+// limit returns all of them, over several pages, without more.
+func TestSearchPagesToEnd(t *testing.T) {
+	req := SearchRequest{BaseDN: testPeople, Scope: ScopeOne, Filter: "(uid=user01*)", Attributes: []string{"uid"}, PageSize: 300, SizeLimit: 5000}
+	p, err := dialAdmin(t).Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Search(%s) error = %v", req.Filter, err)
+	}
+	if len(p.Entries) != 1000 || p.More || p.Truncated {
+		t.Errorf("Search(%s) = %d entries, more %v, truncated %v; want 1000, neither more nor truncated", req.Filter, len(p.Entries), p.More, p.Truncated)
 	}
 }
 
 func TestSearchSizeLimit(t *testing.T) {
-	p, err := dialAdmin(t).Search(context.Background(), SearchRequest{BaseDN: testPeople, Scope: ScopeOne, PageSize: 100, SizeLimit: 10})
+	p, err := dialAdmin(t).Search(context.Background(), peopleListing(100, 10))
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if len(p.Entries) != 10 || !p.Truncated {
-		t.Errorf("Search(sizeLimit 10) = %d entries truncated %v, want 10 truncated", len(p.Entries), p.Truncated)
+	if len(p.Entries) != 10 || !p.More || p.Truncated {
+		t.Errorf("Search(sizeLimit 10) = %d entries, more %v, truncated %v; want 10, more, not truncated", len(p.Entries), p.More, p.Truncated)
 	}
 }
 
 func TestSearchWithoutPaging(t *testing.T) {
 	c := dialAdmin(t)
 	c.info.Paging = false // pretend the server lacks the paging control
-	p, err := c.Search(context.Background(), SearchRequest{BaseDN: testPeople, Scope: ScopeOne, PageSize: 100})
+	p, err := c.Search(context.Background(), peopleListing(1000, 100))
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if len(p.Entries) != 100 || !p.Truncated || p.Cursor != "" {
-		t.Errorf("Search(no paging) = %d entries truncated %v cursor %q, want 100 truncated no cursor", len(p.Entries), p.Truncated, p.Cursor)
+	if len(p.Entries) != 100 || !p.More || p.Truncated {
+		t.Errorf("Search(no paging, sizeLimit 100) = %d entries, more %v, truncated %v; want 100, more, not truncated", len(p.Entries), p.More, p.Truncated)
 	}
 }
 
@@ -415,109 +419,52 @@ func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
 	}
 }
 
-// peopleListing lists all test users, pageSize entries at a time.
-func peopleListing(pageSize int) SearchRequest {
-	return SearchRequest{BaseDN: testPeople, Scope: ScopeOne, Filter: "(objectClass=inetOrgPerson)", Attributes: []string{"uid"}, PageSize: pageSize}
-}
-
-// finishListing pages through req to the end and returns the number of
-// entries it yielded.
-func finishListing(t *testing.T, c *Conn, req SearchRequest) int {
-	t.Helper()
-	total := 0
-	for {
-		p, err := c.Search(context.Background(), req)
-		if err != nil {
-			t.Fatalf("Search(cursor %q) error = %v", req.Cursor, err)
-		}
-		total += len(p.Entries)
-		if p.Cursor == "" {
-			return total
-		}
-		req.Cursor = p.Cursor
+// peopleListing lists the test users: at most sizeLimit of them,
+// pageSize at a time.
+func peopleListing(pageSize, sizeLimit int) SearchRequest {
+	return SearchRequest{
+		BaseDN: testPeople, Scope: ScopeOne, Filter: "(objectClass=inetOrgPerson)", Attributes: []string{"uid"},
+		PageSize: pageSize, SizeLimit: sizeLimit,
 	}
 }
 
-func TestSearchInterleavedListings(t *testing.T) {
+// TestSearchConcurrentWalks checks that searches running at once on one
+// Conn each page on a connection of their own.
+func TestSearchConcurrentWalks(t *testing.T) {
 	c := dialAdmin(t)
-	a := peopleListing(1000)
-	first, err := c.Search(context.Background(), a)
-	if err != nil || first.Cursor == "" {
-		t.Fatalf("Search(A page 1) = cursor %q, %v, want a cursor", first.Cursor, err)
+	var wg sync.WaitGroup
+	for i := range 3 {
+		wg.Go(func() {
+			p, err := c.Search(context.Background(), peopleListing(1000, 5000))
+			if err != nil || len(p.Entries) != 5000 || !p.More {
+				t.Errorf("concurrent Search() %d = %d entries, more %v, %v; want 5000, more", i, len(p.Entries), p.More, err)
+			}
+		})
 	}
-	if got := finishListing(t, c, peopleListing(5000)); got != testUsers {
-		t.Errorf("listing B yielded %d entries, want %d", got, testUsers)
-	}
-	a.Cursor = first.Cursor
-	if got := len(first.Entries) + finishListing(t, c, a); got != testUsers {
-		t.Errorf("listing A after B yielded %d entries, want %d", got, testUsers)
-	}
+	wg.Wait()
 }
 
-func TestSearchCursorExpired(t *testing.T) {
+// TestSearchStoppedWalksKeepConnection checks that searches stopped at their
+// limit abandon their paged searches and hand the connection back, so one
+// server connection serves them all.
+func TestSearchStoppedWalksKeepConnection(t *testing.T) {
+	ctx := context.Background()
 	c := dialAdmin(t)
-	req := peopleListing(1000)
-	req.Cursor = "UNKNOWN"
-	if _, err := c.Search(context.Background(), req); !errors.Is(err, ErrCursorExpired) {
-		t.Errorf("Search(unknown cursor) error = %v, want ErrCursorExpired", err)
+	shared, err := c.current(ctx)
+	if err != nil {
+		t.Fatalf("current() error = %v", err)
 	}
-
-	first, err := c.Search(context.Background(), peopleListing(1000))
-	if err != nil || first.Cursor == "" {
-		t.Fatalf("Search(page 1) = cursor %q, %v, want a cursor", first.Cursor, err)
-	}
-	req.Cursor = first.Cursor
-	if _, err := c.Search(context.Background(), req); err != nil {
-		t.Fatalf("Search(page 2) error = %v", err)
-	}
-	if _, err := c.Search(context.Background(), req); !errors.Is(err, ErrCursorExpired) {
-		t.Errorf("Search(used cursor) error = %v, want ErrCursorExpired", err)
-	}
-
-	idle, err := c.Search(context.Background(), peopleListing(1000))
-	if err != nil || idle.Cursor == "" {
-		t.Fatalf("Search(page 1) = cursor %q, %v, want a cursor", idle.Cursor, err)
+	for i := range 10 {
+		p, err := c.Search(ctx, peopleListing(100, 100))
+		if err != nil || len(p.Entries) != 100 || !p.More {
+			t.Fatalf("Search(sizeLimit 100) %d = %d entries, more %v, %v; want 100, more", i, len(p.Entries), p.More, err)
+		}
 	}
 	c.mu.Lock()
-	c.cursors[idle.Cursor].used = time.Now().Add(-cursorIdle - time.Second)
+	now := c.lc
 	c.mu.Unlock()
-	req.Cursor = idle.Cursor
-	if _, err := c.Search(context.Background(), req); !errors.Is(err, ErrCursorExpired) {
-		t.Errorf("Search(idle cursor) error = %v, want ErrCursorExpired", err)
-	}
-}
-
-func TestSearchCursorEviction(t *testing.T) {
-	c := dialAdmin(t)
-	var cursors []string
-	for i := range maxCursors + 1 {
-		p, err := c.Search(context.Background(), peopleListing(1000))
-		if err != nil || p.Cursor == "" {
-			t.Fatalf("Search(listing %d) = cursor %q, %v, want a cursor", i, p.Cursor, err)
-		}
-		cursors = append(cursors, p.Cursor)
-	}
-	req := peopleListing(1000)
-	req.Cursor = cursors[0]
-	if _, err := c.Search(context.Background(), req); !errors.Is(err, ErrCursorExpired) {
-		t.Errorf("Search(oldest of %d cursors) error = %v, want ErrCursorExpired", maxCursors+1, err)
-	}
-	req.Cursor = cursors[maxCursors]
-	if got := 1000 + finishListing(t, c, req); got != testUsers {
-		t.Errorf("newest listing yielded %d entries, want %d", got, testUsers)
-	}
-
-	var pinned []*ldap.Conn
-	c.mu.Lock()
-	for _, cur := range c.cursors {
-		pinned = append(pinned, cur.lc)
-	}
-	c.mu.Unlock()
-	_ = c.Close()
-	for i, lc := range pinned {
-		if !lc.IsClosing() {
-			t.Errorf("cursor connection %d is open after Close()", i)
-		}
+	if now != shared || shared.IsClosing() {
+		t.Error("searches stopped at their limit replaced the shared connection, want it abandoned and handed back")
 	}
 }
 
@@ -585,19 +532,13 @@ var cmpSortRefs = cmp.Transformer("normRefs", func(in []Ref) []string {
 	return out
 })
 
-// TestMembershipLeavesListingsAlone checks that membership scans page on a
-// connection of their own: they neither use nor evict listing cursors, a
-// scan stops at its limit, also above maxRefs, and a scan stopped early
+// TestMembershipScansHandBackConnection checks that a membership scan
+// stops at its limit, also above maxRefs, and that a scan stopped early
 // hands back a connection that pages again. A scan stopped at its limit
 // reports truncation.
-func TestMembershipLeavesListingsAlone(t *testing.T) {
+func TestMembershipScansHandBackConnection(t *testing.T) {
 	ctx := context.Background()
 	c := dialAdmin(t)
-	listing := peopleListing(100)
-	first, err := c.Search(ctx, listing)
-	if err != nil || first.Cursor == "" {
-		t.Fatalf("Search(page 1) = cursor %q, %v, want a cursor", first.Cursor, err)
-	}
 	if _, err := c.MemberOf(ctx, userDN(0), true); err != nil {
 		t.Errorf("MemberOf(nested) error = %v", err)
 	}
@@ -612,20 +553,13 @@ func TestMembershipLeavesListingsAlone(t *testing.T) {
 		t.Errorf("allDNs(all users, limit 3) = %d DNs truncated %v, %v, want 3 truncated", len(dns), truncated, err)
 	}
 	c.mu.Lock()
-	cursors, shared := len(c.cursors), c.lc
+	shared := c.lc
 	c.mu.Unlock()
-	if cursors != 1 {
-		t.Errorf("after membership calls %d cursors are open, want only the listing's", cursors)
-	}
 	if shared == nil {
 		t.Error("allDNs stopped at its limit closed its connection, want it abandoned and shared again")
 	}
-	listing.Cursor = first.Cursor
-	if p, err := c.Search(ctx, listing); err != nil || len(p.Entries) != 100 {
-		t.Errorf("Search(page 2) after membership calls = %d entries, %v, want 100", len(p.Entries), err)
-	}
-	if got := finishListing(t, c, peopleListing(5000)); got != testUsers {
-		t.Errorf("listing after an abandoned scan yielded %d entries, want %d", got, testUsers)
+	if p, err := c.Search(ctx, peopleListing(1000, 5000)); err != nil || len(p.Entries) != 5000 || !p.More {
+		t.Errorf("Search(sizeLimit 5000) after an abandoned scan = %d entries, more %v, %v; want 5000, more", len(p.Entries), p.More, err)
 	}
 }
 

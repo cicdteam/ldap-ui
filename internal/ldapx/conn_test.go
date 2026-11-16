@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -72,24 +73,43 @@ func readRequest(r io.Reader) (int64, error) {
 	return id, nil
 }
 
-// readSearch reads one search request and returns its message ID and base
-// DN.
-func readSearch(r io.Reader) (id int64, base string, err error) {
+// search is what the fake servers read from a search request.
+type search struct {
+	id        int64
+	base      string
+	sizeLimit int
+	paging    *ldap.ControlPaging // nil without the paging control
+}
+
+// readSearch reads one search request.
+func readSearch(r io.Reader) (search, error) {
 	p, err := ber.ReadPacket(r)
 	if err != nil {
-		return 0, "", err
+		return search{}, err
 	}
-	if len(p.Children) < 2 || len(p.Children[1].Children) == 0 {
-		return 0, "", errors.New("not a search request")
+	if len(p.Children) < 2 || len(p.Children[1].Children) < 4 {
+		return search{}, errors.New("not a search request")
 	}
-	id, _ = p.Children[0].Value.(int64)
-	base, _ = p.Children[1].Children[0].Value.(string)
-	return id, base, nil
+	var s search
+	s.id, _ = p.Children[0].Value.(int64)
+	s.base, _ = p.Children[1].Children[0].Value.(string)
+	limit, _ := p.Children[1].Children[3].Value.(int64)
+	s.sizeLimit = int(limit)
+	if len(p.Children) > 2 {
+		for _, cp := range p.Children[2].Children {
+			if ctl, err := ldap.DecodeControl(cp); err == nil {
+				if paging, ok := ctl.(*ldap.ControlPaging); ok {
+					s.paging = paging
+				}
+			}
+		}
+	}
+	return s, nil
 }
 
 // writeResult writes an LDAPResult-shaped response of type op with the
-// result code code.
-func writeResult(w io.Writer, id int64, op ber.Tag, code int64) error {
+// result code code and the controls ctls.
+func writeResult(w io.Writer, id int64, op ber.Tag, code int64, ctls ...ldap.Control) error {
 	p := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "")
 	p.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, id, ""))
 	res := ber.Encode(ber.ClassApplication, ber.TypeConstructed, op, nil, "")
@@ -97,6 +117,13 @@ func writeResult(w io.Writer, id int64, op ber.Tag, code int64) error {
 	res.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", ""))
 	res.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", ""))
 	p.AppendChild(res)
+	if len(ctls) > 0 {
+		cp := ber.Encode(ber.ClassContext, ber.TypeConstructed, 0, nil, "")
+		for _, ctl := range ctls {
+			cp.AppendChild(ctl.Encode())
+		}
+		p.AppendChild(cp)
+	}
 	_, err := w.Write(p.Bytes())
 	return err
 }
@@ -552,14 +579,6 @@ func TestRedialDoesNotHoldLock(t *testing.T) {
 	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
 	c := fakeConn(t, url)
 	ctx := context.Background()
-	cursorConn, err := c.dial(ctx, "")
-	if err != nil {
-		t.Fatalf("dial() error = %v", err)
-	}
-	id, err := c.pin(cursorConn, []byte("cookie"))
-	if err != nil {
-		t.Fatalf("pin() error = %v", err)
-	}
 	_ = c.lc.Close() // the shared connection is lost
 	started, unblock := make(chan struct{}), make(chan struct{})
 	var dialed *ldap.Conn
@@ -583,17 +602,6 @@ func TestRedialDoesNotHoldLock(t *testing.T) {
 	}
 
 	const limit = 100 * time.Millisecond
-	var cur *cursor
-	if !returnsWithin(limit, func() { cur = c.unpin(id) }) {
-		t.Errorf("unpin() during a redial did not return within %v", limit)
-	} else if cur == nil {
-		t.Error("unpin(known cursor) = nil, want the cursor")
-	} else {
-		_ = cur.lc.Close()
-	}
-	if !returnsWithin(limit, c.expireCursors) {
-		t.Errorf("expireCursors() during a redial did not return within %v", limit)
-	}
 	if !returnsWithin(limit, func() { _ = c.Close() }) {
 		t.Errorf("Close() during a redial did not return within %v", limit)
 	}
@@ -735,6 +743,140 @@ func TestPagedSearchClosesConnectionOnFirstPageError(t *testing.T) {
 	}
 	if n := accepts.Load(); n != 2 {
 		t.Errorf("second Search() opened %d connections in total, want 2 (a new dial)", n)
+	}
+}
+
+// serveChildren answers searches under dc=x with its n children cn=<i>,dc=x.
+// A search with the paging control gets them a page at a time, with the
+// offset of the next page as the cookie, and open is set while the server
+// holds paged state: from a page with a cookie until the search ends or is
+// abandoned with page size 0. A search without paging gets at most its size
+// limit, then sizeLimitExceeded. Other bases (the schema) find nothing.
+func serveChildren(n int, open *atomic.Bool) func(int32, net.Conn) {
+	return func(_ int32, conn net.Conn) {
+		for {
+			s, err := readSearch(conn)
+			if err != nil {
+				return
+			}
+			from, to, code := 0, 0, int64(ldap.LDAPResultSuccess)
+			var ctls []ldap.Control
+			switch {
+			case s.base != "dc=x":
+			case s.paging == nil:
+				to = n
+				if s.sizeLimit > 0 && n > s.sizeLimit {
+					to, code = s.sizeLimit, ldap.LDAPResultSizeLimitExceeded
+				}
+			default:
+				from, _ = strconv.Atoi(string(s.paging.Cookie))
+				to = from
+				next := ldap.NewControlPaging(0)
+				if s.paging.PagingSize > 0 {
+					to = min(n, from+int(s.paging.PagingSize))
+					if to < n {
+						next.SetCookie([]byte(strconv.Itoa(to)))
+					}
+				}
+				open.Store(len(next.Cookie) > 0)
+				ctls = []ldap.Control{next}
+			}
+			for i := from; i < to; i++ {
+				if writeEntry(conn, s.id, fmt.Sprintf("cn=%d,dc=x", i)) != nil {
+					return
+				}
+			}
+			if writeResult(conn, s.id, ldap.ApplicationSearchResultDone, code, ctls...) != nil {
+				return
+			}
+		}
+	}
+}
+
+// childrenConn connects to serveChildren(n) and returns the Conn, the
+// server's paged state and its accepted connections.
+func childrenConn(t *testing.T, n int, paging bool) (*Conn, *atomic.Bool, *atomic.Int32) {
+	t.Helper()
+	open := new(atomic.Bool)
+	url, accepts := fakeServer(t, serveChildren(n, open))
+	c := fakeConn(t, url)
+	c.info.Paging = paging
+	// go-ldap's request timeout covers a whole page, which may take longer
+	// than the fake's 200ms under the race detector.
+	c.prof.SearchTimeout = time.Minute
+	c.lc.SetTimeout(time.Minute)
+	return c, open, accepts
+}
+
+// checkChildren checks that entries are the first n children of dc=x, in
+// order.
+func checkChildren(t *testing.T, entries []Entry, n int) {
+	t.Helper()
+	if len(entries) != n {
+		t.Errorf("got %d entries, want %d", len(entries), n)
+		return
+	}
+	for i, e := range entries {
+		if want := fmt.Sprintf("cn=%d,dc=x", i); e.DN != want {
+			t.Errorf("entry %d = %s, want %s", i, e.DN, want)
+			return
+		}
+	}
+}
+
+// TestSearchWalksPages checks that a search with more matches than its
+// size limit walks the pages up to the limit, reports more and abandons
+// the paged search: no paged state outlives the request, and the next
+// search runs on the same connection.
+func TestSearchWalksPages(t *testing.T) {
+	c, open, accepts := childrenConn(t, 1200, true)
+	for i := range 2 {
+		page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", SizeLimit: 1000})
+		if err != nil {
+			t.Fatalf("Search(1200 children, sizeLimit 1000) %d error = %v", i+1, err)
+		}
+		checkChildren(t, page.Entries, 1000)
+		if !page.More || page.Truncated {
+			t.Errorf("Search(1200 children, sizeLimit 1000) %d = more %v, truncated %v; want more, not truncated", i+1, page.More, page.Truncated)
+		}
+		if open.Load() {
+			t.Errorf("after Search() %d the server holds paged state, want it abandoned", i+1)
+		}
+	}
+	if n := accepts.Load(); n != 1 {
+		t.Errorf("two searches opened %d connections, want 1 (no redial)", n)
+	}
+}
+
+// TestSearchWalksToEnd checks that a search with fewer matches than its
+// size limit returns all of them without more.
+func TestSearchWalksToEnd(t *testing.T) {
+	c, open, _ := childrenConn(t, 1200, true)
+	page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", SizeLimit: 5000})
+	if err != nil {
+		t.Fatalf("Search(1200 children, sizeLimit 5000) error = %v", err)
+	}
+	checkChildren(t, page.Entries, 1200)
+	if page.More || page.Truncated {
+		t.Errorf("Search(1200 children, sizeLimit 5000) = more %v, truncated %v; want neither", page.More, page.Truncated)
+	}
+	if open.Load() {
+		t.Error("after Search() the server holds paged state, want none")
+	}
+}
+
+// TestSearchNoPagingLimit checks that without paging the size limit goes to
+// the server, and that sizeLimitExceeded at the limit means more rather
+// than a search that stopped early.
+func TestSearchNoPagingLimit(t *testing.T) {
+	c, _, _ := childrenConn(t, 600, false)
+	page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", SizeLimit: 500})
+	if err != nil {
+		t.Fatalf("Search(600 children, no paging, sizeLimit 500) error = %v", err)
+	}
+	checkChildren(t, page.Entries, 500)
+	if !page.More || page.Truncated {
+		t.Errorf("Search(600 children, no paging, sizeLimit 500) = more %v, truncated %v; want more, not truncated", page.More, page.Truncated)
 	}
 }
 
@@ -936,25 +1078,25 @@ func TestSearchOnceCaps(t *testing.T) {
 }
 
 // TestPagedSearchCapClosesConnection checks that a page cut by a response
-// cap ends the listing without a cursor and closes the connection it ran
-// on, which no other request uses: the server is still sending that page
-// and keeps its paged state.
+// cap ends the walk, truncated and without more, and closes the connection
+// it ran on, which no other request uses: the server is still sending that
+// page and keeps its paged state.
 func TestPagedSearchCapClosesConnection(t *testing.T) {
 	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
 		for {
-			id, base, err := readSearch(conn)
+			s, err := readSearch(conn)
 			if err != nil {
 				return
 			}
-			if base == "dc=x" {
+			if s.base == "dc=x" {
 				for i := range maxResponseEntries + 1 {
-					if writeEntry(conn, id, fmt.Sprintf("cn=%d,dc=x", i)) != nil {
+					if writeEntry(conn, s.id, fmt.Sprintf("cn=%d,dc=x", i)) != nil {
 						return
 					}
 				}
 			}
 			// Other bases (the schema) find nothing.
-			if writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+			if writeResult(conn, s.id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
 				return
 			}
 		}
@@ -966,13 +1108,13 @@ func TestPagedSearchCapClosesConnection(t *testing.T) {
 	c.mu.Lock()
 	first := c.lc
 	c.mu.Unlock()
-	page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x"})
+	page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", SizeLimit: maxResponseEntries})
 	if err != nil {
 		t.Fatalf("Search(%d entries) error = %v", maxResponseEntries+1, err)
 	}
-	if len(page.Entries) != maxResponseEntries || !page.Truncated || page.Cursor != "" {
-		t.Errorf("Search(%d entries) = %d entries, truncated %v, cursor %q; want %d, truncated, no cursor",
-			maxResponseEntries+1, len(page.Entries), page.Truncated, page.Cursor, maxResponseEntries)
+	if len(page.Entries) != maxResponseEntries || !page.Truncated || page.More {
+		t.Errorf("Search(%d entries) = %d entries, truncated %v, more %v; want %d, truncated, no more",
+			maxResponseEntries+1, len(page.Entries), page.Truncated, page.More, maxResponseEntries)
 	}
 	if !first.IsClosing() {
 		t.Error("Search(capped page) left its connection open, want it closed")
@@ -992,16 +1134,16 @@ func TestMembersHardCap(t *testing.T) {
 	}
 	serveMembers := func(_ int32, conn net.Conn) {
 		for {
-			id, base, err := readSearch(conn)
+			s, err := readSearch(conn)
 			if err != nil {
 				return
 			}
-			if base == "" { // the group index under the empty base DN
-				err = errors.Join(writeEntry(conn, id, "cn=a"), writeEntry(conn, id, "cn=b"))
+			if s.base == "" { // the group index under the empty base DN
+				err = errors.Join(writeEntry(conn, s.id, "cn=a"), writeEntry(conn, s.id, "cn=b"))
 			} else {
-				err = writeEntry(conn, id, base, attr("member", members[base]...))
+				err = writeEntry(conn, s.id, s.base, attr("member", members[s.base]...))
 			}
-			if err != nil || writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+			if err != nil || writeResult(conn, s.id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
 				return
 			}
 		}
@@ -1010,25 +1152,25 @@ func TestMembersHardCap(t *testing.T) {
 	var scans atomic.Int32
 	serveMemberOf := func(_ int32, conn net.Conn) {
 		for {
-			id, base, err := readSearch(conn)
+			s, err := readSearch(conn)
 			if err != nil {
 				return
 			}
-			if base == "" { // a scan for the groups listing a member
+			if s.base == "" { // a scan for the groups listing a member
 				n := scans.Add(1)
 				count := 3000
 				if n == 1 {
 					count = 4
 				}
 				for i := range count {
-					if err = writeEntry(conn, id, fmt.Sprintf("cn=g%d-%d", n, i)); err != nil {
+					if err = writeEntry(conn, s.id, fmt.Sprintf("cn=g%d-%d", n, i)); err != nil {
 						break
 					}
 				}
 			} else {
-				err = writeEntry(conn, id, base)
+				err = writeEntry(conn, s.id, s.base)
 			}
-			if err != nil || writeResult(conn, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+			if err != nil || writeResult(conn, s.id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
 				return
 			}
 		}
