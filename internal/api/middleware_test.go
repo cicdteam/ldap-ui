@@ -58,9 +58,9 @@ func TestRequireToken(t *testing.T) {
 		t.Errorf("login link = %d Location %q, want 303 to /ldap/c/dev?x=1", rec.Code, rec.Header().Get("Location"))
 	}
 	cookie := (&http.Response{Header: rec.Header()}).Cookies()
-	if len(cookie) != 1 || cookie[0].Name != "ldapui_token" || !cookie[0].HttpOnly || cookie[0].SameSite != http.SameSiteStrictMode ||
+	if len(cookie) != 1 || cookie[0].Name != "ldaplens_token" || !cookie[0].HttpOnly || cookie[0].SameSite != http.SameSiteStrictMode ||
 		cookie[0].Path != "/ldap/" || !cookie[0].Secure {
-		t.Fatalf("login link cookies = %+v, want HttpOnly SameSite=Strict Secure ldapui_token with Path /ldap/", cookie)
+		t.Fatalf("login link cookies = %+v, want HttpOnly SameSite=Strict Secure ldaplens_token with Path /ldap/", cookie)
 	}
 
 	// The redirect must stay on this site even for a protocol-relative or
@@ -84,7 +84,7 @@ func TestRequireToken(t *testing.T) {
 	}
 
 	wrongCookie := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
-	wrongCookie.AddCookie(cookieOptions{}.cookie("ldapui_token", "wrong", wrongCookie))
+	wrongCookie.AddCookie(cookieOptions{}.cookie("ldaplens_token", "wrong", wrongCookie))
 	wrongBearer := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
 	wrongBearer.Header.Set("Authorization", "Bearer wrong")
 	for name, r := range map[string]*http.Request{

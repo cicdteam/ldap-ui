@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrei Taranik
 
-// Command ldapui serves a web UI for browsing LDAP directories.
+// Command ldaplens serves a web UI for browsing LDAP directories.
 package main
 
 import (
@@ -25,11 +25,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cicdteam/ldap-ui/internal/api"
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/profile"
-	"github.com/cicdteam/ldap-ui/internal/session"
-	"github.com/cicdteam/ldap-ui/web"
+	"github.com/cicdteam/ldaplens/internal/api"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/session"
+	"github.com/cicdteam/ldaplens/web"
 )
 
 // version is set at build time by -ldflags "-X main.version=...".
@@ -68,7 +68,7 @@ const drainTimeout = 25 * time.Second
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "ldapui:", err)
+		fmt.Fprintln(os.Stderr, "ldaplens:", err)
 		os.Exit(1)
 	}
 }
@@ -85,46 +85,46 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	}
 	secure := false
 	var secureErr error
-	if v := getenv("LDAPUI_SECURE_COOKIES"); v != "" {
+	if v := getenv("LDAPLENS_SECURE_COOKIES"); v != "" {
 		if secure, secureErr = strconv.ParseBool(v); secureErr != nil {
-			secureErr = fmt.Errorf("LDAPUI_SECURE_COOKIES %q: want true or false", v)
+			secureErr = fmt.Errorf("LDAPLENS_SECURE_COOKIES %q: want true or false", v)
 		}
 	}
 	idle := 30 * time.Minute
 	var idleErr error
-	if v := getenv("LDAPUI_SESSION_IDLE"); v != "" {
+	if v := getenv("LDAPLENS_SESSION_IDLE"); v != "" {
 		if idle, idleErr = time.ParseDuration(v); idleErr != nil {
-			idleErr = fmt.Errorf("LDAPUI_SESSION_IDLE %q: want a duration like 30m", v)
+			idleErr = fmt.Errorf("LDAPLENS_SESSION_IDLE %q: want a duration like 30m", v)
 		}
 	}
 	maxAge := 8 * time.Hour
 	var maxAgeErr error
-	if v := getenv("LDAPUI_SESSION_MAX_AGE"); v != "" {
+	if v := getenv("LDAPLENS_SESSION_MAX_AGE"); v != "" {
 		if maxAge, maxAgeErr = time.ParseDuration(v); maxAgeErr != nil {
-			maxAgeErr = fmt.Errorf("LDAPUI_SESSION_MAX_AGE %q: want a duration like 8h", v)
+			maxAgeErr = fmt.Errorf("LDAPLENS_SESSION_MAX_AGE %q: want a duration like 8h", v)
 		}
 	}
 	var c config
 	var hosts, proxies string
-	fs := flag.NewFlagSet("ldapui", flag.ContinueOnError)
+	fs := flag.NewFlagSet("ldaplens", flag.ContinueOnError)
 	fs.SetOutput(usage)
-	fs.StringVar(&c.listen, "listen", env("LDAPUI_LISTEN", "127.0.0.1:8080"), "address to listen on (env LDAPUI_LISTEN)")
-	fs.StringVar(&c.basePath, "base-path", env("LDAPUI_BASE_PATH", ""), "URL prefix behind a reverse proxy, e.g. /ldap (env LDAPUI_BASE_PATH)")
-	fs.StringVar(&c.configPath, "config", env("LDAPUI_CONFIG", ""), "connections.yaml path (env LDAPUI_CONFIG)")
-	fs.StringVar(&c.dataDir, "data-dir", env("LDAPUI_DATA_DIR", ""), "directory for profiles created in the UI (env LDAPUI_DATA_DIR)")
+	fs.StringVar(&c.listen, "listen", env("LDAPLENS_LISTEN", "127.0.0.1:8080"), "address to listen on (env LDAPLENS_LISTEN)")
+	fs.StringVar(&c.basePath, "base-path", env("LDAPLENS_BASE_PATH", ""), "URL prefix behind a reverse proxy, e.g. /ldap (env LDAPLENS_BASE_PATH)")
+	fs.StringVar(&c.configPath, "config", env("LDAPLENS_CONFIG", ""), "connections.yaml path (env LDAPLENS_CONFIG)")
+	fs.StringVar(&c.dataDir, "data-dir", env("LDAPLENS_DATA_DIR", ""), "directory for profiles created in the UI (env LDAPLENS_DATA_DIR)")
 	// No env default here: flag prints non-empty defaults in usage output.
-	fs.StringVar(&c.authToken, "auth-token", "", "access token; generated when not on loopback or when --allowed-hosts is set (env LDAPUI_AUTH_TOKEN)")
+	fs.StringVar(&c.authToken, "auth-token", "", "access token; generated when not on loopback or when --allowed-hosts is set (env LDAPLENS_AUTH_TOKEN)")
 	// No env default either, so that a token flag can override both token
 	// variables.
-	fs.StringVar(&c.authTokenFile, "auth-token-file", "", "file holding the access token, e.g. a mounted Secret; read at startup (env LDAPUI_AUTH_TOKEN_FILE)")
-	fs.StringVar(&hosts, "allowed-hosts", env("LDAPUI_ALLOWED_HOSTS", ""), "extra Host header values to accept, comma-separated (env LDAPUI_ALLOWED_HOSTS)")
-	fs.DurationVar(&c.sessionIdle, "session-idle", idle, "close LDAP connections after this much inactivity (env LDAPUI_SESSION_IDLE)")
-	fs.DurationVar(&c.sessionMaxAge, "session-max-age", maxAge, "close each LDAP connection this long after it was connected, however active (env LDAPUI_SESSION_MAX_AGE)")
-	fs.StringVar(&c.identityHeader, "identity-header", env("LDAPUI_IDENTITY_HEADER", ""),
-		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user, and for identityUser profiles it decides which username a person may sign in as (env LDAPUI_IDENTITY_HEADER)")
-	fs.StringVar(&proxies, "trusted-proxies", env("LDAPUI_TRUSTED_PROXIES", ""),
-		"CIDRs or IPs of the proxies whose --identity-header is trusted, comma-separated (env LDAPUI_TRUSTED_PROXIES)")
-	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure when served over HTTPS, e.g. behind a TLS ingress (env LDAPUI_SECURE_COOKIES)")
+	fs.StringVar(&c.authTokenFile, "auth-token-file", "", "file holding the access token, e.g. a mounted Secret; read at startup (env LDAPLENS_AUTH_TOKEN_FILE)")
+	fs.StringVar(&hosts, "allowed-hosts", env("LDAPLENS_ALLOWED_HOSTS", ""), "extra Host header values to accept, comma-separated (env LDAPLENS_ALLOWED_HOSTS)")
+	fs.DurationVar(&c.sessionIdle, "session-idle", idle, "close LDAP connections after this much inactivity (env LDAPLENS_SESSION_IDLE)")
+	fs.DurationVar(&c.sessionMaxAge, "session-max-age", maxAge, "close each LDAP connection this long after it was connected, however active (env LDAPLENS_SESSION_MAX_AGE)")
+	fs.StringVar(&c.identityHeader, "identity-header", env("LDAPLENS_IDENTITY_HEADER", ""),
+		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user, and for identityUser profiles it decides which username a person may sign in as (env LDAPLENS_IDENTITY_HEADER)")
+	fs.StringVar(&proxies, "trusted-proxies", env("LDAPLENS_TRUSTED_PROXIES", ""),
+		"CIDRs or IPs of the proxies whose --identity-header is trusted, comma-separated (env LDAPLENS_TRUSTED_PROXIES)")
+	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure when served over HTTPS, e.g. behind a TLS ingress (env LDAPLENS_SECURE_COOKIES)")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -146,9 +146,9 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	case c.authToken != "" && c.authTokenFile != "":
 		return config{}, errors.New("--auth-token and --auth-token-file: set one of them")
 	case c.authToken == "" && c.authTokenFile == "":
-		c.authToken, c.authTokenFile = getenv("LDAPUI_AUTH_TOKEN"), getenv("LDAPUI_AUTH_TOKEN_FILE")
+		c.authToken, c.authTokenFile = getenv("LDAPLENS_AUTH_TOKEN"), getenv("LDAPLENS_AUTH_TOKEN_FILE")
 		if c.authToken != "" && c.authTokenFile != "" {
-			return config{}, errors.New("LDAPUI_AUTH_TOKEN and LDAPUI_AUTH_TOKEN_FILE: set one of them")
+			return config{}, errors.New("LDAPLENS_AUTH_TOKEN and LDAPLENS_AUTH_TOKEN_FILE: set one of them")
 		}
 	}
 	if c.authTokenFile != "" {
@@ -296,7 +296,7 @@ func runTo(args []string, stdout io.Writer) error {
 		return err
 	}
 	if cfg.showVersion {
-		_, err = fmt.Fprintf(stdout, "ldapui %s\n", version)
+		_, err = fmt.Fprintf(stdout, "ldaplens %s\n", version)
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -369,7 +369,7 @@ func logStartup(logger *slog.Logger, getenv func(string) string, cfg config, add
 		"url", loginURL(addr, cfg.basePath, cfg.authToken))
 	if getenv("KUBERNETES_SERVICE_HOST") != "" {
 		logger.Warn("generated token in Kubernetes: it changes on every restart and differs per replica; " +
-			"set LDAPUI_AUTH_TOKEN or LDAPUI_AUTH_TOKEN_FILE from a Secret")
+			"set LDAPLENS_AUTH_TOKEN or LDAPLENS_AUTH_TOKEN_FILE from a Secret")
 	}
 }
 

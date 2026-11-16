@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 func pagingOf(t *testing.T, req *ldap.SearchRequest) *ldap.ControlPaging {

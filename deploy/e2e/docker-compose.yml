@@ -1,7 +1,7 @@
 # OpenLDAP and Samba AD for the Playwright e2e run (make e2e). The data is
 # recreated on every run: global setup runs `down -v` then `up --wait`, then
 # seeds Samba.
-name: ldapui-e2e
+name: ldaplens-e2e
 services:
   openldap:
     image: bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985

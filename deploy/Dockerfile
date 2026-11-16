@@ -16,14 +16,14 @@ COPY . .
 COPY --from=web /web/dist ./web/dist
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/ldapui ./cmd/ldapui \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/ldaplens ./cmd/ldaplens \
  && mkdir /out/data
 
 FROM gcr.io/distroless/static-debian13:nonroot
-COPY --from=build /out/ldapui /ldapui
+COPY --from=build /out/ldaplens /ldaplens
 COPY --from=build --chown=65532:65532 /out/data /data
-ENV LDAPUI_LISTEN=0.0.0.0:8080 \
-    LDAPUI_DATA_DIR=/data
+ENV LDAPLENS_LISTEN=0.0.0.0:8080 \
+    LDAPLENS_DATA_DIR=/data
 EXPOSE 8080
 VOLUME /data
-ENTRYPOINT ["/ldapui"]
+ENTRYPOINT ["/ldaplens"]

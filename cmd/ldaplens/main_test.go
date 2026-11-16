@@ -22,14 +22,14 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/cicdteam/ldap-ui/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/profile"
 )
 
 func TestParseFlags(t *testing.T) {
 	env := map[string]string{
-		"LDAPUI_LISTEN":        "0.0.0.0:9000",
-		"LDAPUI_ALLOWED_HOSTS": "ldap.example.com, ui.local,",
-		"LDAPUI_DATA_DIR":      "/data",
+		"LDAPLENS_LISTEN":        "0.0.0.0:9000",
+		"LDAPLENS_ALLOWED_HOSTS": "ldap.example.com, ui.local,",
+		"LDAPLENS_DATA_DIR":      "/data",
 	}
 	getenv := func(k string) string { return env[k] }
 
@@ -74,7 +74,7 @@ func TestParseFlagsSecureCookies(t *testing.T) {
 	}
 	for _, tc := range tests {
 		getenv := func(k string) string {
-			if k == "LDAPUI_SECURE_COOKIES" {
+			if k == "LDAPLENS_SECURE_COOKIES" {
 				return tc.env
 			}
 			return ""
@@ -117,12 +117,12 @@ func TestParseFlagsSessionIdle(t *testing.T) {
 	}
 }
 
-// clearEnv blanks every LDAPUI_* variable for the rest of t, so a test of
+// clearEnv blanks every LDAPLENS_* variable for the rest of t, so a test of
 // run does not read the developer's environment; empty counts as unset.
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "LDAPUI_") {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "LDAPLENS_") {
 			t.Setenv(k, "")
 		}
 	}
@@ -138,19 +138,19 @@ func TestRunHelp(t *testing.T) {
 }
 
 // TestRunVersion checks that --version prints the version and stops, even
-// when the LDAPUI_* environment would fail validation.
+// when the LDAPLENS_* environment would fail validation.
 func TestRunVersion(t *testing.T) {
 	tests := []struct {
 		name, key, value string
 	}{
 		{name: "clean env"},
-		{name: "bad listen", key: "LDAPUI_LISTEN", value: "bad"},
-		{name: "bad secure cookies", key: "LDAPUI_SECURE_COOKIES", value: "maybe"},
-		{name: "bad base path", key: "LDAPUI_BASE_PATH", value: "ldap"},
-		{name: "short auth token", key: "LDAPUI_AUTH_TOKEN", value: "short"},
-		{name: "missing auth token file", key: "LDAPUI_AUTH_TOKEN_FILE", value: "/nonexistent/token"},
-		{name: "bad session idle", key: "LDAPUI_SESSION_IDLE", value: "soon"},
-		{name: "bad session max age", key: "LDAPUI_SESSION_MAX_AGE", value: "soon"},
+		{name: "bad listen", key: "LDAPLENS_LISTEN", value: "bad"},
+		{name: "bad secure cookies", key: "LDAPLENS_SECURE_COOKIES", value: "maybe"},
+		{name: "bad base path", key: "LDAPLENS_BASE_PATH", value: "ldap"},
+		{name: "short auth token", key: "LDAPLENS_AUTH_TOKEN", value: "short"},
+		{name: "missing auth token file", key: "LDAPLENS_AUTH_TOKEN_FILE", value: "/nonexistent/token"},
+		{name: "bad session idle", key: "LDAPLENS_SESSION_IDLE", value: "soon"},
+		{name: "bad session max age", key: "LDAPLENS_SESSION_MAX_AGE", value: "soon"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,7 +162,7 @@ func TestRunVersion(t *testing.T) {
 			if err := runTo([]string{"--version"}, &out); err != nil {
 				t.Fatalf("run(--version) with %s=%q = %v, want nil", tc.key, tc.value, err)
 			}
-			if got, want := out.String(), "ldapui dev\n"; got != want {
+			if got, want := out.String(), "ldaplens dev\n"; got != want {
 				t.Errorf("run(--version) with %s=%q printed %q, want %q", tc.key, tc.value, got, want)
 			}
 		})
@@ -170,7 +170,7 @@ func TestRunVersion(t *testing.T) {
 }
 
 func TestParseFlagsIdentity(t *testing.T) {
-	env := map[string]string{"LDAPUI_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.7,,2001:db8::1"}
+	env := map[string]string{"LDAPLENS_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.7,,2001:db8::1"}
 	getenv := func(k string) string { return env[k] }
 	got, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, getenv, io.Discard)
 	if err != nil {
@@ -251,20 +251,20 @@ func TestParseFlagsAuthToken(t *testing.T) {
 	}
 
 	envShort := func(k string) string {
-		if k == "LDAPUI_AUTH_TOKEN" {
+		if k == "LDAPLENS_AUTH_TOKEN" {
 			return "short"
 		}
 		return ""
 	}
 	if _, err := parseFlags(nil, envShort, io.Discard); err == nil {
-		t.Errorf("parseFlags() with LDAPUI_AUTH_TOKEN=short error = nil, want error")
+		t.Errorf("parseFlags() with LDAPLENS_AUTH_TOKEN=short error = nil, want error")
 	}
 }
 
 func TestParseFlagsKeepsEnvTokenOutOfUsage(t *testing.T) {
 	const fromEnv = "SuperSecretToken1234"
 	getenv := func(k string) string {
-		if k == "LDAPUI_AUTH_TOKEN" {
+		if k == "LDAPLENS_AUTH_TOKEN" {
 			return fromEnv
 		}
 		return ""
@@ -280,7 +280,7 @@ func TestParseFlagsKeepsEnvTokenOutOfUsage(t *testing.T) {
 	}
 	got, err := parseFlags(nil, getenv, io.Discard)
 	if err != nil || got.authToken != fromEnv {
-		t.Errorf("parseFlags() authToken = %q, %v, want %q from LDAPUI_AUTH_TOKEN", got.authToken, err, fromEnv)
+		t.Errorf("parseFlags() authToken = %q, %v, want %q from LDAPLENS_AUTH_TOKEN", got.authToken, err, fromEnv)
 	}
 }
 
@@ -356,10 +356,10 @@ func TestParseFlagsTokenFile(t *testing.T) {
 		wantErr string // a substring of the error; empty wants no error
 	}{
 		{name: "flag", args: []string{"--auth-token-file", lf}, want: token},
-		{name: "env", env: map[string]string{"LDAPUI_AUTH_TOKEN_FILE": crlf}, want: token},
-		{name: "flag beats env token", args: []string{"--auth-token-file", lf}, env: map[string]string{"LDAPUI_AUTH_TOKEN": "otherTokenFromEnv1"}, want: token},
+		{name: "env", env: map[string]string{"LDAPLENS_AUTH_TOKEN_FILE": crlf}, want: token},
+		{name: "flag beats env token", args: []string{"--auth-token-file", lf}, env: map[string]string{"LDAPLENS_AUTH_TOKEN": "otherTokenFromEnv1"}, want: token},
 		{name: "both flags", args: []string{"--auth-token", token, "--auth-token-file", lf}, wantErr: "--auth-token-file"},
-		{name: "both env", env: map[string]string{"LDAPUI_AUTH_TOKEN": token, "LDAPUI_AUTH_TOKEN_FILE": lf}, wantErr: "LDAPUI_AUTH_TOKEN_FILE"},
+		{name: "both env", env: map[string]string{"LDAPLENS_AUTH_TOKEN": token, "LDAPLENS_AUTH_TOKEN_FILE": lf}, wantErr: "LDAPLENS_AUTH_TOKEN_FILE"},
 		{name: "missing file", args: []string{"--auth-token-file", missing}, wantErr: missing},
 		{name: "short token", args: []string{"--auth-token-file", tiny}, wantErr: tiny},
 		{name: "only one newline trimmed", args: []string{"--auth-token-file", twoLF}, wantErr: twoLF},
@@ -385,18 +385,18 @@ func TestParseFlagsTokenFile(t *testing.T) {
 }
 
 func TestParseFlagsSessionIdleEnv(t *testing.T) {
-	env := map[string]string{"LDAPUI_SESSION_IDLE": "5m"}
+	env := map[string]string{"LDAPLENS_SESSION_IDLE": "5m"}
 	getenv := func(k string) string { return env[k] }
 	if got, err := parseFlags(nil, getenv, io.Discard); err != nil || got.sessionIdle != 5*time.Minute {
-		t.Errorf("parseFlags() with LDAPUI_SESSION_IDLE=5m sessionIdle = %v, %v, want 5m, nil", got.sessionIdle, err)
+		t.Errorf("parseFlags() with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 5m, nil", got.sessionIdle, err)
 	}
 	args := []string{"--session-idle", "1m"}
 	if got, err := parseFlags(args, getenv, io.Discard); err != nil || got.sessionIdle != time.Minute {
-		t.Errorf("parseFlags(%q) with LDAPUI_SESSION_IDLE=5m sessionIdle = %v, %v, want 1m, nil", args, got.sessionIdle, err)
+		t.Errorf("parseFlags(%q) with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 1m, nil", args, got.sessionIdle, err)
 	}
-	env["LDAPUI_SESSION_IDLE"] = "soon"
+	env["LDAPLENS_SESSION_IDLE"] = "soon"
 	if _, err := parseFlags(nil, getenv, io.Discard); err == nil {
-		t.Errorf("parseFlags() with LDAPUI_SESSION_IDLE=soon error = nil, want error")
+		t.Errorf("parseFlags() with LDAPLENS_SESSION_IDLE=soon error = nil, want error")
 	}
 }
 
@@ -419,7 +419,7 @@ func TestParseFlagsSessionMaxAge(t *testing.T) {
 	}
 	for _, tc := range tests {
 		getenv := func(k string) string {
-			if k == "LDAPUI_SESSION_MAX_AGE" {
+			if k == "LDAPLENS_SESSION_MAX_AGE" {
 				return tc.env
 			}
 			return ""
@@ -539,7 +539,7 @@ func TestKubernetesTokenWarning(t *testing.T) {
 				t.Fatalf("logStartup(generated=%v, KUBERNETES_SERVICE_HOST=%q) warned = %v, want %v; logs:\n%s",
 					tc.generated, tc.k8sHost, got, tc.wantWarn, logs.String())
 			}
-			if want := "set LDAPUI_AUTH_TOKEN or LDAPUI_AUTH_TOKEN_FILE from a Secret"; tc.wantWarn && !strings.Contains(warn, want) {
+			if want := "set LDAPLENS_AUTH_TOKEN or LDAPLENS_AUTH_TOKEN_FILE from a Secret"; tc.wantWarn && !strings.Contains(warn, want) {
 				t.Errorf("logStartup() warning = %q, want it to contain %q", warn, want)
 			}
 		})

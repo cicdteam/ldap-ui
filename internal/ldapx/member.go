@@ -19,7 +19,7 @@ type Ref struct {
 }
 
 // Membership is the answer to a membership query. Truncated is set when a
-// server limit or one of ldapui's caps cut a scan short, so Refs may be
+// server limit or one of ldaplens's caps cut a scan short, so Refs may be
 // incomplete. Refs is never nil, so JSON clients get [] rather than null.
 type Membership struct {
 	Refs      []Ref `json:"refs"`

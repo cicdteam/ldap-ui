@@ -1,4 +1,4 @@
-# Profile for UI development: ldapui runs on the host, OpenLDAP in compose.
+# Profile for UI development: ldaplens runs on the host, OpenLDAP in compose.
 connections:
   - name: demo
     url: ldap://localhost:1389

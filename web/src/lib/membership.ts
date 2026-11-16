@@ -92,7 +92,7 @@ function names(attr: string, value: string, member: Entry): boolean {
  */
 export function membershipEdit(group: Entry, member: Entry, op: 'add' | 'delete'): Edit | string {
   const attr = membershipAttr(group)
-  if (!attr) return 'Not a group ldapui can edit'
+  if (!attr) return 'Not a group ldaplens can edit'
   const stored = textValues(group, baseName(attr)).find((v) => names(attr, v, member))
   if (op === 'delete')
     return stored ? { kind: 'delete', attr, value: stored } : 'Not a direct member'

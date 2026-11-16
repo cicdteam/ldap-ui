@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks one ldapui image built for one platform: image and binary
+# Checks one ldaplens image built for one platform: image and binary
 # architecture, unpacked size, version, /healthz.
 # Usage: image-check.sh <image> <platform> <version>.
 # Exits non-zero on the first failure and always removes its containers (with
@@ -18,7 +18,7 @@ esac
 got=$(docker image inspect -f '{{.Architecture}}' "$image")
 [ "$got" = "$arch" ] || { echo "$image: architecture $got, want $arch" >&2; exit 1; }
 
-name=ldapui-image-check-$arch
+name=ldaplens-image-check-$arch
 cid=
 tmp=$(mktemp -d)
 trap 'docker rm -fv ${cid:+"$cid"} "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
@@ -27,20 +27,20 @@ trap 'docker rm -fv ${cid:+"$cid"} "$name" >/dev/null 2>&1 || true; rm -rf "$tmp
 # Export the rootfs without running it, so no emulation is needed here.
 cid=$(docker create --platform "$platform" "$image")
 docker export -o "$tmp/rootfs.tar" "$cid"
-tar -xf "$tmp/rootfs.tar" -C "$tmp" ldapui
-got=$(od -An -tx1 -j18 -N2 "$tmp/ldapui" | tr -d ' \n')
-[ "$got" = "$machine" ] || { echo "$image: /ldapui ELF machine $got, want $machine ($arch)" >&2; exit 1; }
+tar -xf "$tmp/rootfs.tar" -C "$tmp" ldaplens
+got=$(od -An -tx1 -j18 -N2 "$tmp/ldaplens" | tr -d ' \n')
+[ "$got" = "$machine" ] || { echo "$image: /ldaplens ELF machine $got, want $machine ($arch)" >&2; exit 1; }
 
 # Unpacked rootfs size; .Size from image inspect depends on the image store.
 size=$(wc -c <"$tmp/rootfs.tar" | tr -d ' ')
 [ "$size" -lt "$max_bytes" ] || { echo "$image: rootfs $size bytes, limit $max_bytes" >&2; exit 1; }
 
 got=$(docker run --rm --platform "$platform" "$image" --version)
-[ "$got" = "ldapui $version" ] || { echo "$image: --version printed '$got', want 'ldapui $version'" >&2; exit 1; }
+[ "$got" = "ldaplens $version" ] || { echo "$image: --version printed '$got', want 'ldaplens $version'" >&2; exit 1; }
 
 docker rm -fv "$name" >/dev/null 2>&1 || true
 docker run -d --name "$name" --platform "$platform" -p 127.0.0.1::8080 \
-  -e LDAPUI_AUTH_TOKEN=image-check-token-0000 "$image" >/dev/null
+  -e LDAPLENS_AUTH_TOKEN=image-check-token-0000 "$image" >/dev/null
 port=$(docker port "$name" 8080/tcp | head -1 | sed 's/.*://')
 [ -n "$port" ] || { echo "$image: port 8080 not published" >&2; docker logs "$name" >&2; exit 1; }
 i=0
@@ -49,4 +49,4 @@ until curl -fs --max-time 1 -o /dev/null "http://127.0.0.1:$port/healthz"; do
   [ "$i" -lt 30 ] || { echo "$image: /healthz not 200 after 30 tries" >&2; docker logs "$name" >&2; exit 1; }
   sleep 0.5
 done
-echo "$image ($platform): ok, ldapui $version, rootfs $size bytes"
+echo "$image ($platform): ok, ldaplens $version, rootfs $size bytes"

@@ -8,7 +8,7 @@ GOIMPORTS_VERSION := 0.52.0
 GOLANGCI_LINT_MIN := 2.12.2
 GOVULNCHECK_MIN := 1.3.0
 GO_IMAGE := golang:1.26
-IMAGE ?= ldapui:dev
+IMAGE ?= ldaplens:dev
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -56,10 +56,10 @@ web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit
 e2e: ## Run the Playwright e2e tests against OpenLDAP and Samba AD in Docker
 	cd web && npm ci --ignore-scripts && npm run e2e
 
-build: web ## Build bin/ldapui with the embedded UI
-	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/ldapui ./cmd/ldapui
+build: web ## Build bin/ldaplens with the embedded UI
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/ldaplens ./cmd/ldaplens
 
-image: ## Build the Docker image (IMAGE=ldapui:dev by default)
+image: ## Build the Docker image (IMAGE=ldaplens:dev by default)
 	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t $(IMAGE) .
 
 PLATFORMS ?= linux/amd64 linux/arm64
@@ -74,10 +74,10 @@ image-multiarch: ## Build and check the image for amd64 and arm64 (IMAGE-amd64, 
 
 check: fmt vet lint vuln test web-check ## Run every check: fmt vet lint vuln test web-check
 
-demo-start: ## Start the demo: OpenLDAP and Samba AD with sample data, and ldapui (DEMO_PORT=8080)
+demo-start: ## Start the demo: OpenLDAP and Samba AD with sample data, and ldaplens (DEMO_PORT=8080)
 	$(DEMO_COMPOSE) up -d --build --wait
 	@echo
-	@echo "ldapui demo: $(DEMO_URL)"
+	@echo "ldaplens demo: $(DEMO_URL)"
 	@echo "Profiles: demo (dev, editable), demo-prod (prod, read-only), demo-ad (Samba AD, editable). Stop with: make demo-stop"
 
 demo-stop: ## Stop the demo (the directories reset on the next start)

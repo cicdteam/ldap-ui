@@ -117,7 +117,7 @@ func TestIsReadOnly(t *testing.T) {
 }
 
 func TestConfiguredPassword(t *testing.T) {
-	t.Setenv("LDAPUI_TEST_PW", "from-env")
+	t.Setenv("LDAPLENS_TEST_PW", "from-env")
 	pwFile := filepath.Join(t.TempDir(), "pw")
 	if err := os.WriteFile(pwFile, []byte("from-file\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -129,10 +129,10 @@ func TestConfiguredPassword(t *testing.T) {
 		wantOK  bool
 		wantErr bool
 	}{
-		{name: "env", p: Profile{PasswordEnv: "LDAPUI_TEST_PW"}, want: "from-env", wantOK: true}, //nolint:gosec // env var name, not a credential
+		{name: "env", p: Profile{PasswordEnv: "LDAPLENS_TEST_PW"}, want: "from-env", wantOK: true}, //nolint:gosec // env var name, not a credential
 		{name: "file trims newline", p: Profile{PasswordFile: pwFile}, want: "from-file", wantOK: true},
 		{name: "none", p: Profile{}, want: "", wantOK: false},
-		{name: "env unset", p: Profile{PasswordEnv: "LDAPUI_TEST_UNSET"}, wantErr: true}, //nolint:gosec // env var name, not a credential
+		{name: "env unset", p: Profile{PasswordEnv: "LDAPLENS_TEST_UNSET"}, wantErr: true}, //nolint:gosec // env var name, not a credential
 	}
 	for _, tc := range tests {
 		got, ok, err := tc.p.ConfiguredPassword()

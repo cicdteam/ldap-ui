@@ -16,8 +16,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/session"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/session"
 )
 
 func TestErrorResponse(t *testing.T) {
@@ -84,8 +84,8 @@ func TestErrorResponse(t *testing.T) {
 		t.Errorf("errorResponse(untrusted).Certificates = %+v, want one cert with sha256 and PEM", body.Certificates)
 	}
 	// Internal errors may name local files; s.fail logs them instead.
-	internal := errors.New("open /etc/ldapui/ca.pem: permission denied")
-	if _, body := errorResponse(internal); body.Code != "internal" || strings.Contains(body.Message, "/etc/ldapui/ca.pem") {
+	internal := errors.New("open /etc/ldaplens/ca.pem: permission denied")
+	if _, body := errorResponse(internal); body.Code != "internal" || strings.Contains(body.Message, "/etc/ldaplens/ca.pem") {
 		t.Errorf("errorResponse(%q) = %q %q, want internal without the error text", internal, body.Code, body.Message)
 	}
 }

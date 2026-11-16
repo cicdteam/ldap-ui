@@ -68,7 +68,7 @@ export function Workspace() {
   const qc = useQueryClient()
   const treeRef = useRef<PanelImperativeHandle>(null)
   const inspectorRef = useRef<PanelImperativeHandle>(null)
-  const layout = useDefaultLayout({ id: 'ldapui:panels', storage: layoutStorage })
+  const layout = useDefaultLayout({ id: 'ldaplens:panels', storage: layoutStorage })
 
   const info = useQuery({
     queryKey: ['c', conn, 'info'],

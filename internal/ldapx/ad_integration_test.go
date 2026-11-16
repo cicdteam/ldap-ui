@@ -20,8 +20,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/cicdteam/ldap-ui/internal/ad"
-	"github.com/cicdteam/ldap-ui/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/ad"
+	"github.com/cicdteam/ldaplens/internal/profile"
 )
 
 const (
@@ -29,7 +29,7 @@ const (
 	adBase      = "DC=corp,DC=example,DC=test"
 	adAdminDN   = "CN=Administrator,CN=Users," + adBase
 	adAdminPass = "Adm1nPassw0rd!"
-	adOU        = "OU=ldapui," + adBase
+	adOU        = "OU=ldaplens," + adBase
 	adUsers     = 1600
 )
 
@@ -122,7 +122,7 @@ func seedAD(ctx context.Context, c *Conn) error {
 		return nil
 	}
 	attr := func(name string, values ...string) TextAttribute { return TextAttribute{Name: name, Values: values} }
-	if err := add(adOU, attr("objectClass", "organizationalUnit"), attr("ou", "ldapui")); err != nil {
+	if err := add(adOU, attr("objectClass", "organizationalUnit"), attr("ou", "ldaplens")); err != nil {
 		return err
 	}
 	var members []string
@@ -403,7 +403,7 @@ func TestADModify(t *testing.T) {
 		}
 		return attrValues(e, "description")
 	}
-	if err := c.Modify(ctx, dn, []Change{{Op: "add", Attr: "description", Values: []string{"edited by ldapui"}}}); err != nil {
+	if err := c.Modify(ctx, dn, []Change{{Op: "add", Attr: "description", Values: []string{"edited by ldaplens"}}}); err != nil {
 		t.Fatalf("Modify(add) error = %v", err)
 	}
 	t.Cleanup(func() { // runs before dialAD's Close
@@ -411,12 +411,12 @@ func TestADModify(t *testing.T) {
 			t.Errorf("Modify(delete description) error = %v", err)
 		}
 	})
-	if vs := description(); len(vs) != 1 || vs[0].Text != "edited by ldapui" {
-		t.Errorf("description after add = %+v, want [edited by ldapui]", vs)
+	if vs := description(); len(vs) != 1 || vs[0].Text != "edited by ldaplens" {
+		t.Errorf("description after add = %+v, want [edited by ldaplens]", vs)
 	}
 	// The UI changes a value as a delete of the old one plus an add.
 	edit := []Change{
-		{Op: "delete", Attr: "description", Values: []string{"edited by ldapui"}},
+		{Op: "delete", Attr: "description", Values: []string{"edited by ldaplens"}},
 		{Op: "add", Attr: "description", Values: []string{"edited again"}},
 	}
 	if err := c.Modify(ctx, dn, edit); err != nil {

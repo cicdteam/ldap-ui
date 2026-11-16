@@ -79,7 +79,7 @@ export interface Attribute {
   values?: Value[]
   /** Number of secret values the server withheld. */
   masked?: number
-  /** The attribute has more values than ldapui reads: values holds the first 10,000. */
+  /** The attribute has more values than ldaplens reads: values holds the first 10,000. */
   truncated?: boolean
 }
 
@@ -221,7 +221,7 @@ export interface WriteResult {
   dn: string
 }
 
-/** How OpenLDAP gets a new password: hashed by its policy (Password Modify), or SSHA from ldapui. */
+/** How OpenLDAP gets a new password: hashed by its policy (Password Modify), or SSHA from ldaplens. */
 export type PasswordMethod = 'server' | 'ssha'
 
 /** Body of POST /api/c/{conn}/entries/password; Active Directory ignores method. */

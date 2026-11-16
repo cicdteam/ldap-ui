@@ -1,21 +1,23 @@
-# ldapui
+# ldaplens - LDAP UI
 
-A local web UI for browsing OpenLDAP and Active Directory.
+A web UI to view, search and manage LDAP data: an LDAP browser and editor for
+OpenLDAP and Active Directory. One binary or one container, nothing to install
+next to it.
 
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
-`ghcr.io/cicdteam/ldap-ui:<version>` (for example `1.0.0`) and `:latest`.
+`ghcr.io/cicdteam/ldaplens:<version>` (for example `1.0.0`) and `:latest`.
 
 The quickest start:
 
 ```sh
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cicdteam/ldap-ui:latest
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cicdteam/ldaplens:latest
 ```
 
-The container listens beyond loopback, so ldapui prints a login link with a
+The container listens beyond loopback, so ldaplens prints a login link with a
 random token at startup; open it, then add your directories with
-**New connection**. Set `LDAPUI_AUTH_TOKEN` to choose the token (at least 16
+**New connection**. Set `LDAPLENS_AUTH_TOKEN` to choose the token (at least 16
 characters from `A-Z a-z 0-9 . _ ~ -`). Without a volume, the connections you
 add are lost when the container is removed.
 
@@ -26,19 +28,19 @@ keeps UI connections across restarts and loads a `connections.yaml`:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -v ldapui-data:/data \
-  -v "$PWD/connections.yaml:/etc/ldapui/connections.yaml:ro" \
-  -e LDAPUI_CONFIG=/etc/ldapui/connections.yaml \
-  ghcr.io/cicdteam/ldap-ui:latest
+  -v ldaplens-data:/data \
+  -v "$PWD/connections.yaml:/etc/ldaplens/connections.yaml:ro" \
+  -e LDAPLENS_CONFIG=/etc/ldaplens/connections.yaml \
+  ghcr.io/cicdteam/ldaplens:latest
 ```
 
-To run your own build instead, `make image` builds `ldapui:dev`; use that name
+To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
 
 The UI's hashed assets are served gzipped and cached for a year, so no ingress compression or caching setup is needed.
 `/api` responses are never cached (`Cache-Control: no-store`), and the UI refuses to be framed by other pages.
 
-`make image-multiarch` builds `ldapui:dev-amd64` and `ldapui:dev-arm64` with
+`make image-multiarch` builds `ldaplens:dev-amd64` and `ldaplens:dev-arm64` with
 buildx and checks each (architecture, `--version`, `/healthz`, unpacked size
 under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
 (or arm64) emulation, pass `PLATFORMS=linux/arm64` (or `linux/amd64`) to check
@@ -70,7 +72,7 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   from the schema and inline errors, or a visual builder; base DN, scope and
   columns sit next to it. Results load 500 at a time; sorting by column and
   export to CSV or LDIF act on the rows loaded so far. A page the server cut
-  with a size or time limit, or one past ldapui's caps on a single response
+  with a size or time limit, or one past ldaplens's caps on a single response
   (5000 entries, 64 MiB of attribute values), shows what arrived and is
   marked truncated ("The search stopped early"); a listing cut by a cap has
   no further pages. One server message (an entry) over 64 MiB fails the
@@ -169,7 +171,7 @@ on non-Latin keyboard layouts.
   logged, and the dialog shows no LDIF. A prod profile asks for its name
   first. On OpenLDAP the server hashes it by its own policy through the
   Password Modify operation (the default, when the server offers it), or
-  ldapui stores it as SSHA. Active Directory takes it as `unicodePwd`, only
+  ldaplens stores it as SSHA. Active Directory takes it as `unicodePwd`, only
   over ldaps:// or StartTLS.
 - **Membership** in Edit, on the Membership tab: "Add to group…" in Member of
   (also in the command palette) and "Add member…" in Members suggest groups
@@ -194,7 +196,7 @@ on non-Latin keyboard layouts.
   of up to 1 MiB (photos show a preview) and each binary value has a delete
   button; replacing one is a delete and an upload. Certificates are written
   as `userCertificate;binary` (RFC 4522). Apply, New child and Clone send at
-  most 8 MiB in one request: a reverse proxy in front of ldapui must allow
+  most 8 MiB in one request: a reverse proxy in front of ldaplens must allow
   that body size (see [Behind a reverse proxy](#behind-a-reverse-proxy)).
   One Apply also takes at most 1000 entries and 1000 changes per entry, one New child or Clone at most 1000 attributes, and either at
   most 10 000 values in all; a bigger request is refused with 400
@@ -221,7 +223,7 @@ connections:
     baseDN: dc=corp,dc=example
     bindDN: cn=reader,ou=svc,dc=corp,dc=example
     passwordEnv: CORP_AD_PASSWORD # or passwordFile, or type it in the UI
-    caFile: /etc/ldapui/corp-ca.pem
+    caFile: /etc/ldaplens/corp-ca.pem
     environment: prod # prod profiles are read-only by default
 ```
 
@@ -283,9 +285,9 @@ and the parse or validation `error`. On a read-only data dir it cannot be
 moved, so it is a startup error, and so is a file the server cannot read
 (permissions).
 
-Run one ldapui process per data dir. The server locks `.lock` in it (Linux,
+Run one ldaplens process per data dir. The server locks `.lock` in it (Linux,
 macOS and the BSDs), and a second process on the same directory exits with
-`data dir ... is in use by another ldapui process`. A data dir that does not
+`data dir ... is in use by another ldaplens process`. A data dir that does not
 exist is a startup error. One that is read-only or not writable for the
 server's user still starts: the saved profiles are listed, saving fails, and
 the server runs without the lock and logs the warning `data dir is not
@@ -295,23 +297,23 @@ writable; saving profiles will fail` with its `dir`.
 
 | Flag | Env | Default |
 |---|---|---|
-| `--listen` | `LDAPUI_LISTEN` | `127.0.0.1:8080` |
-| `--base-path` | `LDAPUI_BASE_PATH` | none |
-| `--config` | `LDAPUI_CONFIG` | none |
-| `--data-dir` | `LDAPUI_DATA_DIR` | none (`/data` in the image) |
-| `--auth-token` | `LDAPUI_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
-| `--auth-token-file` | `LDAPUI_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
-| `--allowed-hosts` | `LDAPUI_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
-| `--session-idle` | `LDAPUI_SESSION_IDLE` | `30m` |
-| `--session-max-age` | `LDAPUI_SESSION_MAX_AGE` | `8h` |
-| `--secure-cookies` | `LDAPUI_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
-| `--identity-header` | `LDAPUI_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)); for `identityUser` profiles it decides which username a person may sign in as (see [Per-user login](#per-user-login)) |
-| `--trusted-proxies` | `LDAPUI_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
-| `--version` | | prints `ldapui <version>` and exits |
+| `--listen` | `LDAPLENS_LISTEN` | `127.0.0.1:8080` |
+| `--base-path` | `LDAPLENS_BASE_PATH` | none |
+| `--config` | `LDAPLENS_CONFIG` | none |
+| `--data-dir` | `LDAPLENS_DATA_DIR` | none (`/data` in the image) |
+| `--auth-token` | `LDAPLENS_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
+| `--auth-token-file` | `LDAPLENS_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
+| `--allowed-hosts` | `LDAPLENS_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
+| `--session-idle` | `LDAPLENS_SESSION_IDLE` | `30m` |
+| `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | `8h` |
+| `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
+| `--identity-header` | `LDAPLENS_IDENTITY_HEADER` | none; a header an authenticating proxy sets to the user, logged as `user` (see [Logs and accountability](#logs-and-accountability)); for `identityUser` profiles it decides which username a person may sign in as (see [Per-user login](#per-user-login)) |
+| `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of the proxies whose `--identity-header` is trusted; required with `--identity-header` |
+| `--version` | | prints `ldaplens <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
-(`LDAPUI_DATA_DIR=""` disables saving). A variable that does not parse
-(`LDAPUI_SECURE_COOKIES=yes`, `LDAPUI_SESSION_IDLE=30`) is a startup error
+(`LDAPLENS_DATA_DIR=""` disables saving). A variable that does not parse
+(`LDAPLENS_SECURE_COOKIES=yes`, `LDAPLENS_SESSION_IDLE=30`) is a startup error
 even when its flag is set. `--auth-token` or `--auth-token-file`
 on the command line overrides both token variables. Both flags at once, or
 both variables at once, are a startup error, and so is a token file that is
@@ -344,7 +346,7 @@ to another server does not clear the count. It applies to every connect with a t
 profile as on a `bindDNTemplate` one. A connect with the configured password
 (`passwordEnv` or `passwordFile`) and an anonymous one are never refused, so a
 wrong service password cannot lock its DN for everyone. In return, anyone who
-can reach ldapui can keep one account from connecting through ldapui, a
+can reach ldaplens can keep one account from connecting through ldaplens, a
 minute at a time; the directory's own lockout policy is separate and
 unaffected. The counts are kept in memory, per process, like sessions, for at
 most 10,000 bind DNs; past that the oldest are dropped.
@@ -360,8 +362,8 @@ OIDs (`0.9.2342.19200300.100.1.1=alice` for `uid=alice`), Active Directory's
 other names for one account (its UPN, `DOMAIN\user` and its DN) and other
 names for one server (its IP address) still count separately, and a saved
 connection can name an account or a server any of those ways. So
-where guessing passwords through ldapui matters, run with fixed profiles
-only: `LDAPUI_DATA_DIR=""` disables saved connections, and the profiles in
+where guessing passwords through ldaplens matters, run with fixed profiles
+only: `LDAPLENS_DATA_DIR=""` disables saved connections, and the profiles in
 `connections.yaml` each name one form.
 
 The server runs at most 64 API requests at once, and at most 4 of one
@@ -393,7 +395,7 @@ and Secrets as directories, not with `subPath`, which never sees an update.
 
 ## Logs and accountability
 
-ldapui logs to stdout, one `key=value` line per event. The lines below,
+ldaplens logs to stdout, one `key=value` line per event. The lines below,
 except `auth failed`, end with who made them:
 
 - `session`: the first 8 hex characters of the SHA-256 of the browser's
@@ -434,8 +436,8 @@ At startup the server logs `listening` with `version`, `addr`, `basePath`,
 connections it loaded) and `dataDir` (empty when saving is disabled). A
 generated token adds the login link, and inside Kubernetes
 (`KUBERNETES_SERVICE_HOST` is set) a warning: a generated token changes on
-every restart and differs per replica, so set `LDAPUI_AUTH_TOKEN` or
-`LDAPUI_AUTH_TOKEN_FILE` from a Secret. A shutdown that runs out of time
+every restart and differs per replica, so set `LDAPLENS_AUTH_TOKEN` or
+`LDAPLENS_AUTH_TOKEN_FILE` from a Secret. A shutdown that runs out of time
 logs the warning `shutdown drain timed out` with `after`.
 
 The directory's own audit log sees only the bind DN. A profile bound as a
@@ -443,21 +445,21 @@ shared service account (`passwordEnv` or `passwordFile`) makes every write
 that account's, and with one shared token only `session` and `remote` tell
 people apart. For per-person accountability, use [per-user
 login](#per-user-login): everyone binds as themselves with their own
-password, and both the directory and ldapui log their DN.
+password, and both the directory and ldaplens log their DN.
 
-Behind an authenticating proxy, ldapui can also log the user the proxy
+Behind an authenticating proxy, ldaplens can also log the user the proxy
 verified. For example, ingress-nginx asks oauth2-proxy (run with
 `--set-xauthrequest`) about every request through
 `nginx.ingress.kubernetes.io/auth-url` and passes the user on with
 `nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Email`:
 
 ```sh
-ldapui --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
+ldaplens --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
 ```
 
 `10.244.0.0/16` stands for the cluster's pod network, which differs between
 Kubernetes clusters: use yours. This trusts every pod in it, so it assumes a
-NetworkPolicy that lets only the ingress controller reach ldapui, like the one
+NetworkPolicy that lets only the ingress controller reach ldaplens, like the one
 under [Kubernetes](#kubernetes).
 
 The value is logged as `user`, cut to 256 bytes, on the lines that carry
@@ -467,9 +469,9 @@ applies; on a profile with `identityUser` it decides which username a person
 may sign in as (see [Per-user login](#per-user-login)). Any client can send
 any header, so the value means something only when the proxy replaces it on
 every request (ingress-nginx and nginx's
-`proxy_set_header` do) and nothing else can reach ldapui from a trusted
+`proxy_set_header` do) and nothing else can reach ldaplens from a trusted
 address: list only the proxy's addresses, and keep other clients off the
-ldapui port (a NetworkPolicy, or a loopback listener next to the proxy).
+ldaplens port (a NetworkPolicy, or a loopback listener next to the proxy).
 `--identity-header` without `--trusted-proxies` is a startup error, and so
 is `Authorization`, `Proxy-Authorization` or `Cookie` as the header: they
 carry credentials. A profile in `connections.yaml` with `identityUser` is a
@@ -477,7 +479,7 @@ startup error without `--identity-header`, since nobody could connect to it.
 
 ## Running for a team
 
-ldapui keeps sessions in memory and saved connections in one file with one
+ldaplens keeps sessions in memory and saved connections in one file with one
 writer, so a shared instance is one process. In Kubernetes, run one replica
 with `strategy: Recreate`: a second replica does not know the first one's
 sessions, and the default rolling update starts the new pod while the old
@@ -488,7 +490,7 @@ ends all sessions, and users connect again.
 - **Fixed profiles with per-user login** is the recommended setup for a
   shared instance: put every connection in `connections.yaml` with a
   `bindDNTemplate` (see [Per-user login](#per-user-login)), set
-  `LDAPUI_DATA_DIR=""`, and keep the token or an SSO proxy in front (with
+  `LDAPLENS_DATA_DIR=""`, and keep the token or an SSO proxy in front (with
   `--identity-header` and `identityUser`, the proxy also decides which
   username each person may sign in as). Everyone then works as themselves,
   and no service account password is stored in the deployment. Saving in
@@ -508,11 +510,11 @@ ends all sessions, and users connect again.
 - **Back up `profiles.json`** (it holds no passwords), and always before an
   upgrade: after a rollback, the older version drops the settings it does
   not know at its next save.
-- **The token** comes from a Secret through `LDAPUI_AUTH_TOKEN_FILE` (or
-  `LDAPUI_AUTH_TOKEN`). A generated one changes at every restart, which
+- **The token** comes from a Secret through `LDAPLENS_AUTH_TOKEN_FILE` (or
+  `LDAPLENS_AUTH_TOKEN`). A generated one changes at every restart, which
   logs everyone out, and is printed only in the log. The token file is read
   at startup: restart after rotating it.
-- **Memory**: ldapui uses about 10 MiB, plus about 55 MiB for each Apply of
+- **Memory**: ldaplens uses about 10 MiB, plus about 55 MiB for each Apply of
   4 MiB of photos in flight. A large read holds up to 64 MiB of values per
   response, several times over while it is converted and encoded. Set a memory
   limit and `GOMEMLIMIT` to about 80% of it, for example 512Mi and 400MiB.
@@ -532,21 +534,21 @@ username](#signing-in-with-your-own-username)) lets everyone sign in to the
 directory as themselves: one profile serves the whole team, and each person
 types their own username and password. It is the recommended mode for a
 team. The directory's access rules apply to each person rather than to a
-shared account, the directory's audit log and ldapui's logs name the person
+shared account, the directory's audit log and ldaplens's logs name the person
 who made each change, and no service account password has to be stored in
 the deployment.
 
 A connect to such a profile goes like this:
 
 1. The browser sends the profile, the username and the password.
-2. ldapui checks, in this order, that there is a username; with
+2. ldaplens checks, in this order, that there is a username; with
    `identityUser`, that the request carries a trusted identity and that the
    username is the one it maps to; that the username matches
    `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; and that there is a password. Nothing
    reaches the directory before every check has passed. An empty password
    would be an unauthenticated bind (RFC 4513), which many servers accept as
    anonymous, so it is refused here.
-3. ldapui binds as the template with the username filled in, for example
+3. ldaplens binds as the template with the username filled in, for example
    `uid=alice,ou=people,dc=example,dc=org`. A wrong password is 401
    `invalid_credentials`, as on any profile. Five of them in 60 seconds
    refuse that DN with 429 `too_many_attempts` until the 60 seconds are
@@ -556,7 +558,7 @@ A connect to such a profile goes like this:
 
 The connect dialog of such a profile has a visible Username field above the
 password, marked `autocomplete="username"` so that a password manager offers
-the accounts it saved; ldapui itself does not remember the username. With
+the accounts it saved; ldaplens itself does not remember the username. With
 `identityUser`, when the request carries a trusted identity, the field is
 filled in with the username it maps to and is read-only; without one, the
 field is empty and connect fails with `identity_required`. Once connected, the
@@ -568,7 +570,7 @@ browsers each have their own connection: one's disconnect or wrong password
 does not touch the other's.
 
 With `identityUser`, the username is tied to the user an authenticating
-proxy verified. With oauth2-proxy in front of ldapui, as under [Logs and
+proxy verified. With oauth2-proxy in front of ldaplens, as under [Logs and
 accountability](#logs-and-accountability):
 
 ```yaml
@@ -581,7 +583,7 @@ connections:
 ```
 
 ```sh
-ldapui --config connections.yaml \
+ldaplens --config connections.yaml \
   --identity-header X-Auth-Request-Email --trusted-proxies 10.244.0.0/16
 ```
 
@@ -599,26 +601,26 @@ asks to connect again.
 | Code | Status | When | The connect dialog says |
 |---|---|---|---|
 | `username_required` | 400 | no username | Enter your username. |
-| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity | Open ldapui through its sign-in proxy to use this connection. |
+| `identity_required` | 403 | `identityUser` is set and the request carries no trusted identity | Open ldaplens through its sign-in proxy to use this connection. |
 | `identity_mismatch` | 403 | the username is not the one the identity maps to | Use the username you signed in to the proxy with. |
 | `invalid_username` | 400 | the username does not match the pattern above | A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long. |
 | `password_required` | 400 | no password | this profile needs a password |
 | `too_many_attempts` | 429 | five wrong passwords for this DN in 60 seconds, counting connects to this DN that are still under way; `Retry-After` gives the seconds to wait | Too many failed sign-ins for this account. Wait a minute and try again. |
 
 The password a person typed stays in the server's memory, with their
-connection, so that ldapui can reconnect after a dropped connection without
+connection, so that ldaplens can reconnect after a dropped connection without
 asking again. It is forgotten at disconnect, when the session expires after
 `--session-idle` without use, or `--session-max-age` after that connection
 was connected. If the directory stops accepting it (changed or reset),
-ldapui closes the connection at the next reconnect instead of retrying, and
+ldaplens closes the connection at the next reconnect instead of retrying, and
 asks to sign in again.
 
 ### Behind a reverse proxy
 
-Set up the proxy and ldapui together:
+Set up the proxy and ldaplens together:
 
-- **A token**, from `LDAPUI_AUTH_TOKEN_FILE` or `LDAPUI_AUTH_TOKEN`.
-  `--allowed-hosts` makes ldapui generate one, but a new one at every
+- **A token**, from `LDAPLENS_AUTH_TOKEN_FILE` or `LDAPLENS_AUTH_TOKEN`.
+  `--allowed-hosts` makes ldaplens generate one, but a new one at every
   restart. Without `--allowed-hosts`, a proxy that forwards `Host:
   localhost` or `127.0.0.1` to a loopback listener looks like a local
   browser, which needs no token.
@@ -626,29 +628,29 @@ Set up the proxy and ldapui together:
   and have the proxy pass the browser's `Host` on (nginx: `proxy_set_header
   Host $host`; Traefik and ingress-nginx do so by default). Any other Host
   gets 403 `host_not_allowed`.
-- **`--secure-cookies`** when the proxy terminates TLS. ldapui does not
+- **`--secure-cookies`** when the proxy terminates TLS. ldaplens does not
   trust `X-Forwarded-Proto`, which any client that reaches it directly could
   send, so without the flag its cookies lack `Secure` although the browser
   uses HTTPS.
 - **Body size and read timeout**: Apply, New child and Clone send up to
-  8 MiB, and an Apply may run 4 minutes; ldapui cuts off any request after
+  8 MiB, and an Apply may run 4 minutes; ldaplens cuts off any request after
   5 minutes. nginx and ingress-nginx allow 1 MiB and wait 60 seconds by default: a
   bigger body gets 413, and a longer Apply gets 504 from the proxy. When the
-  proxy closes the connection, ldapui stops before the next entry, so some
+  proxy closes the connection, ldaplens stops before the next entry, so some
   entries are written and the browser does not learn which.
-- **`Origin` and `Sec-Fetch-Site`** reach ldapui as the browser sent them.
+- **`Origin` and `Sec-Fetch-Site`** reach ldaplens as the browser sent them.
   Its cross-origin check reads them, and a proxy that clears or rewrites
   them turns the check off.
-- **A sub-path**: run ldapui with `--base-path /ldap` and keep the prefix at
+- **A sub-path**: run ldaplens with `--base-path /ldap` and keep the prefix at
   the proxy: no `rewrite-target` (ingress-nginx), `StripPrefix` (Traefik)
   or URI after the address in `proxy_pass` (nginx). A prefix that only one
   side knows serves a blank page.
 - **Only the app**: the probes `/healthz` and `/readyz` skip the token and
   the Host check, for the kubelet. The nginx and Traefik examples do not
   route them; an Ingress cannot leave a path out, and through it they tell
-  only that an ldapui runs there (they answer `ok`).
+  only that an ldaplens runs there (they answer `ok`).
 - **Only through the proxy**: listen on loopback
-  (`LDAPUI_LISTEN=127.0.0.1:8080`) with the proxy on the same host, or let
+  (`LDAPLENS_LISTEN=127.0.0.1:8080`) with the proxy on the same host, or let
   only the ingress controller in with a NetworkPolicy (see
   [Kubernetes](#kubernetes)). Otherwise a client that reaches the port
   skips the proxy and what it checks, such as a single sign-on.
@@ -657,23 +659,23 @@ Set up the proxy and ldapui together:
   not expire. Before you give people the link, keep the query string out of
   the access log (the nginx example does), or have an authenticating proxy
   add `Authorization: Bearer <token>` to the requests it lets through, so
-  that nobody handles the token. With a token set, ldapui prints no link.
+  that nobody handles the token. With a token set, ldaplens prints no link.
 
-nginx, terminating TLS, with ldapui on `127.0.0.1:8080`
-(`LDAPUI_ALLOWED_HOSTS=ldapui.corp.example`, `LDAPUI_SECURE_COOKIES=true`
+nginx, terminating TLS, with ldaplens on `127.0.0.1:8080`
+(`LDAPLENS_ALLOWED_HOSTS=ldaplens.corp.example`, `LDAPLENS_SECURE_COOKIES=true`
 and a token):
 
 ```nginx
 # The query string holds the login token, DNs and filters: log the path only.
-log_format ldapui '$remote_addr - [$time_local] "$request_method $uri $server_protocol" '
+log_format ldaplens '$remote_addr - [$time_local] "$request_method $uri $server_protocol" '
                   '$status $body_bytes_sent';
 
 server {
     listen 443 ssl;
-    server_name ldapui.corp.example;
-    ssl_certificate     /etc/ssl/ldapui.pem;
-    ssl_certificate_key /etc/ssl/ldapui.key;
-    access_log /var/log/nginx/ldapui.log ldapui;
+    server_name ldaplens.corp.example;
+    ssl_certificate     /etc/ssl/ldaplens.pem;
+    ssl_certificate_key /etc/ssl/ldaplens.key;
+    access_log /var/log/nginx/ldaplens.log ldaplens;
 
     client_max_body_size 8m;
 
@@ -695,20 +697,20 @@ or backend timeout by default:
 ```yaml
 http:
   routers:
-    ldapui:
-      rule: "Host(`ldapui.corp.example`) && !Path(`/healthz`) && !Path(`/readyz`)"
+    ldaplens:
+      rule: "Host(`ldaplens.corp.example`) && !Path(`/healthz`) && !Path(`/readyz`)"
       entryPoints: [websecure]
-      service: ldapui
+      service: ldaplens
       tls: {}
   services:
-    ldapui:
+    ldaplens:
       loadBalancer:
         servers:
           - url: "http://127.0.0.1:8080"
 ```
 
 For a sub-path, match `PathPrefix(`/ldap`)` without a `StripPrefix`
-middleware and run ldapui with `--base-path /ldap`.
+middleware and run ldaplens with `--base-path /ldap`.
 
 ingress-nginx, for the Service in [Kubernetes](#kubernetes):
 
@@ -716,59 +718,59 @@ ingress-nginx, for the Service in [Kubernetes](#kubernetes):
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ldapui
-  namespace: ldapui
+  name: ldaplens
+  namespace: ldaplens
   annotations:
     # Apply, New child and Clone send up to 8 MiB; the default is 1m.
     nginx.ingress.kubernetes.io/proxy-body-size: 8m
     # An Apply may run 4 minutes; the default is 60 seconds.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    # No rewrite-target. For a sub-path, set LDAPUI_BASE_PATH to it.
+    # No rewrite-target. For a sub-path, set LDAPLENS_BASE_PATH to it.
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [ldapui.corp.example]
-      secretName: ldapui-tls
+    - hosts: [ldaplens.corp.example]
+      secretName: ldaplens-tls
   rules:
-    - host: ldapui.corp.example
+    - host: ldaplens.corp.example
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
-              service: {name: ldapui, port: {name: http}}
+              service: {name: ldaplens, port: {name: http}}
 ```
 
 ### Kubernetes
 
-The manifest below runs ldapui under the `restricted` Pod Security Standard
+The manifest below runs ldaplens under the `restricted` Pod Security Standard
 (`runAsNonRoot`, `readOnlyRootFilesystem`, all capabilities dropped,
 `seccompProfile: RuntimeDefault`), with the token and a bind password in a
 Secret, `connections.yaml` and the directory's CA in a ConfigMap, a PVC for
 UI-saved profiles, and a NetworkPolicy that lets in only the ingress
 controller (ingress-nginx here: adjust the labels to yours). For fixed
-profiles only, uncomment `LDAPUI_DATA_DIR` and drop the PVC, the `data`
+profiles only, uncomment `LDAPLENS_DATA_DIR` and drop the PVC, the `data`
 volume and its mount. Pin the image by digest in production.
 
 ```yaml
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ldapui
+  name: ldaplens
   labels:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
 ---
-# The placeholders fail closed: ldapui does not start until auth-token holds
+# The placeholders fail closed: ldaplens does not start until auth-token holds
 # a real token. Better, create the Secret with
-#   kubectl -n ldapui create secret generic ldapui \
+#   kubectl -n ldaplens create secret generic ldaplens \
 #     --from-literal=auth-token="$(openssl rand -hex 32)" \
 #     --from-file=corp-ad=./corp-ad.password
 apiVersion: v1
 kind: Secret
 metadata:
-  name: ldapui
-  namespace: ldapui
+  name: ldaplens
+  namespace: ldaplens
 type: Opaque
 stringData:
   auth-token: "<openssl rand -hex 32>"
@@ -777,8 +779,8 @@ stringData:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ldapui-connections
-  namespace: ldapui
+  name: ldaplens-connections
+  namespace: ldaplens
 data:
   connections.yaml: |
     connections:
@@ -787,8 +789,8 @@ data:
         baseDN: dc=corp,dc=example
         bindDN: cn=reader,ou=svc,dc=corp,dc=example
         # Read at every connect: a rotated Secret is used without a restart.
-        passwordFile: /etc/ldapui/secrets/corp-ad
-        caFile: /etc/ldapui/config/corp-ca.pem
+        passwordFile: /etc/ldaplens/secrets/corp-ad
+        caFile: /etc/ldaplens/config/corp-ca.pem
         environment: prod
   corp-ca.pem: |
     -----BEGIN CERTIFICATE-----
@@ -798,8 +800,8 @@ data:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: ldapui-data
-  namespace: ldapui
+  name: ldaplens-data
+  namespace: ldaplens
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -809,8 +811,8 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ldapui
-  namespace: ldapui
+  name: ldaplens
+  namespace: ldaplens
 spec:
   # Sessions live in memory and the data dir has one writer: one replica,
   # and Recreate, so that two pods never run at once.
@@ -819,19 +821,19 @@ spec:
     type: Recreate
   revisionHistoryLimit: 3
   selector:
-    matchLabels: {app.kubernetes.io/name: ldapui}
+    matchLabels: {app.kubernetes.io/name: ldaplens}
   template:
     metadata:
-      labels: {app.kubernetes.io/name: ldapui}
+      labels: {app.kubernetes.io/name: ldaplens}
       annotations:
         # connections.yaml and the token are read at startup: bump this (or
         # use a Kustomize configMapGenerator or a Helm checksum) to roll out
         # a change.
-        ldapui/config-revision: "1"
+        ldaplens/config-revision: "1"
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
-      # ldapui waits up to 25 s for running requests after SIGTERM.
+      # ldaplens waits up to 25 s for running requests after SIGTERM.
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
@@ -842,19 +844,19 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
       containers:
-        - name: ldapui
-          image: ghcr.io/cicdteam/ldap-ui:<version>
-          args: [--config=/etc/ldapui/config/connections.yaml]
+        - name: ldaplens
+          image: ghcr.io/cicdteam/ldaplens:<version>
+          args: [--config=/etc/ldaplens/config/connections.yaml]
           env:
-            - {name: LDAPUI_AUTH_TOKEN_FILE, value: /etc/ldapui/secrets/auth-token}
-            # The host name users open; ldapui answers 403 to any other Host.
-            - {name: LDAPUI_ALLOWED_HOSTS, value: ldapui.corp.example}
-            - {name: LDAPUI_SECURE_COOKIES, value: "true"}
+            - {name: LDAPLENS_AUTH_TOKEN_FILE, value: /etc/ldaplens/secrets/auth-token}
+            # The host name users open; ldaplens answers 403 to any other Host.
+            - {name: LDAPLENS_ALLOWED_HOSTS, value: ldaplens.corp.example}
+            - {name: LDAPLENS_SECURE_COOKIES, value: "true"}
             # About 80% of the memory limit: Go does not read the limit.
             - {name: GOMEMLIMIT, value: 400MiB}
             # Fixed profiles only: uncomment this, and drop the PVC and the
             # data volume and its mount.
-            # - {name: LDAPUI_DATA_DIR, value: ""}
+            # - {name: LDAPLENS_DATA_DIR, value: ""}
           ports:
             - {name: http, containerPort: 8080}
           readinessProbe:
@@ -873,28 +875,28 @@ spec:
             capabilities: {drop: [ALL]}
           volumeMounts:
             # Directories, not subPath: a subPath file never sees an update.
-            - {name: config, mountPath: /etc/ldapui/config, readOnly: true}
-            - {name: secrets, mountPath: /etc/ldapui/secrets, readOnly: true}
+            - {name: config, mountPath: /etc/ldaplens/config, readOnly: true}
+            - {name: secrets, mountPath: /etc/ldaplens/secrets, readOnly: true}
             - {name: data, mountPath: /data}
       volumes:
         - name: config
-          configMap: {name: ldapui-connections}
+          configMap: {name: ldaplens-connections}
         - name: secrets
           # 0440 is enough: fsGroup gives the group read access.
-          secret: {secretName: ldapui, defaultMode: 0440}
+          secret: {secretName: ldaplens, defaultMode: 0440}
         - name: data
-          persistentVolumeClaim: {claimName: ldapui-data}
+          persistentVolumeClaim: {claimName: ldaplens-data}
 ---
-# Only the ingress controller reaches ldapui. The kubelet's probes come from
+# Only the ingress controller reaches ldaplens. The kubelet's probes come from
 # the node, which a NetworkPolicy does not block.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: ldapui
-  namespace: ldapui
+  name: ldaplens
+  namespace: ldaplens
 spec:
   podSelector:
-    matchLabels: {app.kubernetes.io/name: ldapui}
+    matchLabels: {app.kubernetes.io/name: ldaplens}
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -908,59 +910,59 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ldapui
-  namespace: ldapui
+  name: ldaplens
+  namespace: ldaplens
 spec:
-  selector: {app.kubernetes.io/name: ldapui}
+  selector: {app.kubernetes.io/name: ldaplens}
   ports:
     - {name: http, port: 80, targetPort: http}
 ```
 
 ### systemd
 
-On a Linux server, run ldapui as a service on loopback behind a reverse
+On a Linux server, run ldaplens as a service on loopback behind a reverse
 proxy on the same host, such as the nginx example above. The binary is
-static: `make build` builds `bin/ldapui`, or copy `/ldapui` out of the
+static: `make build` builds `bin/ldaplens`, or copy `/ldaplens` out of the
 image. The unit runs it as a dynamic user in a sandbox, with saved
-connections in `/var/lib/ldapui` (0700); for fixed profiles only, change
-its `LDAPUI_DATA_DIR` line to `Environment=LDAPUI_DATA_DIR=`.
+connections in `/var/lib/ldaplens` (0700); for fixed profiles only, change
+its `LDAPLENS_DATA_DIR` line to `Environment=LDAPLENS_DATA_DIR=`.
 
 ```ini
-# /etc/systemd/system/ldapui.service
+# /etc/systemd/system/ldaplens.service
 # Setup:
-#   install -m 0755 ldapui /usr/local/bin/ldapui
-#   groupadd --system ldapui-secrets
-#   install -d -m 0755 /etc/ldapui
-#   install -m 0644 connections.yaml /etc/ldapui/      # no secrets in it
-#   install -m 0600 ldapui.env /etc/ldapui/            # root only; systemd reads it
-#   install -d -m 0750 -g ldapui-secrets /etc/ldapui/secrets
-#   install -m 0640 -g ldapui-secrets corp-ad /etc/ldapui/secrets/   # passwordFile
+#   install -m 0755 ldaplens /usr/local/bin/ldaplens
+#   groupadd --system ldaplens-secrets
+#   install -d -m 0755 /etc/ldaplens
+#   install -m 0644 connections.yaml /etc/ldaplens/      # no secrets in it
+#   install -m 0600 ldaplens.env /etc/ldaplens/            # root only; systemd reads it
+#   install -d -m 0750 -g ldaplens-secrets /etc/ldaplens/secrets
+#   install -m 0640 -g ldaplens-secrets corp-ad /etc/ldaplens/secrets/   # passwordFile
 [Unit]
-Description=ldapui, a web UI for LDAP directories
-Documentation=https://github.com/cicdteam/ldap-ui
+Description=ldaplens, a web UI for LDAP directories
+Documentation=https://github.com/cicdteam/ldaplens
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=exec
-ExecStart=/usr/local/bin/ldapui --config=/etc/ldapui/connections.yaml
-Environment=LDAPUI_LISTEN=127.0.0.1:8080
-Environment=LDAPUI_DATA_DIR=%S/ldapui
-Environment=LDAPUI_SECURE_COOKIES=true
+ExecStart=/usr/local/bin/ldaplens --config=/etc/ldaplens/connections.yaml
+Environment=LDAPLENS_LISTEN=127.0.0.1:8080
+Environment=LDAPLENS_DATA_DIR=%S/ldaplens
+Environment=LDAPLENS_SECURE_COOKIES=true
 # About 80% of MemoryMax: the Go runtime does not read MemoryMax by itself.
 Environment=GOMEMLIMIT=400MiB
-# LDAPUI_AUTH_TOKEN, LDAPUI_ALLOWED_HOSTS and the passwordEnv variables.
-EnvironmentFile=/etc/ldapui/ldapui.env
-# Lets the service read the passwordFile files under /etc/ldapui/secrets.
-SupplementaryGroups=ldapui-secrets
+# LDAPLENS_AUTH_TOKEN, LDAPLENS_ALLOWED_HOSTS and the passwordEnv variables.
+EnvironmentFile=/etc/ldaplens/ldaplens.env
+# Lets the service read the passwordFile files under /etc/ldaplens/secrets.
+SupplementaryGroups=ldaplens-secrets
 
 DynamicUser=yes
-StateDirectory=ldapui
+StateDirectory=ldaplens
 StateDirectoryMode=0700
 UMask=0077
 Restart=on-failure
 RestartSec=2s
-# ldapui waits up to 25 s for running requests after SIGTERM.
+# ldaplens waits up to 25 s for running requests after SIGTERM.
 TimeoutStopSec=30s
 MemoryMax=512M
 TasksMax=256
@@ -1002,30 +1004,30 @@ SystemCallErrorNumber=EPERM
 WantedBy=multi-user.target
 ```
 
-`/etc/ldapui/ldapui.env` (root, 0600):
+`/etc/ldaplens/ldaplens.env` (root, 0600):
 
 ```sh
-LDAPUI_AUTH_TOKEN=<openssl rand -hex 32>
-LDAPUI_ALLOWED_HOSTS=ldapui.corp.example
+LDAPLENS_AUTH_TOKEN=<openssl rand -hex 32>
+LDAPLENS_ALLOWED_HOSTS=ldaplens.corp.example
 ```
 
-Without the token, ldapui generates one at every start, and journald keeps
+Without the token, ldaplens generates one at every start, and journald keeps
 the login link. Passwords for `passwordFile` profiles go in
-`/etc/ldapui/secrets/` (`root:ldapui-secrets`, 0640).
+`/etc/ldaplens/secrets/` (`root:ldaplens-secrets`, 0640).
 
 ## Operations
 
 - **Logs** go to stdout, one `key=value` line per event (see [Logs and
-  accountability](#logs-and-accountability)): `kubectl -n ldapui logs
-  deploy/ldapui`, or `journalctl -u ldapui` for the systemd unit. A startup
-  error is one line on stderr that starts with `ldapui:`, and the process
+  accountability](#logs-and-accountability)): `kubectl -n ldaplens logs
+  deploy/ldaplens`, or `journalctl -u ldaplens` for the systemd unit. A startup
+  error is one line on stderr that starts with `ldaplens:`, and the process
   exits with status 1; for a pod in CrashLoopBackOff, add `--previous` to
   `kubectl logs`.
 - **A broken `profiles.json`** is moved to `profiles.json.bad` next to it
-  (`/data` in the image, `/var/lib/ldapui` with the unit), and ldapui starts
+  (`/data` in the image, `/var/lib/ldaplens` with the unit), and ldaplens starts
   without saved profiles and logs `profiles file was invalid and was moved
   aside` with its `path` and `error`. The next broken file replaces it. To
-  put a fixed copy back, stop ldapui first, because it rewrites the file
+  put a fixed copy back, stop ldaplens first, because it rewrites the file
   from its own list at the next save. In Kubernetes: scale the Deployment to
   0, mount the PVC in a helper pod with the same `securityContext` (on the
   same node for a ReadWriteOnce volume), copy the file in with `kubectl cp`,
@@ -1036,7 +1038,7 @@ the login link. Passwords for `passwordFile` profiles go in
 
   ```sh
   echo '{"securityContext":{"runAsUser":65532,"runAsGroup":65532}}' > debug.json
-  kubectl -n ldapui debug -it <pod> --profile=restricted --target=ldapui \
+  kubectl -n ldaplens debug -it <pod> --profile=restricted --target=ldaplens \
     --image=busybox --custom=debug.json
   ```
 
@@ -1063,7 +1065,7 @@ UI development with hot reload:
 
 ```sh
 docker compose -f deploy/docker-compose.yml up -d openldap
-DEMO_LDAP_PASSWORD=adminpassword go run ./cmd/ldapui --config deploy/connections.dev.yaml
+DEMO_LDAP_PASSWORD=adminpassword go run ./cmd/ldaplens --config deploy/connections.dev.yaml
 cd web && npm ci && npm run dev   # http://localhost:5173, /api is proxied to :8080
 ```
 
@@ -1084,7 +1086,7 @@ cannot cover:
 - Samba returns all values of a plain read without ranging. The follow-up
   range requests are tested against Samba from a ranged first request, but a
   range the server forces on a plain read is covered by unit tests only.
-- No Kerberos or NTLM binds; ldapui uses simple binds only.
+- No Kerberos or NTLM binds; ldaplens uses simple binds only.
 - Password policy errors carry the same `0000052D` code, but the reason after
   it may be worded differently.
 - No global catalog.

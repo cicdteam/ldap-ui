@@ -20,5 +20,5 @@ connections:
     baseDN: DC=corp,DC=example,DC=test
     bindDN: CN=Administrator,CN=Users,DC=corp,DC=example,DC=test
     passwordEnv: AD_LDAP_PASSWORD
-    caFile: /etc/ldapui/ad-ca.pem
+    caFile: /etc/ldaplens/ad-ca.pem
     environment: dev

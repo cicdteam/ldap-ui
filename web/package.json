@@ -1,5 +1,5 @@
 {
-  "name": "ldapui-web",
+  "name": "ldaplens-web",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && touch dist/.keep",

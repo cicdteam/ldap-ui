@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/cicdteam/ldap-ui/internal/ldapx"
-	"github.com/cicdteam/ldap-ui/internal/profile"
-	"github.com/cicdteam/ldap-ui/internal/schema"
+	"github.com/cicdteam/ldaplens/internal/ldapx"
+	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 // Caps on one write request, which keep an Apply or an add a bounded amount

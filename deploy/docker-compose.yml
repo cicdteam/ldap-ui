@@ -1,7 +1,7 @@
-# Demo: ldapui next to an OpenLDAP and a Samba AD with sample users. Start it
+# Demo: ldaplens next to an OpenLDAP and a Samba AD with sample users. Start it
 # with `make demo-start`, then open
 # http://127.0.0.1:8080/?token=demo-token-not-secret.
-name: ldapui-demo
+name: ldaplens-demo
 services:
   openldap:
     image: bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985
@@ -25,7 +25,7 @@ services:
 
   samba:
     image: smblds/smblds@sha256:af3586e5b73b159556af30b77bb73207cb60253e4281b698c58d6a846a3061f8
-    # No host port: ldapui and samba-seed reach LDAPS (CA in
+    # No host port: ldaplens and samba-seed reach LDAPS (CA in
     # deploy/ad-test/tls/ca.pem) on the compose network.
     environment:
       REALM: CORP.EXAMPLE.TEST
@@ -44,7 +44,7 @@ services:
       timeout: 5s
       retries: 90
 
-  # Loads the AD demo directory once Samba is up; ldapui waits for it. The bind
+  # Loads the AD demo directory once Samba is up; ldaplens waits for it. The bind
   # is probed for up to 60 s, then ldapadd runs once, unless the file's last
   # entry is already there (make demo-start while the demo runs re-runs this
   # against the same Samba). /usr/bin, not the image's wrappers, which read
@@ -72,7 +72,7 @@ services:
         /usr/bin/ldapsearch -x -H ldaps://samba -D "$$DN" -w "$$PW" -s base -b "CN=All Bulk,OU=Groups,OU=Demo,DC=corp,DC=example,DC=test" dn >/dev/null 2>&1 && exit 0
         exec /usr/bin/ldapadd -x -H ldaps://samba -D "$$DN" -w "$$PW" -f /seed/ad-demo.ldif >/dev/null
 
-  ldapui:
+  ldaplens:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -86,14 +86,14 @@ services:
     ports:
       - "127.0.0.1:${DEMO_PORT:-8080}:8080"
     environment:
-      LDAPUI_CONFIG: /etc/ldapui/connections.yaml
-      LDAPUI_AUTH_TOKEN: demo-token-not-secret # demo only; omit to get a random token in the log
+      LDAPLENS_CONFIG: /etc/ldaplens/connections.yaml
+      LDAPLENS_AUTH_TOKEN: demo-token-not-secret # demo only; omit to get a random token in the log
       DEMO_LDAP_PASSWORD: adminpassword
       AD_LDAP_PASSWORD: Adm1nPassw0rd! # demo only
     volumes:
-      - ./connections.demo.yaml:/etc/ldapui/connections.yaml:ro
-      - ./ad-test/tls/ca.pem:/etc/ldapui/ad-ca.pem:ro
-      - ldapui-data:/data
+      - ./connections.demo.yaml:/etc/ldaplens/connections.yaml:ro
+      - ./ad-test/tls/ca.pem:/etc/ldaplens/ad-ca.pem:ro
+      - ldaplens-data:/data
 
 volumes:
-  ldapui-data: {}
+  ldaplens-data: {}

@@ -119,7 +119,7 @@ describe('membershipEdit', () => {
         joe,
         'add',
       ),
-    ).toBe('Not a group ldapui can edit')
+    ).toBe('Not a group ldaplens can edit')
   })
   it('removes the value as the group stores it', () => {
     expect(

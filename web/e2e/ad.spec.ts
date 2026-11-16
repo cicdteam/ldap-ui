@@ -3,9 +3,9 @@ import { adBind, attrRow, blur, connect, exact } from './helpers'
 
 // Samba AD from deploy/e2e/docker-compose.yml, seeded by global setup from ad-seed.ldif.
 const base = 'DC=corp,DC=example,DC=test'
-const alice = `CN=alice,OU=ldapui,${base}`
-const inner = `CN=inner,OU=ldapui,${base}`
-const outer = `CN=outer,OU=ldapui,${base}`
+const alice = `CN=alice,OU=ldaplens,${base}`
+const inner = `CN=inner,OU=ldaplens,${base}`
+const outer = `CN=outer,OU=ldaplens,${base}`
 
 test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, password policy', async ({
   page,

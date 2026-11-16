@@ -90,7 +90,7 @@ test('SSO identity locks the username', async ({ page, browser }) => {
   await d.password.press('Enter')
   expect((await res).status()).toBe(403)
   await expect(d.dialog.getByRole('alert')).toContainText(
-    'Open ldapui through its sign-in proxy to use this connection.',
+    'Open ldaplens through its sign-in proxy to use this connection.',
   )
 })
 
