@@ -2,7 +2,7 @@ import * as Popover from '@radix-ui/react-popover'
 import { ChevronDown, Crosshair, History, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { format, fromGroup, parse, serialize, toGroup, type Group } from '../../lib/filter'
-import { defaultColumns, parseColumns } from '../../lib/nav'
+import { defaultColumns } from '../../lib/nav'
 import { classifyQuery } from '../../lib/query'
 import { keys, pushHistory, type SavedSearch, type SearchState } from '../../lib/storage'
 import type { Scope } from '../../lib/types'
@@ -14,6 +14,7 @@ import { useWorkspace } from '../context'
 import { FOCUS_FILTER, FORMAT_FILTER, RUN_SEARCH } from '../events'
 import { searchKey } from '../queries'
 import { useStored } from '../useStored'
+import { ColumnPicker } from './ColumnPicker'
 import { FilterBuilder } from './FilterBuilder'
 import { FilterEditor, type FilterEditorHandle } from './FilterEditor'
 
@@ -97,7 +98,6 @@ export function Omnibox() {
   const [group, setGroup] = useState<Group>({ type: 'and', children: [] })
   const [notice, setNotice] = useState('')
   const [saveName, setSaveName] = useState('')
-  const [column, setColumn] = useState('')
   const editor = useRef<FilterEditorHandle>(null)
   const [storedHistory, setHistory] = useStored<unknown>(keys.history(ws.conn), [])
   const [storedSaved, setSaved] = useStored<unknown>(keys.saved(ws.conn), [])
@@ -193,10 +193,6 @@ export function Omnibox() {
     setDraft(d)
     run(d)
   }
-  const addColumn = () => {
-    setDraft((d) => ({ ...d, columns: parseColumns([...d.columns, column].join(',')) }))
-    setColumn('')
-  }
 
   return (
     <div
@@ -291,49 +287,10 @@ export function Omnibox() {
             </label>
             <div role="group" aria-label="Columns" className="flex items-start gap-1">
               <span className="w-16 shrink-0 pt-1.5 text-xs text-muted">Columns</span>
-              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-                {draft.columns.map((c) => (
-                  <span
-                    key={c}
-                    className="flex items-center rounded-md border border-border bg-panel pl-1.5 font-mono text-xs"
-                  >
-                    {c}
-                    <button
-                      type="button"
-                      aria-label={`Remove column ${c}`}
-                      className="rounded px-1 text-muted hover:text-fg"
-                      onClick={() =>
-                        setDraft((d) => ({ ...d, columns: d.columns.filter((x) => x !== c) }))
-                      }
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
-                <form
-                  className="min-w-32 flex-1"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    addColumn()
-                  }}
-                >
-                  <Input
-                    mono
-                    list="ldaplens-column-names"
-                    aria-label="Add a column"
-                    placeholder="Add a column"
-                    title="An attribute name from the schema; Enter adds it"
-                    value={column}
-                    onChange={(e) => setColumn(e.target.value)}
-                    className="w-full"
-                  />
-                  <datalist id="ldaplens-column-names">
-                    {ws.schema.attrNames.map((n) => (
-                      <option key={n} value={n} />
-                    ))}
-                  </datalist>
-                </form>
-              </div>
+              <ColumnPicker
+                columns={draft.columns}
+                onChange={(columns) => setDraft((d) => ({ ...d, columns }))}
+              />
             </div>
           </Popover.Content>
         </Popover.Portal>

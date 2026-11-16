@@ -153,6 +153,11 @@ export function CommandPalette({
     ...(ws.dn
       ? [
           {
+            id: 'children',
+            label: 'List children of the current entry',
+            run: () => ws.listChildren(ws.dn),
+          },
+          {
             id: 'copy',
             label: 'Copy the current DN',
             run: () => void navigator.clipboard?.writeText(ws.dn),

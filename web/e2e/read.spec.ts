@@ -99,21 +99,6 @@ test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async 
   await expect(page.getByText(/Fix the filter first/)).toBeVisible()
 })
 
-test('Clear results drops the search from the URL and brings back the examples', async ({
-  page,
-}) => {
-  await connect(page, 'demo')
-  const editor = queryBar(page)
-  await editor.click()
-  await page.keyboard.type('(uid=jdoe)')
-  await page.getByRole('button', { name: 'Run', exact: true }).click()
-  await expect(page).toHaveURL(/filter=/)
-  await page.getByRole('button', { name: 'Clear results', exact: true }).click()
-  await expect(page).not.toHaveURL(/filter=/)
-  await expect(page.getByText(/Type a filter and press Run/)).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Clear results', exact: true })).toHaveCount(0)
-})
-
 test('Clear empties the bar; the builder starts from the text and writes it', async ({ page }) => {
   await connect(page, 'demo')
   const bar = queryBar(page)

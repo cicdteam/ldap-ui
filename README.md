@@ -154,6 +154,16 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   untrusted TLS certificate shows its chain and fingerprints; "Trust this CA
   and connect" stores it in a UI profile (for a yaml profile, copy the PEM into `caPEM` or
   point `caFile` at it).
+- **Layout**: the tree on the left and the entry card on the right. A search,
+  or List children, opens a list pane between them, and the card stays
+  beside it. Up and Down in the list move the card through the rows. The
+  list's × button, or Esc while focus is in the list, closes it: the entry in
+  the card, its Edit mode and the staged changes stay. Pane sizes are
+  remembered separately with the list and without it. With no entry
+  selected, the card says so.
+- **List children** (command palette, "List children of the current
+  entry"): lists the entries one level under the entry in the card, with the
+  default columns.
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
   A container shows its first 200 children; a bigger one ends with
   "More entries…", which opens its children as a one-level search.
@@ -173,7 +183,11 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   the search base, the scope, a button that uses the selected entry as the
   base, and the result columns, picked from the schema's attribute names. Next
   to it, the filter builder and the recent and saved searches.
-- **Search results** (center): each row leads with the entry's name:
+- **Search results** (list pane): the toolbar shows the number of entries,
+  the filter that ran (its tooltip adds the scope and the base), Columns,
+  Export and Close. Columns picks the columns from the schema's attribute
+  names; closing it runs the search again with them. Export saves the loaded
+  rows as CSV or LDIF. Each row leads with the entry's name:
   `displayName`, else `cn`, else the value of its RDN. The other columns are
   `uid` (`sAMAccountName` on Active Directory) and `mail` until you pick
   others. The header and the rows share one column layout, so they always
@@ -236,6 +250,8 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 | `/` | Focus the search bar (outside text fields) |
 | ↵ / Enter, ⌘↵ / Ctrl+Enter | Run the search or open the DN (in the search bar) |
 | ⇧⌥F / Shift+Alt+F | Format the filter (in the search bar) |
+| ↑ / ↓, Page Up / Page Down, Home / End | Move through the rows; the card follows (in the results list) |
+| Esc | Close the list (with focus in the list); the entry in the card and staged changes stay |
 | ⌘C / Ctrl+C | Copy the DN of the selected row (in the results list, with no text selected) |
 | `E` | Edit mode in the inspector (ignored while focus is in a text field, the tree, the results list or a dialog) |
 | ⌘S / Ctrl+S | Review the staged changes |

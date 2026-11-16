@@ -15,8 +15,12 @@ export interface WorkspaceCtx {
   search: SearchState | null
   /** Opens dn in the inspector; replace swaps the history entry (keyboard moves). */
   select(dn: string, opts?: { replace?: boolean }): void
-  /** Runs s; null clears the search, so the results give way to the examples. */
+  /** Runs s in the list pane; null closes the list. */
   runSearch(s: SearchState | null): void
+  /** Closes the list pane; the entry in the card and the staged changes stay. */
+  closeList(): void
+  /** Lists the entries one level under dn in the list pane. */
+  listChildren(dn: string): void
   /** Counts runs of the same search again, so its results start over. */
   runs: number
   toggleTree(): void

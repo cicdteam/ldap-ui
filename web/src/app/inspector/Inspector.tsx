@@ -39,7 +39,7 @@ export function Inspector() {
           // Keyed by DN so per-entry state (the attribute filter, edit mode) resets on every entry.
           <EntryView key={ws.dn} dn={ws.dn} view={view} setView={setView} />
         ) : (
-          <p className="p-4 text-muted">Select an entry in the tree or the results.</p>
+          <p className="p-4 text-muted">Select an entry in the tree, or search above</p>
         )}
       </div>
     </div>
