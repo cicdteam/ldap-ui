@@ -1,8 +1,8 @@
 #!/bin/sh
 # Checks one ldaplens image built for one platform: image and binary
-# architecture, unpacked size, version, /healthz of server mode (the default
-# command) on a read-only root filesystem, and the login link of local mode
-# with a volume.
+# architecture, unpacked size, version, /healthz and /api/server of server
+# mode (the default command) on a read-only root filesystem, and the login
+# link and token check of local mode with a volume.
 # Usage: image-check.sh <image> <platform> <version>.
 # Exits non-zero on the first failure and always removes its containers (with
 # their anonymous volumes) and temporary files.
@@ -58,14 +58,22 @@ until curl -fs --max-time 1 -o /dev/null "http://127.0.0.1:$port/healthz"; do
   [ "$i" -lt 30 ] || { echo "$image: /healthz not 200 after 30 tries" >&2; docker logs "$name" >&2; exit 1; }
   sleep 0.5
 done
+got=$(curl -s --max-time 5 -H 'Authorization: Bearer image-check-token-0000' "http://127.0.0.1:$port/api/server") || true
+case $got in
+  *'"mode":"server"'*) ;;
+  *) echo "$image: /api/server answered '$got', want mode server" >&2; docker logs "$name" >&2; exit 1 ;;
+esac
 
 # Local mode keeps a token in the volume at /data and logs the login link.
 docker rm -fv "$local_name" >/dev/null 2>&1 || true
-docker run -d --name "$local_name" --platform "$platform" -v /data "$image" local >/dev/null
+docker run -d --name "$local_name" --platform "$platform" -p 127.0.0.1::8080 -v /data "$image" local >/dev/null
 i=0
 until docker logs "$local_name" 2>&1 | grep -q '/?token='; do
   i=$((i + 1))
   [ "$i" -lt 30 ] || { echo "$image: local mode logged no login link after 30 tries" >&2; docker logs "$local_name" >&2; exit 1; }
   sleep 0.5
 done
+port=$(docker port "$local_name" 8080/tcp | head -1 | sed 's/.*://')
+got=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/profiles") || true
+[ "$got" = 401 ] || { echo "$image: local mode /api/profiles without the token answered $got, want 401" >&2; docker logs "$local_name" >&2; exit 1; }
 echo "$image ($platform): ok, ldaplens $version, rootfs $size bytes"

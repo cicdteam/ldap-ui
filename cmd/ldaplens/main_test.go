@@ -270,6 +270,39 @@ func TestCheckServer(t *testing.T) {
 	}
 }
 
+// TestRunPresets checks the presets runTo applies before it listens. The
+// port is taken, so that runTo returns instead of serving: server mode
+// refuses an anonymous profile without a token, and local mode keeps a
+// token in its data dir.
+func TestRunPresets(t *testing.T) {
+	clearEnv(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer taken.Close()
+	addr := taken.Addr().String()
+
+	config := filepath.Join(t.TempDir(), "connections.yaml")
+	if err := os.WriteFile(config, []byte("connections:\n  - name: anon\n    url: ldap://ldap.example.com\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", config, err)
+	}
+	args := []string{"server", "--config", config, "--listen", addr}
+	want := "profile anon binds with a configured password or anonymously; server mode needs --auth-token or --auth-token-file"
+	if err := runTo(args, io.Discard); err == nil || err.Error() != want {
+		t.Errorf("runTo(%q) = %v, want %q", args, err, want)
+	}
+
+	dataDir := t.TempDir()
+	args = []string{"local", "--data-dir", dataDir, "--listen", addr}
+	if err := runTo(args, io.Discard); err == nil {
+		t.Errorf("runTo(%q) = nil, want the error of listening on a taken port", args)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "token")); err != nil {
+		t.Errorf("runTo(%q) kept no token: %v", args, err)
+	}
+}
+
 func TestLocalToken(t *testing.T) {
 	dir := t.TempDir()
 	first, err := localToken(dir)
