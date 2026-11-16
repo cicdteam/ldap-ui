@@ -113,6 +113,7 @@ export function FilterEditor({
   value,
   onChange,
   onRun,
+  onDown,
   onFormat,
   schema,
   baseDN,
@@ -122,6 +123,8 @@ export function FilterEditor({
   onChange: (v: string) => void
   /** Enter and Mod-Enter, unless the completion list takes Enter. */
   onRun: () => void
+  /** Down on the last line, unless the completion list takes it; false moves the caret. */
+  onDown: () => boolean
   /** Shift-Alt-F: the owner formats value, as the palette's Format action does. */
   onFormat: () => void
   schema: SchemaIndex
@@ -132,9 +135,9 @@ export function FilterEditor({
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   // The editor is created once; current props reach it through this ref.
-  const latest = useRef({ onChange, onRun, onFormat, schema, baseDN })
+  const latest = useRef({ onChange, onRun, onDown, onFormat, schema, baseDN })
   useLayoutEffect(() => {
-    latest.current = { onChange, onRun, onFormat, schema, baseDN }
+    latest.current = { onChange, onRun, onDown, onFormat, schema, baseDN }
   })
   useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), [])
 
@@ -180,6 +183,15 @@ export function FilterEditor({
                 return true
               },
             })),
+            {
+              // On the last line as drawn: a long filter wraps, and Down above it moves the caret.
+              key: 'ArrowDown',
+              run: (ed) => {
+                const at = ed.coordsAtPos(ed.state.selection.main.head)
+                const end = ed.coordsAtPos(ed.state.doc.length)
+                return (!at || !end || at.bottom >= end.bottom) && latest.current.onDown()
+              },
+            },
             ...defaultKeymap,
             ...historyKeymap,
           ]),

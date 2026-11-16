@@ -11,7 +11,7 @@ import { cn } from '../../ui/cn'
 import { Input, inputLook } from '../../ui/Input'
 import { Kbd } from '../../ui/Kbd'
 import { useWorkspace } from '../context'
-import { FOCUS_FILTER, FORMAT_FILTER, RUN_SEARCH } from '../events'
+import { FOCUS_FILTER, FOCUS_LIST, FORMAT_FILTER, RUN_SEARCH } from '../events'
 import { searchKey } from '../queries'
 import { useStored } from '../useStored'
 import { ColumnPicker } from './ColumnPicker'
@@ -150,6 +150,13 @@ export function Omnibox() {
     setDraft((d) => ({ ...d, text: format(r.filter) }))
   }
 
+  // Down from the bar steps into an open list (see Results).
+  const toList = () => {
+    if (!ws.search) return false
+    window.dispatchEvent(new Event(FOCUS_LIST))
+    return true
+  }
+
   // Requests from the command palette and the global "/" key.
   const onFocusFilter = useEffectEvent(focus)
   const onRunSearch = useEffectEvent(() => run())
@@ -212,6 +219,7 @@ export function Omnibox() {
             setNotice('')
           }}
           onRun={run}
+          onDown={toList}
           onFormat={formatFilter}
           schema={ws.schema}
           baseDN={ws.info.baseDN}

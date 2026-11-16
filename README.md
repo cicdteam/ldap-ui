@@ -156,10 +156,11 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   point `caFile` at it).
 - **Layout**: the tree on the left and the entry card on the right. A search,
   or List children, opens a list pane between them, and the card stays
-  beside it. Up and Down in the list move the card through the rows. The
-  list's × button, or Esc while focus is in the list, closes it: the entry in
-  the card, its Edit mode and the staged changes stay, and focus moves to the
-  card's heading (to the tree with no entry open). Pane sizes are
+  beside it. Up and Down in the list move the card through the rows; Down in
+  the search bar moves into the list, on its selected row or else the first.
+  The list's × button, or Esc while focus is in the list, closes it: the entry
+  in the card, its Edit mode and the staged changes stay, and focus moves to
+  the card's heading (to the tree with no entry open). Pane sizes are
   remembered separately with the list and without it. With no entry
   selected, the card says so.
 - **List children** (the list icon on a container in the tree, or "List
@@ -302,6 +303,7 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 | ↵ / Enter, ⌘↵ / Ctrl+Enter | Run the search or open the DN (in the search bar) |
 | ⇧⌥F / Shift+Alt+F | Format the filter (in the search bar) |
 | ↑ / ↓, Page Up / Page Down, Home / End | Move through the rows; the card follows (in the results list) |
+| ↓ / Down | Move into the open list (in the search bar, on its last line) |
 | Esc | Close the list (with focus in the list); the entry in the card and staged changes stay |
 | ⇧↵ / Shift+Enter | List the children of the focused container (in the tree) |
 | ⌘C / Ctrl+C | Copy the DN of the selected row (in the results list, with no text selected) |

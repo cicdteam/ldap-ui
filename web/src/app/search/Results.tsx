@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useVirtualizer } from '@tanstack/react-virtual'
 import * as Popover from '@radix-ui/react-popover'
 import { ArrowDown, ArrowUp, Columns3, Download, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
 import { cellValue, toCSV } from '../../lib/csv'
@@ -32,6 +32,7 @@ import { download } from '../../ui/download'
 import { Spinner } from '../../ui/Spinner'
 import { useBatch } from '../batch'
 import { useWorkspace } from '../context'
+import { FOCUS_LIST } from '../events'
 import { searchKey } from '../queries'
 import { ColumnPicker } from './ColumnPicker'
 
@@ -124,6 +125,17 @@ function Listing({ search }: { search: SearchState }) {
     // Replace, so arrowing through rows does not leave one history entry per row.
     ws.select(rows[i].dn, { replace: true })
   }
+  // Down in the query bar: the list takes focus on its selected row, else on the first.
+  const onFocusList = useEffectEvent(() => {
+    scrollRef.current?.focus()
+    move(Math.max(active, 0))
+  })
+  useEffect(() => {
+    const fn = () => onFocusList()
+    window.addEventListener(FOCUS_LIST, fn)
+    return () => window.removeEventListener(FOCUS_LIST, fn)
+  }, [])
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10 }
     if (e.key in step) {

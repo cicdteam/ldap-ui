@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { BASE, e2eDN } from './fixture'
-import { connect, exact, queryBar } from './helpers'
+import { blur, connect, exact, queryBar } from './helpers'
 
 const results = (page: Page) => page.getByRole('grid', exact('Search results'))
 
@@ -34,6 +34,35 @@ test('text with = runs as an LDAP filter', async ({ page }) => {
   // The demo's cn=Doe\, John and the e2e uid=jdoe.
   await expect(page.getByText('2 entries', { exact: true })).toBeVisible()
   await expect(results(page).getByRole('row', { name: /Doe, John/ })).toBeVisible()
+})
+
+test('the keyboard alone: /, a name, Enter, Down into the list, Esc back to the card', async ({
+  page,
+}) => {
+  await connect(page, 'demo')
+  await blur(page)
+  await page.keyboard.press('/')
+  await page.keyboard.type('doe')
+  await page.keyboard.press('Enter')
+  const rows = results(page).getByRole('row')
+  await expect(rows.nth(2)).toBeVisible()
+  const dns = await Promise.all([1, 2].map(async (i) => (await rows.nth(i).getAttribute('title'))!))
+  const at = (dn: string) => expect.poll(() => new URL(page.url()).searchParams.get('dn')).toBe(dn)
+  const heading = page.locator('#card-heading')
+  // The card is headed by the name the row shows.
+  const name = async (i: number) => (await rows.nth(i).getByRole('gridcell').first().textContent())!
+
+  // Down leaves the bar for the list and opens its first row; the next Down moves the card.
+  await page.keyboard.press('ArrowDown')
+  await expect(results(page)).toBeFocused()
+  await at(dns[0])
+  await expect(heading).toHaveText(await name(1))
+  await page.keyboard.press('ArrowDown')
+  await at(dns[1])
+  await expect(heading).toHaveText(await name(2))
+  await page.keyboard.press('Escape')
+  await expect(results(page)).toHaveCount(0)
+  await expect(heading).toBeFocused()
 })
 
 test('a pasted DN under the base opens that entry, with no list', async ({ page }) => {
