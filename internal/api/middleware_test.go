@@ -104,24 +104,45 @@ func TestRequireToken(t *testing.T) {
 	}
 }
 
-func TestCookieOptionsCookie(t *testing.T) {
-	plain := httptest.NewRequest(http.MethodGet, "/", nil)
-	direct := httptest.NewRequest(http.MethodGet, "https://localhost/", nil)
+func TestCookieSecureByRequest(t *testing.T) {
 	tests := []struct {
 		name       string
-		opts       cookieOptions
-		r          *http.Request
+		secure     bool   // --secure-cookies
+		proto      string // X-Forwarded-Proto
+		tls        bool
 		wantSecure bool
 	}{
-		{name: "plain HTTP", opts: cookieOptions{Path: "/ldap/"}, r: plain, wantSecure: false},
-		{name: "HTTPS ingress", opts: cookieOptions{Path: "/ldap/", Secure: true}, r: plain, wantSecure: true},
-		{name: "direct TLS", opts: cookieOptions{Path: "/ldap/"}, r: direct, wantSecure: true},
+		{name: "plain HTTP", wantSecure: false},
+		{name: "X-Forwarded-Proto: https", proto: "https", wantSecure: true},
+		{name: "X-Forwarded-Proto: HTTPS, http", proto: "HTTPS, http", wantSecure: true},
+		{name: "X-Forwarded-Proto: http", proto: "http", wantSecure: false},
+		{name: "TLS", tls: true, wantSecure: true},
+		{name: "--secure-cookies", secure: true, wantSecure: true},
 	}
 	for _, tc := range tests {
-		c := tc.opts.cookie("n", "v", tc.r)
+		target := "http://localhost/"
+		if tc.tls {
+			target = "https://localhost/" // httptest sets r.TLS
+		}
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		if tc.proto != "" {
+			r.Header.Set("X-Forwarded-Proto", tc.proto)
+		}
+		c := cookieOptions{Path: "/ldap/", Secure: tc.secure}.cookie("n", "v", r)
 		if c.Name != "n" || c.Value != "v" || c.Path != "/ldap/" || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Secure != tc.wantSecure {
 			t.Errorf("%s: cookie() = %+v, want n=v Path /ldap/ HttpOnly SameSite=Strict Secure %t", tc.name, c, tc.wantSecure)
 		}
+	}
+}
+
+// TestTokenCookieMaxAge checks that the login link's cookie outlives the
+// browser session and restarts, so a bookmark keeps working.
+func TestTokenCookieMaxAge(t *testing.T) {
+	h := requireToken("s3cret", cookieOptions{Path: "/"}, slog.New(slog.DiscardHandler), (&server{}).origin, okHandler)
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/?token=s3cret", nil))
+	cookies := (&http.Response{Header: rec.Header()}).Cookies()
+	if len(cookies) != 1 || cookies[0].Name != tokenCookie || cookies[0].MaxAge != 2592000 {
+		t.Errorf("login link cookies = %+v, want one %s with MaxAge 2592000", cookies, tokenCookie)
 	}
 }
 

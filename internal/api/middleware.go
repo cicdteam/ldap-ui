@@ -19,6 +19,10 @@ import (
 
 const tokenCookie = "ldaplens_token" //nolint:gosec // cookie name, not a credential
 
+// tokenCookieMaxAge keeps the token cookie for 30 days, across browser and
+// server restarts, so a bookmark keeps working.
+const tokenCookieMaxAge = 30 * 24 * time.Hour
+
 // contentSecurityPolicy allows only this origin, plus data: images (photos
 // and the favicon) and inline styles, which CodeMirror and the dialogs'
 // scroll lock inject as <style> elements.
@@ -30,17 +34,22 @@ type cookieOptions struct {
 	// Path is the base path plus "/", or "/" without a base path, so the
 	// cookie is not sent to other apps on the same host.
 	Path string
-	// Secure marks cookies Secure on plain-HTTP requests too, for a UI
-	// served over HTTPS by a TLS-terminating proxy or ingress.
+	// Secure marks cookies Secure on every request, for a TLS-terminating
+	// proxy that sends no X-Forwarded-Proto.
 	Secure bool
 }
 
 // cookie returns an HttpOnly, SameSite=Strict cookie scoped by o. It is
-// Secure when o says so or when r came in over TLS.
+// Secure when o says so, when r came in over TLS, or when the first
+// X-Forwarded-Proto value is https. The header is trusted from any peer:
+// forging it can only add Secure, which makes a plain-HTTP browser drop the
+// cookie, never weaken it.
 func (o cookieOptions) cookie(name, value string, r *http.Request) *http.Cookie {
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
 	return &http.Cookie{ //nolint:gosec // Secure is off only for plain HTTP, which must keep working on loopback
 		Name: name, Value: value, Path: o.Path,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: o.Secure || r.TLS != nil,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Secure: o.Secure || r.TLS != nil || strings.EqualFold(strings.TrimSpace(proto), "https"),
 	}
 }
 
@@ -100,7 +109,9 @@ func requireToken(token string, cookies cookieOptions, log *slog.Logger, origin 
 	valid := func(s string) bool { return subtle.ConstantTimeCompare([]byte(s), []byte(token)) == 1 }
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if q := r.URL.Query().Get("token"); q != "" && r.Method == http.MethodGet && valid(q) {
-			http.SetCookie(w, cookies.cookie(tokenCookie, token, r))
+			c := cookies.cookie(tokenCookie, token, r) //nolint:gosec // cookie sets HttpOnly, SameSite and, where it can, Secure
+			c.MaxAge = int(tokenCookieMaxAge.Seconds())
+			http.SetCookie(w, c)
 			http.Redirect(w, r, withoutToken(r.RequestURI), http.StatusSeeOther) //nolint:gosec // withoutToken returns a local path
 			return
 		}

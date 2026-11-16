@@ -11,6 +11,8 @@ export default defineConfig({
   globalTeardown: './e2e/global-teardown.ts',
   use: {
     baseURL: 'http://127.0.0.1:18091/ldap/',
+    // The token e2e/serve.sh starts the server with.
+    extraHTTPHeaders: { Authorization: 'Bearer e2e-token-000000000' },
     channel: 'chrome',
     headless: true,
     viewport: { width: 1400, height: 900 },

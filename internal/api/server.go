@@ -73,6 +73,8 @@ type Options struct {
 	// X-Forwarded-For is trusted for the client address, which logs carry
 	// and the failed-login limit counts per.
 	TrustedProxies []netip.Prefix
+	// Server is set in server mode, which keeps no data on disk.
+	Server bool
 	// UI is the built web UI; nil serves a "not built" page.
 	UI     fs.FS
 	Logger *slog.Logger // nil discards logs

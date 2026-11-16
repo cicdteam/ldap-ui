@@ -4,35 +4,84 @@ A web UI to view, search and manage LDAP data: an LDAP browser and editor for
 OpenLDAP and Active Directory. One binary or one container, nothing to install
 next to it.
 
+## Two modes
+
+ldaplens runs in one of two modes, picked by its first argument:
+
+- **`ldaplens`**, or **`ldaplens local`**, is for one person: on a laptop, a
+  jump host or in a quick Docker try. It keeps the connections you save in
+  the UI and a login token in a data dir: `--data-dir`, or else `ldaplens` in
+  the user config dir, created with mode 0700:
+  - Linux: `$XDG_CONFIG_HOME/ldaplens`, or `~/.config/ldaplens`;
+  - macOS: `~/Library/Application Support/ldaplens`;
+  - Windows: `%AppData%\ldaplens`;
+  - the image: `/data/ldaplens`.
+- **`ldaplens server`** is for a team, for example in Kubernetes. It serves
+  only the profiles in `--config` and keeps nothing on disk.
+
+Any other first argument that does not start with `-` fails with `unknown
+command "x": want local or server`, and a mode after the flags fails too.
+`--version` and `-h` work in both modes.
+
+**Local mode always needs a token.** Unless `--auth-token` or
+`--auth-token-file` sets one, the first start makes one and keeps it in
+`token` in the data dir (mode 0600), and every start logs a login link with
+it:
+
+```text
+level=INFO msg="open the UI with this login link (adjust the host and port to how you reach it)" url="http://localhost:8080/?token=..."
+```
+
+Open the link once: it sets a cookie that lasts 30 days, and the token stays
+the same across restarts, so a bookmark of the UI keeps working. To change
+the token, and log out every browser, delete the file and restart. Without a
+user config dir (no `$HOME`, for example), there is no data dir: ldaplens
+logs `saving profiles disabled (no data dir)` and makes a new token at every
+start.
+
+**Server mode needs `--config`**; without it, startup fails with `server mode
+needs --config`. It refuses `--data-dir` and `LDAPLENS_DATA_DIR` with `server
+mode keeps no data; --data-dir is for local mode`, and never makes a token.
+Without `--auth-token` or `--auth-token-file`, every profile must ask each
+person for a password: a `bindDNTemplate` profile, or a `bindDN` without
+`passwordEnv` or `passwordFile`. A profile that binds with a configured
+password or anonymously would serve anyone who reaches ldaplens, so it fails
+startup with `profile <name> binds with a configured password or
+anonymously; server mode needs --auth-token or --auth-token-file`.
+
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
 `ghcr.io/cicdteam/ldaplens:<version>` (for example `1.0.0`) and `:latest`.
+The image listens on `0.0.0.0:8080` and runs `server` unless told otherwise.
 
-The quickest start:
+The quickest start runs local mode with its data in a volume:
 
 ```sh
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/cicdteam/ldaplens:latest
+docker run --rm -p 127.0.0.1:8080:8080 -v ldaplens:/data ghcr.io/cicdteam/ldaplens local
 ```
 
-The container listens beyond loopback, so ldaplens prints a login link with a
-random token at startup; open it, then add your directories with
-**New connection**. Set `LDAPLENS_AUTH_TOKEN` to choose the token (at least 16
-characters from `A-Z a-z 0-9 . _ ~ -`). Without a volume, the connections you
-add are lost when the container is removed.
+Open the login link from the log, then add your directories with **New
+connection**. The volume keeps them and the token; without it, both are lost
+when the container is removed. Set `LDAPLENS_AUTH_TOKEN` to choose the token
+(at least 16 characters from `A-Z a-z 0-9 . _ ~ -`).
 
 Connections come from two places, and you can use either or both: the ones
-you create in the UI (kept in `/data`, passwords never stored) and the fixed
-ones in a [`connections.yaml`](#connectionsyaml) you mount. A fuller run that
-keeps UI connections across restarts and loads a `connections.yaml`:
+you create in the UI (kept in the data dir, passwords never stored) and the
+fixed ones in a [`connections.yaml`](#connectionsyaml) you mount. A local run
+that also loads a `connections.yaml`:
 
 ```sh
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -v ldaplens-data:/data \
+  -v ldaplens:/data \
   -v "$PWD/connections.yaml:/etc/ldaplens/connections.yaml:ro" \
   -e LDAPLENS_CONFIG=/etc/ldaplens/connections.yaml \
-  ghcr.io/cicdteam/ldaplens:latest
+  ghcr.io/cicdteam/ldaplens local
 ```
+
+Without `local`, the image runs server mode, which needs `LDAPLENS_CONFIG`
+(or `--config`) and writes nothing, so it runs with a read-only root
+filesystem and no volume.
 
 To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
@@ -41,12 +90,13 @@ The UI's hashed assets are served gzipped and cached for a year, so no ingress c
 `/api` responses are never cached (`Cache-Control: no-store`), and the UI refuses to be framed by other pages.
 
 `make image-multiarch` builds `ldaplens:dev-amd64` and `ldaplens:dev-arm64` with
-buildx and checks each (architecture, `--version`, `/healthz`, unpacked size
-under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
+buildx and checks each (architecture, `--version`, `/healthz` of server mode
+on a read-only root filesystem, the login link of local mode with a volume,
+unpacked size under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
 (or arm64) emulation, pass `PLATFORMS=linux/arm64` (or `linux/amd64`) to check
 one platform.
 
-Demo with a sample OpenLDAP and Samba AD: `make demo-start`, then open
+Demo with a sample OpenLDAP and Samba AD, in local mode: `make demo-start`, then open
 <http://127.0.0.1:8080/?token=demo-token-not-secret>. It has two profiles on the
 OpenLDAP directory, `demo` (dev, editable) and `demo-prod` (prod, read-only),
 and `demo-ad` (Samba AD over LDAPS, editable, bound as Administrator; demo
@@ -265,7 +315,8 @@ login](#per-user-login) has the whole flow and its errors.
 ## Saved connections
 
 Profiles created in the UI are kept, without passwords, in `profiles.json`
-in `--data-dir`; without a data dir the UI cannot save profiles. At most 200
+in the data dir of local mode (see [Two modes](#two-modes)); without a data
+dir, as in server mode, the UI cannot save profiles. At most 200
 profiles can be saved, each at most 4 KiB as JSON not counting `caPEM`, which
 has its own limit of 16 KiB; saving one more profile, or a bigger one, fails
 with 409 `profile_limit`. Saves are written to a temporary file, synced and
@@ -281,33 +332,35 @@ moved, so it is a startup error, and so is a file the server cannot read
 
 Run one ldaplens process per data dir. The server locks `.lock` in it (Linux,
 macOS and the BSDs), and a second process on the same directory exits with
-`data dir ... is in use by another ldaplens process`. A data dir that does not
-exist is a startup error. One that is read-only or not writable for the
-server's user still starts: the saved profiles are listed, saving fails, and
-the server runs without the lock and logs the warning `data dir is not
-writable; saving profiles will fail` with its `dir`.
+`data dir ... is in use by another ldaplens process`. A `--data-dir` that does
+not exist is a startup error; the default one is created. One that is
+read-only or not writable for the server's user still starts if it holds the
+token file or a token is set: the saved profiles are listed, saving fails,
+and the server runs without the lock and logs the warning `data dir is not
+writable; saving profiles will fail` with its `dir`. Without either, keeping
+a new token there fails startup.
 
 ## Flags
 
-| Flag | Env | Default |
-|---|---|---|
-| `--listen` | `LDAPLENS_LISTEN` | `127.0.0.1:8080` |
-| `--base-path` | `LDAPLENS_BASE_PATH` | none |
-| `--config` | `LDAPLENS_CONFIG` | none |
-| `--data-dir` | `LDAPLENS_DATA_DIR` | none (`/data` in the image) |
-| `--auth-token` | `LDAPLENS_AUTH_TOKEN` | generated when not on loopback or when `--allowed-hosts` is set |
-| `--auth-token-file` | `LDAPLENS_AUTH_TOKEN_FILE` | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
-| `--allowed-hosts` | `LDAPLENS_ALLOWED_HOSTS` | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
-| `--session-idle` | `LDAPLENS_SESSION_IDLE` | `30m` |
-| `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | `8h` |
-| `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | `false` (set behind a TLS proxy or ingress) |
-| `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | none; comma-separated CIDRs or IPs of reverse proxies whose `X-Forwarded-For` is trusted for the client address (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
-| `--version` | | prints `ldaplens <version>` and exits |
+| Flag | Env | Mode | Default |
+|---|---|---|---|
+| `--listen` | `LDAPLENS_LISTEN` | both | `127.0.0.1:8080` (`0.0.0.0:8080` in the image) |
+| `--base-path` | `LDAPLENS_BASE_PATH` | both | none |
+| `--config` | `LDAPLENS_CONFIG` | both, required in server | none |
+| `--data-dir` | `LDAPLENS_DATA_DIR` | local | `ldaplens` in the user config dir (see [Two modes](#two-modes)) |
+| `--auth-token` | `LDAPLENS_AUTH_TOKEN` | both | local: kept in `token` in the data dir; server: none, which allows only profiles that ask for a password |
+| `--auth-token-file` | `LDAPLENS_AUTH_TOKEN_FILE` | both | none; a file holding the token, such as a mounted Secret; one trailing newline (`\n` or `\r\n`) is dropped |
+| `--allowed-hosts` | `LDAPLENS_ALLOWED_HOSTS` | both | none; `localhost`, `127.0.0.1` and `::1` are always allowed; comma-separated extras |
+| `--session-idle` | `LDAPLENS_SESSION_IDLE` | both | `30m` |
+| `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | both | `8h` |
+| `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | both | `false`; TLS and `X-Forwarded-Proto: https` make cookies Secure without it (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
+| `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | both | none; comma-separated CIDRs or IPs of reverse proxies whose `X-Forwarded-For` is trusted for the client address (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
+| `--version` | | both | prints `ldaplens <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
-(`LDAPLENS_DATA_DIR=""` disables saving). A variable that does not parse
-(`LDAPLENS_SECURE_COOKIES=yes`, `LDAPLENS_SESSION_IDLE=30`) is a startup error
-even when its flag is set. `--auth-token` or `--auth-token-file`
+(`LDAPLENS_DATA_DIR=""` means the default data dir). A variable that does not
+parse (`LDAPLENS_SECURE_COOKIES=yes`, `LDAPLENS_SESSION_IDLE=30`) is a startup
+error even when its flag is set. `--auth-token` or `--auth-token-file`
 on the command line overrides both token variables. Both flags at once, or
 both variables at once, are a startup error, and so is a token file that is
 missing or holds an invalid token (at least 16 characters from
@@ -381,9 +434,9 @@ OIDs (`0.9.2342.19200300.100.1.1=alice` for `uid=alice`), Active Directory's
 other names for one account (its UPN, `DOMAIN\user` and its DN) and other
 names for one server (its IP address) still count separately, and a saved
 connection can name an account or a server any of those ways. So
-where guessing passwords through ldaplens matters, run with fixed profiles
-only: `LDAPLENS_DATA_DIR=""` disables saved connections, and the profiles in
-`connections.yaml` each name one form.
+where guessing passwords through ldaplens matters, run `ldaplens server`,
+which has no saved connections, with profiles in `connections.yaml` that each
+name one form.
 
 The server runs at most 64 API requests at once, and at most 4 of one
 session; the others wait their turn. A request without a session cookie,
@@ -457,14 +510,13 @@ an anonymous bind. Attribute values, passwords, tokens and
 session IDs are never logged, and a DN that does not parse or has a secret
 attribute in an RDN is logged as `<redacted>`.
 
-At startup the server logs `listening` with `version`, `addr`, `basePath`,
-`profiles` (how many from `connections.yaml`), `saved` (how many saved
-connections it loaded) and `dataDir` (empty when saving is disabled). A
-generated token adds the login link, and inside Kubernetes
-(`KUBERNETES_SERVICE_HOST` is set) a warning: a generated token changes on
-every restart and differs per replica, so set `LDAPLENS_AUTH_TOKEN` or
-`LDAPLENS_AUTH_TOKEN_FILE` from a Secret. A shutdown that runs out of time
-logs the warning `shutdown drain timed out` with `after`.
+At startup the server logs `listening` with `version`, `mode` (`local` or
+`server`), `addr`, `basePath`, `profiles` (how many from `connections.yaml`),
+`saved` (how many saved connections it loaded) and `dataDir` (empty when
+saving is disabled). In local mode, a token that no flag or variable set adds
+the login link, and no data dir adds the warning `saving profiles disabled
+(no data dir)` (see [Two modes](#two-modes)). A shutdown that runs out of
+time logs the warning `shutdown drain timed out` with `after`.
 
 The directory's own audit log sees only the bind DN. A profile bound as a
 shared service account (`passwordEnv` or `passwordFile`) makes every write
@@ -487,8 +539,8 @@ profile is dialed again at its next request.
 
 - **Fixed profiles with per-user login** is the recommended setup for a
   shared instance: put every connection in `connections.yaml` with a
-  `bindDNTemplate` (see [Per-user login](#per-user-login)), set
-  `LDAPLENS_DATA_DIR=""`, and keep the token or an SSO proxy in front.
+  `bindDNTemplate` (see [Per-user login](#per-user-login)), run `ldaplens
+  server`, and keep the token or an SSO proxy in front.
   Everyone then works as themselves,
   and no service account password is stored in the deployment. Saving in
   the UI fails with 409 `saving_disabled`, and connect opens
@@ -502,14 +554,14 @@ profile is dialed again at its next request.
   65532`, which makes a root-owned volume writable for the image's user
   (UID 65532). A `hostPath` ignores `fsGroup`, and the `restricted` policy
   refuses it. An `emptyDir` forgets the profiles when the pod is replaced.
-  Without a volume, the image's `VOLUME /data` gets a directory that lives
-  only as long as the container, so saves are lost at its next restart.
+  Without a volume, local mode keeps them, and its token, in the container,
+  so they are lost when it is replaced.
 - **Back up `profiles.json`** (it holds no passwords), and always before an
   upgrade: after a rollback, the older version drops the settings it does
   not know at its next save.
 - **The token** comes from a Secret through `LDAPLENS_AUTH_TOKEN_FILE` (or
-  `LDAPLENS_AUTH_TOKEN`). A generated one changes at every restart, which
-  logs everyone out, and is printed only in the log. The token file is read
+  `LDAPLENS_AUTH_TOKEN`). Server mode never makes one; the one local mode
+  keeps in its data dir is printed only in the log. The token file is read
   at startup: restart after rotating it.
 - **Memory**: ldaplens uses about 10 MiB, plus about 55 MiB for each Apply of
   4 MiB of photos in flight. A large read holds up to 64 MiB of values per
@@ -583,10 +635,9 @@ asks to sign in again.
 Set up the proxy and ldaplens together:
 
 - **A token**, from `LDAPLENS_AUTH_TOKEN_FILE` or `LDAPLENS_AUTH_TOKEN`.
-  `--allowed-hosts` makes ldaplens generate one, but a new one at every
-  restart. Without `--allowed-hosts`, a proxy that forwards `Host:
-  localhost` or `127.0.0.1` to a loopback listener looks like a local
-  browser, which needs no token.
+  Local mode otherwise uses the one it keeps in its data dir, also behind a
+  proxy on the same host; server mode needs one for a profile with a
+  configured password or an anonymous bind (see [Two modes](#two-modes)).
 - **The Host header**: set `--allowed-hosts` to the host name users open,
   and have the proxy pass the browser's `Host` on (nginx: `proxy_set_header
   Host $host`; Traefik and ingress-nginx do so by default). Any other Host
@@ -603,10 +654,15 @@ Set up the proxy and ldaplens together:
   wrong passwords add up to one count, and twenty in a minute refuse
   everyone for the rest of it. List only proxies: whatever reaches ldaplens
   from a listed address can name any client.
-- **`--secure-cookies`** when the proxy terminates TLS. ldaplens does not
-  trust `X-Forwarded-Proto`, which any client that reaches it directly could
-  send, so without the flag its cookies lack `Secure` although the browser
-  uses HTTPS.
+- **Secure cookies**: ldaplens marks its cookies `Secure` when the request
+  came over TLS or its first `X-Forwarded-Proto` value is `https` (in any
+  case), which ingress-nginx and Traefik send by default. nginx does not:
+  add `proxy_set_header X-Forwarded-Proto $scheme`, or set
+  `--secure-cookies`, which marks every cookie `Secure`, as the example below
+  does. The header is taken from any client: forging it can only add
+  `Secure`, which makes a browser on plain HTTP drop the cookie, never weaken
+  it. Over plain HTTP, such as `kubectl port-forward`, `docker run` or the
+  demo, the cookies work in every browser.
 - **Body size and read timeout**: Apply, New child and Clone send up to
   8 MiB, and an Apply may run 4 minutes; ldaplens cuts off any request after
   5 minutes. nginx and ingress-nginx allow 1 MiB and wait 60 seconds by default: a
@@ -725,9 +781,11 @@ The manifest below runs ldaplens under the `restricted` Pod Security Standard
 `seccompProfile: RuntimeDefault`), with the token and a bind password in a
 Secret, `connections.yaml` and the directory's CA in a ConfigMap, a PVC for
 UI-saved profiles, and a NetworkPolicy that lets in only the ingress
-controller (ingress-nginx here: adjust the labels to yours). For fixed
-profiles only, uncomment `LDAPLENS_DATA_DIR` and drop the PVC, the `data`
-volume and its mount. Pin the image by digest in production.
+controller (ingress-nginx here: adjust the labels to yours). It runs local
+mode, which keeps its data in `/data/ldaplens` on the PVC. For fixed profiles
+only, run server mode instead: replace `local` with `server` in `args`, and
+drop the PVC, the `data` volume and its mount. Pin the image by digest in
+production.
 
 ```yaml
 apiVersion: v1
@@ -823,7 +881,7 @@ spec:
       containers:
         - name: ldaplens
           image: ghcr.io/cicdteam/ldaplens:<version>
-          args: [--config=/etc/ldaplens/config/connections.yaml]
+          args: [local, --config=/etc/ldaplens/config/connections.yaml]
           env:
             - {name: LDAPLENS_AUTH_TOKEN_FILE, value: /etc/ldaplens/secrets/auth-token}
             # The host name users open; ldaplens answers 403 to any other Host.
@@ -835,9 +893,6 @@ spec:
             - {name: LDAPLENS_TRUSTED_PROXIES, value: 10.244.0.0/16}
             # About 80% of the memory limit: Go does not read the limit.
             - {name: GOMEMLIMIT, value: 400MiB}
-            # Fixed profiles only: uncomment this, and drop the PVC and the
-            # data volume and its mount.
-            # - {name: LDAPLENS_DATA_DIR, value: ""}
           ports:
             - {name: http, containerPort: 8080}
           readinessProbe:
@@ -904,9 +959,10 @@ spec:
 On a Linux server, run ldaplens as a service on loopback behind a reverse
 proxy on the same host, such as the nginx example above. The binary is
 static: `make build` builds `bin/ldaplens`, or copy `/ldaplens` out of the
-image. The unit runs it as a dynamic user in a sandbox, with saved
-connections in `/var/lib/ldaplens` (0700); for fixed profiles only, change
-its `LDAPLENS_DATA_DIR` line to `Environment=LDAPLENS_DATA_DIR=`.
+image. The unit runs it in local mode as a dynamic user in a sandbox, with
+saved connections in `/var/lib/ldaplens` (0700); for fixed profiles only, run
+server mode: put `server` before `--config` in `ExecStart` and drop the
+`LDAPLENS_DATA_DIR` line.
 
 ```ini
 # /etc/systemd/system/ldaplens.service
@@ -994,9 +1050,10 @@ LDAPLENS_AUTH_TOKEN=<openssl rand -hex 32>
 LDAPLENS_ALLOWED_HOSTS=ldaplens.corp.example
 ```
 
-Without the token, ldaplens generates one at every start, and journald keeps
-the login link. Passwords for `passwordFile` profiles go in
-`/etc/ldaplens/secrets/` (`root:ldaplens-secrets`, 0640).
+Without the token, ldaplens keeps one in `/var/lib/ldaplens/token`, and
+journald keeps the login link it logs at every start. Passwords for
+`passwordFile` profiles go in `/etc/ldaplens/secrets/`
+(`root:ldaplens-secrets`, 0640).
 
 ## Operations
 
@@ -1007,9 +1064,10 @@ the login link. Passwords for `passwordFile` profiles go in
   exits with status 1; for a pod in CrashLoopBackOff, add `--previous` to
   `kubectl logs`.
 - **A broken `profiles.json`** is moved to `profiles.json.bad` next to it
-  (`/data` in the image, `/var/lib/ldaplens` with the unit), and ldaplens starts
-  without saved profiles and logs `profiles file was invalid and was moved
-  aside` with its `path` and `error`. The next broken file replaces it. To
+  (`/data/ldaplens` in the image, `/var/lib/ldaplens` with the unit), and
+  ldaplens starts without saved profiles and logs `profiles file was
+  invalid and was moved aside` with its `path` and `error`. The next broken
+  file replaces it. To
   put a fixed copy back, stop ldaplens first, because it rewrites the file
   from its own list at the next save. In Kubernetes: scale the Deployment to
   0, mount the PVC in a helper pod with the same `securityContext` (on the
@@ -1026,7 +1084,7 @@ the login link. Passwords for `passwordFile` profiles go in
   ```
 
   The app's files are under `/proc/1/root/` there, for example
-  `/proc/1/root/data/profiles.json.bad`.
+  `/proc/1/root/data/ldaplens/profiles.json.bad`.
 
 ## Development
 
@@ -1051,6 +1109,9 @@ docker compose -f deploy/docker-compose.yml up -d openldap
 DEMO_LDAP_PASSWORD=adminpassword go run ./cmd/ldaplens --config deploy/connections.dev.yaml
 cd web && npm ci && npm run dev   # http://localhost:5173, /api is proxied to :8080
 ```
+
+Open the login link that ldaplens logs once: browsers send its cookie to
+every port of `localhost`, so the Vite server on 5173 then works too.
 
 The demo directory (`deploy/demo-ldif/gen.sh`) has 250 people, nested groups
 with a cycle, DNs with escaped commas and non-ASCII characters, photos on the
