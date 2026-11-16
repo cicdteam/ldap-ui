@@ -537,6 +537,9 @@ func TestRedialInvalidCredentialsCloses(t *testing.T) {
 			if n := binds.Load(); n != wantBinds {
 				t.Errorf("4 reads after the drop made %d binds, want %d", n, wantBinds)
 			}
+			if got := c.Closed(); got != tc.wantClosed {
+				t.Errorf("Closed() after the reads = %v, want %v", got, tc.wantClosed)
+			}
 		})
 	}
 }

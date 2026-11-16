@@ -113,6 +113,15 @@ func (c *Conn) Close() error {
 	return lc.Close()
 }
 
+// Closed reports whether c was closed for good, by Close or by a redial
+// whose bind the server refused with invalid credentials. Every later
+// operation fails with net.ErrClosed.
+func (c *Conn) Closed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 // Info returns what the server announced at connect time.
 func (c *Conn) Info() Info { return c.info }
 

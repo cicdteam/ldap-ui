@@ -416,7 +416,10 @@ the 30 second default grace period of a Kubernetes pod.
 `connections.yaml`, the `passwordEnv` variables, the token (also from
 `--auth-token-file`) and every other flag and variable are read at startup:
 restart after changing them. `passwordFile` and `caFile` are read at every
-connect, so a rotated Secret is used at the next connect. Mount ConfigMaps
+dial, so a rotated Secret is used at the next dial: at a connect, or for a
+shared profile at the first request after its connection closed (idle, past
+`--session-max-age`, or because the server refused the old password at a
+reconnect). Mount ConfigMaps
 and Secrets as directories, not with `subPath`, which never sees an update.
 
 ## Logs and accountability
@@ -817,7 +820,7 @@ data:
         url: ldaps://dc1.corp.example:636
         baseDN: dc=corp,dc=example
         bindDN: cn=reader,ou=svc,dc=corp,dc=example
-        # Read at every connect: a rotated Secret is used without a restart.
+        # Read at every dial: a rotated Secret is used without a restart.
         passwordFile: /etc/ldaplens/secrets/corp-ad
         caFile: /etc/ldaplens/config/corp-ca.pem
         environment: prod

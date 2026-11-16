@@ -61,6 +61,7 @@ type directoryFake struct {
 }
 
 func (d *directoryFake) Close() error     { d.closed = true; return nil }
+func (d *directoryFake) Closed() bool     { return d.closed }
 func (d *directoryFake) Info() ldapx.Info { return d.info }
 func (d *directoryFake) Schema(context.Context) (*schema.Schema, error) {
 	return schema.Parse(nil, nil, nil), d.err

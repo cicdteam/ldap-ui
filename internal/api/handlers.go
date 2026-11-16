@@ -465,27 +465,52 @@ type sharedConns struct {
 	m *session.Manager[Directory]
 
 	mu    sync.Mutex
-	ids   map[string]string        // profile name to its session in m
+	conns map[string]sharedConn    // profile name to its last dialed connection
 	dials map[string]chan struct{} // profile name to a slot held across its dial
 }
 
-func (c *sharedConns) id(name string) string {
+// sharedConn is a dialed connection and the session in m that holds it.
+// Every dial gets a new session, so id names this connection only.
+type sharedConn struct {
+	id string
+	d  Directory
+}
+
+func (c *sharedConns) last(name string) sharedConn {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.ids[name]
+	return c.conns[name]
 }
 
 // connected reports whether name has a live connection, without counting
 // as a use.
 func (c *sharedConns) connected(name string) bool {
-	return len(c.m.Names(c.id(name))) > 0
+	sc := c.last(name)
+	return len(c.m.Names(sc.id)) > 0 && !sc.d.Closed()
+}
+
+// lookup returns name's connection. One closed for good, as by a redial
+// whose bind the server refused, is dropped instead, so that the next dial
+// reads the configured password again.
+func (c *sharedConns) lookup(name string) (Directory, error) {
+	sc := c.last(name)
+	d, err := c.m.Get(sc.id, name)
+	if err == nil && d.Closed() {
+		c.m.Drop(sc.id, name)
+		return nil, session.ErrNotConnected
+	}
+	return d, err
 }
 
 // get returns name's connection, dialing it with dial when there is none.
 // One dial per profile runs at a time, outside the lock: a request that
 // finds one under way waits for it and takes its connection.
+//
+// ponytail: when a dial fails, each request that waited dials again in
+// turn, so a burst of k requests on a broken profile binds up to k times;
+// hand the dial's error to the waiters if a lockout policy counts them.
 func (c *sharedConns) get(ctx context.Context, name string, dial func(context.Context) (Directory, error)) (Directory, error) {
-	if d, err := c.m.Get(c.id(name), name); err == nil {
+	if d, err := c.lookup(name); err == nil {
 		return d, nil
 	}
 	c.mu.Lock()
@@ -501,7 +526,7 @@ func (c *sharedConns) get(ctx context.Context, name string, dial func(context.Co
 		return nil, ctx.Err()
 	}
 	defer func() { <-slot }()
-	if d, err := c.m.Get(c.id(name), name); err == nil {
+	if d, err := c.lookup(name); err == nil {
 		return d, nil // dialed while this request waited
 	}
 	d, err := dial(ctx)
@@ -514,14 +539,18 @@ func (c *sharedConns) get(ctx context.Context, name string, dial func(context.Co
 		return nil, err
 	}
 	c.mu.Lock()
-	c.ids[name] = id
+	c.conns[name] = sharedConn{id: id, d: d}
 	c.mu.Unlock()
 	return d, nil
 }
 
 // drop closes name's connection, if there is one.
+//
+// ponytail: a dial under way when drop runs still stores its connection,
+// made with the settings it started with, and under steady use that lives
+// until --session-max-age; take the dial slot here if that matters.
 func (c *sharedConns) drop(name string) {
-	c.m.Drop(c.id(name), name)
+	c.m.Drop(c.last(name).id, name)
 }
 
 func (s *server) fail(w http.ResponseWriter, err error) {

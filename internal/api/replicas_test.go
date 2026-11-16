@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -175,6 +176,40 @@ func TestSharedWritesGuarded(t *testing.T) {
 	}
 	if rec := b.do(t, http.MethodPost, "/api/c/prodrw/entries/delete", `{"dn":"uid=n,dc=example,dc=org","confirm":"prodrw"}`); rec.Code != http.StatusOK {
 		t.Errorf("delete on prod with confirm = %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// TestSharedRedialsClosed checks that a shared connection closed for good,
+// as ldapx closes one whose reconnect the server refused the password of,
+// is dialed again, with the configured password read anew: by a connect,
+// and by the next request. Until then the profiles list shows it
+// disconnected.
+func TestSharedRedialsClosed(t *testing.T) {
+	env := connected(t)
+	for i, redial := range []func(){
+		func() { connectTo(t, env, `{"profile":"dev"}`) },
+		func() { env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)"}`) },
+	} {
+		env.dir.closed = true
+		env.dir = &directoryFake{info: ldapx.Info{BaseDN: "dc=example,dc=org"}}
+		pw := fmt.Sprintf("rotated-%d", i)
+		t.Setenv("LDAPLENS_TEST_PW", pw)
+		if diff := cmp.Diff([]string(nil), connectedNames(t, env)); diff != "" {
+			t.Errorf("%d: connected profiles with a closed connection mismatch (-want +got):\n%s", i, diff)
+		}
+		redial()
+		if want := i + 2; env.dials != want || env.password != pw {
+			t.Errorf("%d: dials, last password = %d, %q, want %d, %q", i, env.dials, env.password, want, pw)
+		}
+		if rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)"}`); rec.Code != http.StatusOK {
+			t.Errorf("%d: search after the redial = %d %s, want 200", i, rec.Code, rec.Body)
+		}
+		if diff := cmp.Diff([]string{"dev"}, connectedNames(t, env)); diff != "" {
+			t.Errorf("%d: connected profiles after the redial mismatch (-want +got):\n%s", i, diff)
+		}
+	}
+	if env.dials != 3 {
+		t.Errorf("dials = %d, want 3", env.dials)
 	}
 }
 

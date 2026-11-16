@@ -23,6 +23,9 @@ import (
 // Directory is an open LDAP connection. *ldapx.Conn implements it.
 type Directory interface {
 	io.Closer
+	// Closed reports whether the connection was closed for good, by Close
+	// or by itself; every later call then fails with net.ErrClosed.
+	Closed() bool
 	Info() ldapx.Info
 	Schema(ctx context.Context) (*schema.Schema, error)
 	ReloadSchema(ctx context.Context) (*schema.Schema, error)
@@ -93,7 +96,7 @@ func New(opts Options) http.Handler {
 	cookies := cookieOptions{Path: base + "/", Secure: opts.SecureCookies}
 	s := &server{
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
-		shared:         &sharedConns{m: opts.Shared, ids: map[string]string{}, dials: map[string]chan struct{}{}},
+		shared:         &sharedConns{m: opts.Shared, conns: map[string]sharedConn{}, dials: map[string]chan struct{}{}},
 		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
 		attempts: newAttemptLimiter(5, time.Minute, 10000, time.Now),
 	}
