@@ -249,8 +249,10 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   and `telephoneNumber`; for a group or any other entry `cn` and
   `description`. Pinned attributes the entry has are listed in that order and
   are not repeated below. Then come Required (MUST), Optional (MAY) and
-  Operational, which starts closed and opens while the attribute filter is
-  set or a value there has a problem to fix. A row with one value is 30 px
+  Operational, which starts closed. A click on a section's title closes or
+  opens it; a section opens by itself while one of its rows has a problem to
+  fix or a server error, and Operational also while the attribute filter is
+  set. A row with one value is 30 px
   tall; hovering a value shows its copy button, and DN values open their
   entry. The attribute filter sits in the tab bar. Membership loads only while
   its tab is open, with Direct or Nested in the tab bar. The tab, Direct or

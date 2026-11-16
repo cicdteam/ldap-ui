@@ -116,3 +116,27 @@ test('the tab, Nested, Operational and the attribute filter stay from entry to e
   await expect(page.getByRole('region', exact('Member of'))).toBeVisible()
   await expect(edit).toHaveAttribute('aria-pressed', 'false')
 })
+
+test('a closed section opens while one of its rows has a problem', async ({ page }) => {
+  await openEntry(page, 'demo', e2eDN('sections'))
+  await page.getByRole('button', exact('Edit')).click()
+  const optional = section(page, 'Optional')
+  await optional.click()
+  await expect(optional).toHaveAttribute('aria-expanded', 'false')
+  await expect(attrRow(page, 'loginShell')).toBeHidden()
+
+  // Removing posixAccount leaves its loginShell, in Optional, not allowed.
+  await attrRow(page, 'objectClass')
+    .locator('li', { hasText: 'posixAccount' })
+    .getByRole('button', exact('Delete objectClass value'))
+    .click()
+  await expect(optional).toHaveAttribute('aria-expanded', 'true')
+  await expect(optional).toBeDisabled()
+  await expect(attrRow(page, 'loginShell').getByRole('alert')).toHaveText(
+    'Not allowed without posixAccount; delete it',
+  )
+
+  // Fixed, it closes again as it was left.
+  await attrRow(page, 'loginShell').getByRole('button', exact('Delete loginShell value')).click()
+  await expect(optional).toHaveAttribute('aria-expanded', 'false')
+})

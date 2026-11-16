@@ -13,7 +13,7 @@ import {
 } from '../../lib/changes'
 import { pinnedAttributes, shownValues, valueMatches } from '../../lib/display'
 import { auxiliaryCandidates, classLock, editorKind, lockReason } from '../../lib/edit'
-import { bannerShown, errorText, fieldMessage } from '../../lib/review'
+import { bannerShown, errorText, fieldMessage, flagged } from '../../lib/review'
 import {
   attributeHelp,
   attrKey,
@@ -309,21 +309,36 @@ export function Attributes({
     ws.schema,
   )
   const problems = validate(entry, ec, ws.schema)
-  const must = g.must.filter(matches)
-  const may = g.may.filter(matches)
-  const ops = g.operational.filter(matches)
-  // Operational stays as the person left it, but opens while a filter is typed or a row there has
-  // a problem to fix.
-  const forced = !!needle || ops.some((a) => problems.has(attrKey(a.name)))
-  const opOpen = operational || forced
-  const shown = [...pinned, ...must, ...may, ...(opOpen ? ops : [])].map((a) => a.name)
+  // A section stays as the person left it, but opens (and cannot close) while a row in it has a
+  // problem to fix or a server error; Operational also while a filter is typed.
+  const section = (
+    title: string,
+    attrs: Attribute[],
+    open: boolean,
+    setOpen: (open: boolean) => void,
+    force = false,
+  ) => {
+    const forced = force || flagged(attrs, problems, error)
+    return { title, attrs, open: open || forced, setOpen: forced ? undefined : setOpen }
+  }
+  const closable = (title: string, attrs: Attribute[]) =>
+    section(title, attrs, !closed[title], (open) => setClosed((c) => ({ ...c, [title]: !open })))
+  const sections = {
+    pinned: closable('Pinned', pinned),
+    must: closable('Required', g.must.filter(matches)),
+    may: closable(ws.schema.available ? 'Optional' : 'Attributes', g.may.filter(matches)),
+    ops: section(
+      'Operational',
+      g.operational.filter(matches),
+      operational,
+      setOperational,
+      !!needle,
+    ),
+  }
+  // Only rows in open sections are shown; the banner speaks for the rest.
+  const shown = Object.values(sections).flatMap((s) => (s.open ? s.attrs.map((a) => a.name) : []))
   const banner = !!error && bannerShown(error, shown, problems)
   const row = { dn: entry.dn, editing, needle, schema: ws.schema, problems, error, banner }
-  const section = (title: string) => ({
-    title,
-    open: !closed[title],
-    setOpen: (open: boolean) => setClosed((c) => ({ ...c, [title]: !open })),
-  })
   return (
     <div>
       {/* Stays until the next apply: Reload entry turns the conflict into stale marks to drop. */}
@@ -355,36 +370,26 @@ export function Attributes({
         <p className="px-2 py-1 text-xs text-warn">No schema: attributes are not grouped.</p>
       )}
       <Section
-        {...section('Pinned')}
+        {...sections.pinned}
         help="Key attributes of this kind of entry. They are not repeated in the sections below"
-        attrs={pinned}
         {...row}
       />
+      <Section {...sections.must} help="MUST attributes of the object classes" {...row} />
       <Section
-        {...section('Required')}
-        help="MUST attributes of the object classes"
-        attrs={must}
-        {...row}
-      />
-      <Section
-        {...section(ws.schema.available ? 'Optional' : 'Attributes')}
+        {...sections.may}
         help={
           ws.schema.available
             ? 'MAY attributes of the object classes'
             : 'Every attribute, ungrouped'
         }
-        attrs={may}
         {...row}
       />
       <Section
-        title="Operational"
+        {...sections.ops}
         help="Server-maintained attributes, and those the object classes do not name"
-        attrs={ops}
-        open={opOpen}
-        setOpen={forced ? undefined : setOperational}
         {...row}
       />
-      {pinned.length + must.length + may.length + ops.length === 0 && (
+      {Object.values(sections).every((s) => s.attrs.length === 0) && (
         <p className="p-2 text-muted">No attributes match.</p>
       )}
       {/* The missing MUST rows are there to fill, so the picker does not offer them again. */}

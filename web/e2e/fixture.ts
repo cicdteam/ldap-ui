@@ -118,6 +118,14 @@ export function fixtureLDIF(): string {
       person(p, E2E_OU, [`jpegPhoto:: ${readFileSync(PHOTO).toString('base64')}`]),
     ),
     ...Object.entries(E2E_GROUPS).map(([name, g]) => group(name, g)),
+    // An auxiliary class with a MAY value: removing the class flags loginShell, under Optional.
+    person('sections', E2E_OU, [
+      'objectClass: posixAccount',
+      'uidNumber: 7100',
+      'gidNumber: 7100',
+      'homeDirectory: /home/sections',
+      'loginShell: /bin/sh',
+    ]),
     // With the demo's "Doe, John", what a name search for "doe" finds.
     [
       `dn: uid=jane.doe,${E2E_OU}`,

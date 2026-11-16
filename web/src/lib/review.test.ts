@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Batch } from './changes'
-import { afterApply, bannerShown, canApply, errorText, fieldMessage, invalidCount } from './review'
+import {
+  afterApply,
+  bannerShown,
+  canApply,
+  errorText,
+  fieldMessage,
+  flagged,
+  invalidCount,
+} from './review'
 import { SchemaIndex } from './schema'
 import type { Entry } from './types'
 
@@ -136,5 +144,24 @@ describe('bannerShown', () => {
   })
   it('always shows a conflict: its actions live there', () => {
     expect(bannerShown({ ...rejected, code: 'conflict' }, ['mail'], none)).toBe(true)
+  })
+})
+
+describe('flagged', () => {
+  const rows = (...names: string[]) => names.map((name) => ({ name }))
+  const rejected = { code: 'rejected', message: 'invalid per syntax', attribute: 'MAIL' }
+  const none = new Map<string, string>()
+  it('is set by a validation problem on one of the rows', () => {
+    expect(
+      flagged(rows('cn', 'loginShell'), new Map([['loginshell', 'Not allowed']]), undefined),
+    ).toBe(true)
+  })
+  it('is set by a server error naming one of the rows, whatever the case', () => {
+    expect(flagged(rows('cn', 'mail'), none, rejected)).toBe(true)
+  })
+  it('is not set by an error or a problem elsewhere', () => {
+    expect(flagged(rows('cn', 'mail;binary'), new Map([['sn', 'Empty']]), rejected)).toBe(false)
+    expect(flagged(rows('cn'), none, { code: 'network', message: 'reset' })).toBe(false)
+    expect(flagged(rows(), none, rejected)).toBe(false)
   })
 })
