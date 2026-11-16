@@ -49,6 +49,14 @@ password or anonymously would serve anyone who reaches ldaplens, so it fails
 startup with `profile <name> binds with a configured password or
 anonymously; server mode needs --auth-token or --auth-token-file`.
 
+**What the token is for.** The token guards ldaplens itself, before any
+LDAP bind. A profile that asks each person for a password needs no guard:
+the directory checks that password. A profile that binds with a configured
+password or anonymously binds as the server, so without the token anyone
+who reaches the URL would work as that account. The token is one secret for
+the whole instance, not a per-person login: who you are, in the logs and in
+the directory, comes from the bind.
+
 **Server mode shows only what it takes to connect.** The UI learns the mode
 from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`). In server
 mode:
