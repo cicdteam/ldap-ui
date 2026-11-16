@@ -64,6 +64,33 @@ test('uid=jdoe: the card leads with who it is, then the Pinned section', async (
   await expect(page.getByLabel('Add to group', { exact: true })).toBeFocused()
 })
 
+test('stepping through results on Attributes asks for no membership', async ({ page }) => {
+  const membership: string[] = []
+  page.on('request', (r) => {
+    if (/\/api\/c\/demo\/(memberof|members)\?/.test(r.url())) membership.push(r.url())
+  })
+  await connect(page, 'demo')
+  await queryBar(page).click()
+  await page.keyboard.insertText('(|(uid=read)(uid=edit)(uid=layout))')
+  await page.keyboard.press('Enter')
+  const rows = results(page).getByRole('row')
+  await expect(rows).toHaveCount(4)
+  const dns = await Promise.all(
+    [1, 2, 3].map(async (i) => (await rows.nth(i).getAttribute('title'))!),
+  )
+  await rows.nth(1).click()
+  for (const [i, dn] of dns.entries()) {
+    if (i) await page.keyboard.press('ArrowDown')
+    await expect(
+      page.getByRole('heading', exact(dn.split(',')[0].replace('uid=', 'E2E '))),
+    ).toBeVisible()
+  }
+  expect(membership).toEqual([])
+  // The Membership tab does ask, so the requests above would have been seen.
+  await page.getByRole('tab', exact('Membership')).click()
+  await expect.poll(() => membership.length).toBeGreaterThan(0)
+})
+
 test('the tab, Nested, Operational and the attribute filter stay from entry to entry; Edit does not', async ({
   page,
 }) => {
