@@ -124,7 +124,7 @@ func requireToken(token string, cookies cookieOptions, log *slog.Logger, origin 
 			return
 		}
 		log.Info("auth failed", origin(r)...)
-		writeError(w, http.StatusUnauthorized, apiError{Code: "unauthorized", Message: "open the login link printed in the server log"})
+		writeError(w, http.StatusUnauthorized, apiError{Code: "unauthorized", Message: "sign in with the login link or the access token"})
 	})
 }
 

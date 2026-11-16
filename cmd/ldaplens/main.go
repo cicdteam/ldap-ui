@@ -241,7 +241,7 @@ func parseArgs(args []string, getenv func(string) string, usage io.Writer) (conf
 // Secret. It drops one trailing "\n" or "\r\n", which editors and
 // "echo > file" add. The error names path but never echoes the token.
 func readTokenFile(path string) (string, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // path is the operator's --auth-token-file
+	b, err := os.ReadFile(path) //nolint:gosec // path is the operator's --auth-token-file or <dataDir>/token
 	if err != nil {
 		return "", err
 	}

@@ -516,11 +516,13 @@ ldaplens logs to stdout, one `key=value` line per event. The lines below,
 except `auth failed`, end with who made them:
 
 - `session`: the first 8 hex characters of the SHA-256 of the browser's
-  session cookie, empty without one. A connect to a profile that is not
-  shared gives the browser a new session ID: its `connected` line carries
-  the new one, and the one the request came with in `previous`. A connect
-  to a shared profile keeps the session as it is and has no `previous`. It ties one browser's lines together
-  across connects; the session ID itself is never logged.
+  session cookie, empty without one. A connect gives the browser a new
+  session ID: its `connected` line carries the new one, and the one the
+  request came with in `previous`. A connect that used the shared
+  connection keeps the session as it is and has no `previous`; a password
+  typed for a shared profile opens the browser's own connection, so it gets
+  a new session ID. It ties one browser's lines together across connects;
+  the session ID itself is never logged.
 - `remote`: the client address, without the port. From a proxy in
   `--trusted-proxies` it is taken from `X-Forwarded-For` (see [Behind a
   reverse proxy](#behind-a-reverse-proxy)); behind any other proxy it is the
@@ -532,7 +534,7 @@ The lines:
 
 | Message | Fields |
 |---|---|
-| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one) unless the profile is shared, `connect failed` adds `error` |
+| `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one) unless it used the shared connection, `connect failed` adds `error` |
 | `connect throttled` | `profile`, `limit` (`account` for its DN, `client` for its client address), `bindDN`: a connect refused with 429 `too_many_attempts` |
 | `disconnected` | `profile`, `bindDN` |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
@@ -570,9 +572,11 @@ password, and both the directory and ldaplens log their DN.
 For a team, run `ldaplens server`, for example in Kubernetes (see
 [Kubernetes](#kubernetes) for a manifest). It serves only the profiles in
 `connections.yaml`, keeps nothing on disk and runs as several replicas
-behind one ingress. Server mode is for the OpenLDAP family: OpenLDAP and
-directories like it, such as 389 Directory Server. Active Directory is
-supported in local mode.
+behind one ingress. Server mode is built and tested for the OpenLDAP
+family: OpenLDAP and directories like it, such as 389 Directory Server.
+Active Directory is supported in local mode: its admin setups, such as
+Protected Users and tiered admin accounts, do not fit a shared web
+service.
 
 - **Per-user login** is the recommended setup: give every profile a
   `bindDNTemplate` (see [Per-user login](#per-user-login)). Everyone then
@@ -598,14 +602,16 @@ supported in local mode.
   pod with an affinity cookie (see [Behind a reverse
   proxy](#behind-a-reverse-proxy) for ingress-nginx and Traefik). When that
   pod goes away, in a rollout, a drain or a crash, its sessions go with it,
-  and their users sign in again.
+  and their users sign in again. A rollout replaces every pod, so after one
+  every per-user and typed-password user signs in again.
 - **TLS ends at the ingress**, and ldaplens speaks plain HTTP behind it. The
   ingress sends `X-Forwarded-Proto: https`, which makes the cookies Secure:
   no flag is needed. `kubectl port-forward` over plain HTTP works as is, for
   example `kubectl -n ldaplens port-forward svc/ldaplens 8080:80` and then
   `http://localhost:8080`; it reaches one pod, so it needs no affinity.
 - **The client address**: set `--trusted-proxies` to the pod network where
-  the ingress controller runs, for example `10.244.0.0/16` (use yours), so
+  the ingress controller runs, for example `10.244.0.0/16` (use yours), or
+  to the nodes' addresses for an ingress controller on `hostNetwork`, so
   that the logs and the per-client limit see the client behind the ingress
   (see [Behind a reverse proxy](#behind-a-reverse-proxy)). The ingress
   controller must see it too: behind a load balancer that hides it, such as
@@ -835,16 +841,12 @@ spec:
 
 Traefik as the ingress controller sets no body size limit or backend timeout
 by default, so its Ingress needs no annotations. Its affinity cookie is set
-on the Service in [Kubernetes](#kubernetes) instead:
+on the Service in [Kubernetes](#kubernetes) instead: add this annotation to
+that Service's `metadata`:
 
 ```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: ldaplens
-  namespace: ldaplens
-  annotations:
-    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+annotations:
+  traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
 ```
 
 A Traefik IngressRoute takes `sticky: {cookie: {}}` on its service.
@@ -861,6 +863,10 @@ yours). Server mode writes nothing, so there is no volume. `args` start with
 `server`, because arguments replace the image's default. The Ingress, with
 its affinity cookie, is under [Behind a reverse
 proxy](#behind-a-reverse-proxy). Pin the image by digest in production.
+ingress-nginx logs the query string by default, so a login link
+(`/?token=...`) lands in its access log: log the path only with its
+`log-format-upstream` (`$uri` in place of `$request`), or have an
+authenticating proxy send the token as an `Authorization: Bearer` header.
 
 ```yaml
 apiVersion: v1
@@ -1140,7 +1146,7 @@ journald keeps the login link it logs at every start. Passwords for
 
 - **Logs** go to stdout, one `key=value` line per event (see [Logs and
   accountability](#logs-and-accountability)): `kubectl -n ldaplens logs
-  -l app.kubernetes.io/name=ldaplens --prefix` for every replica, or
+  -l app.kubernetes.io/name=ldaplens --prefix --tail=-1` for every replica, or
   `journalctl -u ldaplens` for the systemd unit. A startup
   error is one line on stderr that starts with `ldaplens:`, and the process
   exits with status 1; for a pod in CrashLoopBackOff, add `--previous` to

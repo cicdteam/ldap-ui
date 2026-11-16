@@ -66,8 +66,9 @@ type Options struct {
 	AuthToken string
 	// BasePath serves everything under a prefix such as "/ldap".
 	BasePath string
-	// SecureCookies is set when the UI is served over HTTPS, e.g. behind a
-	// TLS-terminating ingress.
+	// SecureCookies forces Secure cookies. A request over TLS, or with
+	// X-Forwarded-Proto https, gets them anyway, so it is only for a TLS
+	// proxy that sends no X-Forwarded-Proto.
 	SecureCookies bool
 	// TrustedProxies are the addresses of reverse proxies whose
 	// X-Forwarded-For is trusted for the client address, which logs carry
