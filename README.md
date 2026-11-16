@@ -162,12 +162,22 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   card's heading (to the tree with no entry open). Pane sizes are
   remembered separately with the list and without it. With no entry
   selected, the card says so.
-- **List children** (command palette, "List children of the current
-  entry"): lists the entries one level under the entry in the card, with the
-  default columns.
+- **List children** (the list icon on a container in the tree, or "List
+  children of the current entry" in the command palette): lists the entries
+  one level under it, with the default columns.
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
-  A container shows its first 200 children; a bigger one ends with
-  "More entries…", which opens its children as a one-level search.
+  Each row shows its RDN; an account row (`uid=` or `sAMAccountName=`) also
+  shows the person's name, muted: `displayName`, else `cn`. A click on a
+  container selects it and expands or collapses it; the chevron only expands
+  or collapses it, and so do Right and Left. A container shows its List
+  children icon while the pointer is over its row, and on the row with
+  keyboard focus. "Filter loaded entries" above the tree keeps the rows whose
+  RDN value or name holds the text (any case), with their parents; it narrows
+  only the rows already loaded and never asks the server (the search bar
+  does). Next to it, Reload the tree from the server and Collapse the tree
+  (the header's tree button opens it again). A container shows its first
+  2000 children; a bigger one ends with "More entries…", which lists its
+  children like List children.
 - **Search bar** (header): one line that takes three kinds of input; Enter
   runs it.
   - Plain text (`doe`, `John Doe`) searches by name: `cn` and `displayName`

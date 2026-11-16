@@ -126,5 +126,15 @@ export function fixtureLDIF(): string {
       'mail: jane.doe@example.org',
       '',
     ].join('\n'),
+    // The tree shows its displayName beside the RDN: uid=jdoe John Doe.
+    [
+      `dn: uid=jdoe,${E2E_OU}`,
+      'objectClass: inetOrgPerson',
+      'uid: jdoe',
+      'cn: J. Doe',
+      'displayName: John Doe',
+      'sn: Doe',
+      '',
+    ].join('\n'),
   ].join('\n')
 }

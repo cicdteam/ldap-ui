@@ -1,8 +1,9 @@
 import { normDN, rdnType, rdnValue, splitDN } from './dn'
+import { asText, nameOf } from './results'
 import type { Page } from './types'
 
 /** Children per tree page; bigger containers get a "more" row that opens them as a search. */
-export const TREE_PAGE = 200
+export const TREE_PAGE = 2000
 
 export type EntryKind = 'user' | 'group' | 'ou' | 'domain' | 'other'
 
@@ -25,6 +26,8 @@ export interface ChildItem {
   /** Known to have no children (hasSubordinates FALSE or numSubordinates 0). */
   leaf: boolean
   kind: EntryKind
+  /** The person's name beside an account RDN (uid=jdoe: John Doe). */
+  hint?: string
 }
 
 export interface Children {
@@ -40,11 +43,16 @@ export function childrenFromPage(page: Page): Children {
     const hs = values('hassubordinates')[0]?.text
     const ns = values('numsubordinates')[0]?.text
     const leaf = hs !== undefined ? hs.toUpperCase() === 'FALSE' : ns !== undefined && ns === '0'
+    const rdn = splitDN(e.dn)[0] ?? e.dn
+    // An account RDN says little about who it is; a cn RDN already is the name.
+    const name = /^(uid|samaccountname)$/i.test(rdnType(rdn)) ? nameOf(asText(e)) : ''
     return {
       dn: e.dn,
-      rdn: splitDN(e.dn)[0] ?? e.dn,
+      rdn,
       leaf,
       kind: entryKind(values('objectclass').map((v) => v.text)),
+      // nameOf falls back to the RDN value, which the label already shows.
+      hint: name && name !== rdnValue(rdn) ? name : undefined,
     }
   })
   items.sort((a, b) =>
@@ -67,6 +75,8 @@ export interface TreeRow {
   label: string
   /** "ou=" before the label; empty for roots and service rows. */
   prefix: string
+  /** Shown muted after the label. */
+  hint?: string
   depth: number
   expandable: boolean
   expanded: boolean
@@ -78,11 +88,15 @@ interface Root {
   kind: EntryKind
 }
 
-/** Flattens the visible tree. children(dn) returns the load state of dn's children. */
+/**
+ * Flattens the visible tree. children(dn) returns the load state of dn's children. A filter keeps
+ * the entries whose label or hint holds it (any case), with their ancestors.
+ */
 export function buildRows(
   roots: Root[],
   expanded: Set<string>,
   children: (dn: string) => ChildState | undefined,
+  filter = '',
 ): TreeRow[] {
   const rows: TreeRow[] = []
   // Roots may nest (a base DN below a naming context), so the same entry can
@@ -106,6 +120,7 @@ export function buildRows(
     kind: EntryKind,
     leaf: boolean,
     depth: number,
+    hint?: string,
   ) => {
     const open = !leaf && expanded.has(normDN(dn))
     const self: TreeRow = {
@@ -114,6 +129,7 @@ export function buildRows(
       dn,
       label,
       prefix,
+      hint,
       depth,
       expandable: !leaf,
       expanded: open,
@@ -132,7 +148,7 @@ export function buildRows(
     } else {
       for (const c of st.data.items) {
         const t = rdnType(c.rdn)
-        walk(c.dn, rdnValue(c.rdn), t ? `${t}=` : '', c.kind, c.leaf, depth + 1)
+        walk(c.dn, rdnValue(c.rdn), t ? `${t}=` : '', c.kind, c.leaf, depth + 1, c.hint)
       }
       if (st.data.more) rows.push(service('more', dn, 'More entries… open as a list', depth + 1))
     }
@@ -141,7 +157,20 @@ export function buildRows(
     root = i
     walk(r.dn, r.dn, '', r.kind, false, 0)
   })
-  return rows
+  return filter ? filterRows(rows, filter.toLowerCase()) : rows
+}
+
+function filterRows(rows: TreeRow[], q: string): TreeRow[] {
+  const keep = new Set<number>()
+  const path: number[] = [] // the ancestors of the row at hand
+  rows.forEach((r, i) => {
+    while (path.length && rows[path[path.length - 1]].depth >= r.depth) path.pop()
+    const hit = (s?: string) => !!s && s.toLowerCase().includes(q)
+    if (r.type === 'entry' && (hit(r.label) || hit(r.hint)))
+      for (const j of [...path, i]) keep.add(j)
+    path.push(i)
+  })
+  return rows.filter((_, i) => keep.has(i))
 }
 
 /** Expanded nodes whose ancestors are all open: the ones whose children must be loaded. */

@@ -1,8 +1,7 @@
 #!/bin/sh
-# Regenerates demo.ldif: 250 people (more than one 200-row tree page), nested
-# groups with a cycle, DNs with escaped commas and non-ASCII characters,
-# userPassword values the UI must mask, photos, a certificate and values with
-# language options.
+# Regenerates demo.ldif: 250 people, nested groups with a cycle, DNs with
+# escaped commas and non-ASCII characters, userPassword values the UI must
+# mask, photos, a certificate and values with language options.
 #
 # Also regenerates ad-demo.ldif for Samba AD, under OU=Demo: 50 people with
 # titles and departments, nested groups, and 1600 bulk users in one group

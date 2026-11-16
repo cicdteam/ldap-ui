@@ -7,6 +7,7 @@ import {
   Folder,
   Globe,
   List,
+  PanelLeftClose,
   RefreshCw,
   User,
   Users,
@@ -15,7 +16,6 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEven
 import { api, errorMessage } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
 import { ancestorsWithin, isUnder, normDN, sameDN } from '../../lib/dn'
-import { defaultColumns } from '../../lib/nav'
 import { rowHeight, usePrefs } from '../../lib/prefs'
 import { keys, load, save } from '../../lib/storage'
 import {
@@ -31,7 +31,7 @@ import {
 import { treeKey, type TreeAction } from '../../lib/treeKeys'
 import { ChangeDot } from '../../ui/Badge'
 import { Button } from '../../ui/Button'
-import { PanelHeader } from '../../ui/PanelHeader'
+import { Input } from '../../ui/Input'
 import { cn } from '../../ui/cn'
 import { useBatch } from '../batch'
 import { useWorkspace } from '../context'
@@ -106,7 +106,16 @@ export function Tree() {
               base: dn,
               scope: 'one',
               filter: '(objectClass=*)',
-              attributes: ['objectClass', 'hasSubordinates', 'numSubordinates'],
+              // The kind, whether it has children, and the name beside an account RDN.
+              attributes: [
+                'objectClass',
+                'hasSubordinates',
+                'numSubordinates',
+                'cn',
+                'displayName',
+                'uid',
+                'sAMAccountName',
+              ],
               // A bigger container comes back with more set: the "more" row.
               sizeLimit: TREE_PAGE,
             },
@@ -128,7 +137,9 @@ export function Tree() {
           : { status: 'pending' },
     )
   })
-  const rows = buildRows(roots, expanded, (dn) => states.get(dn))
+  // Narrows the rows already loaded; it never asks the server.
+  const [filter, setFilter] = useState('')
+  const rows = buildRows(roots, expanded, (dn) => states.get(dn), filter.trim())
 
   const selectedIndex = ws.dn
     ? rows.findIndex((r) => r.type === 'entry' && sameDN(r.dn, ws.dn))
@@ -154,13 +165,7 @@ export function Tree() {
 
   const activate = (r: TreeRow) => {
     if (r.type === 'entry') ws.select(r.dn)
-    else if (r.type === 'more')
-      ws.runSearch({
-        base: r.dn,
-        scope: 'one',
-        filter: '(objectClass=*)',
-        attrs: ws.search?.attrs ?? defaultColumns(ws.info),
-      })
+    else if (r.type === 'more') ws.listChildren(r.dn)
     else if (r.type === 'error') void qc.invalidateQueries({ queryKey: childrenKey(ws.conn, r.dn) })
   }
   const toggle = (r: TreeRow) =>
@@ -199,19 +204,29 @@ export function Tree() {
 
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader>
-        DIRECTORY
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-2">
+        <Input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter loaded entries"
+          aria-label="Filter loaded entries"
+          title="Narrows the entries already loaded in the tree. To search the server, use the bar at the top."
+          className="h-7! flex-1 text-xs"
+        />
         <Button
           size="icon"
           variant="ghost"
-          className="ml-auto"
           aria-label="Refresh tree"
           title="Reload the tree from the server"
           onClick={() => void qc.invalidateQueries({ queryKey: ['c', ws.conn, 'children'] })}
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
-      </PanelHeader>
+        <Button size="icon" variant="ghost" title="Collapse the tree" onClick={ws.toggleTree}>
+          <PanelLeftClose className="h-3.5 w-3.5" />
+        </Button>
+      </div>
       {/* The focused row draws the ring while the tree has keyboard focus. outline-none
           needs "!" to beat the unlayered global :focus-visible rule in index.css. */}
       <div
@@ -238,6 +253,8 @@ export function Tree() {
                 onClick={() => {
                   setFocusKey(r.key)
                   activate(r)
+                  // The whole row of a container expands it; the chevron alone only toggles.
+                  if (r.type === 'entry' && r.expandable) toggle(r)
                 }}
                 style={{
                   height: v.size,
@@ -245,7 +262,7 @@ export function Tree() {
                   paddingLeft: r.depth * 14 + 4,
                 }}
                 className={cn(
-                  'absolute top-0 left-0 flex w-full cursor-default items-center gap-1 pr-2 whitespace-nowrap hover:bg-hover',
+                  'group/row absolute top-0 left-0 flex w-full cursor-default items-center gap-1 pr-2 whitespace-nowrap hover:bg-hover',
                   selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
                   v.index === focusIndex &&
                     '-outline-offset-1 outline-accent group-focus-visible:outline-1',
@@ -272,11 +289,32 @@ export function Tree() {
                   <span className="w-3.5 shrink-0" />
                 )}
                 <RowIcon row={r} />
-                <span className="truncate" title={r.type === 'entry' ? r.dn : undefined}>
+                <span
+                  className={cn('truncate', r.hint && 'shrink-0')}
+                  title={r.type === 'entry' ? r.dn : undefined}
+                >
                   {r.prefix && <span className="font-mono text-xs text-muted">{r.prefix}</span>}
                   {r.label}
                 </span>
+                {r.hint && <span className="ml-1 min-w-0 truncate text-muted">{r.hint}</span>}
                 {r.type === 'entry' && entryChanges(batch, r.dn) && <ChangeDot />}
+                {r.type === 'entry' && r.expandable && (
+                  // Like the chevron, not a button; shown on hover and on the focused row.
+                  <span
+                    aria-hidden
+                    title={`List children of ${r.prefix}${r.label} in the list pane`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      ws.listChildren(r.dn)
+                    }}
+                    className={cn(
+                      'invisible ml-auto shrink-0 rounded p-0.5 text-muted group-hover/row:visible hover:bg-border hover:text-fg',
+                      v.index === focusIndex && 'group-focus-visible:visible',
+                    )}
+                  >
+                    <List className="h-3.5 w-3.5" />
+                  </span>
+                )}
               </div>
             )
           })}

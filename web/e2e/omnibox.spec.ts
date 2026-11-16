@@ -22,7 +22,8 @@ test('text with = runs as an LDAP filter', async ({ page }) => {
   await page.keyboard.type('uid=jdoe')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/filter=%28uid%3Djdoe%29/)
-  await expect(page.getByText('1 entry', { exact: true })).toBeVisible()
+  // The demo's cn=Doe\, John and the e2e uid=jdoe.
+  await expect(page.getByText('2 entries', { exact: true })).toBeVisible()
   await expect(results(page).getByRole('row', { name: /Doe, John/ })).toBeVisible()
 })
 
