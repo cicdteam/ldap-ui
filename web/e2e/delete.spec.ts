@@ -8,7 +8,7 @@ test('delete: a container with children stays; a leaf goes after typing its RDN'
   page,
 }) => {
   await openEntry(page, 'demo', e2eOU('full'))
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await page.getByRole('button', deleteButton).click()
   const dialog = page.getByRole('dialog', { name: 'Delete entry' })
   await expect(dialog).toContainText('Has 1 child. Delete it first.')
@@ -31,7 +31,7 @@ test('delete: a container with children stays; a leaf goes after typing its RDN'
   await expect(typed).toBeFocused()
   // Again from the menu, with the count cached: the field opens with the dialog and keeps focus.
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await page.getByRole('button', deleteButton).click()
   await expect(typed).toBeFocused()
   await typed.fill('uid=deleteme2')

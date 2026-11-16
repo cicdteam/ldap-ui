@@ -228,12 +228,41 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   extensible matches on one, and extensible matches without an attribute
   type (`(:octetStringMatch:=x)`, which test every attribute), are refused
   with 400 `secret_filter`.
-- **Inspector** (right): attributes grouped as MUST, MAY and operational, with
-  decoded AD values (SIDs, GUIDs, dates, `userAccountControl` flags), clickable
-  DNs, photos, a Download button on binary values (on any profile), and a
-  raw-values switch; direct and nested membership with the "via" group; the
+- **Entry card** (right): the header says who the entry is. A person shows
+  their initials, other entries the icon of their kind (group, unit, domain).
+  The title is the entry's name (`displayName`, else `cn`, else the value of
+  its RDN), followed by the RDN when it differs. Under it: the DN as
+  breadcrumbs (each opens that entry) with a copy button, the object classes,
+  status chips, and "Modified <time> by <modifiersName>" when the entry has
+  `modifyTimestamp` (and `modifiersName`). There are two status chips, both
+  from reliable signals: "Read-only connection" for a read-only profile, and
+  "Disabled" for an Active Directory account whose `userAccountControl` has
+  the ACCOUNTDISABLE flag. The actions are Edit, Add to group, Copy DN and
+  More (raw values, Reload entry, and the entry actions below); a read-only
+  profile has Copy DN and More with raw values and Reload entry only. A
+  narrow card keeps the action icons and drops their words.
+
+  The tabs are Attributes, Membership and LDIF. Attributes starts with
+  **Pinned**, the key attributes for the kind of entry: for a person `cn`,
+  `uid` (`sAMAccountName` on Active Directory), `mail`, `title`, `manager`
+  and `telephoneNumber`; for a group or any other entry `cn` and
+  `description`. Pinned attributes the entry has are listed in that order and
+  are not repeated below. Then come Required (MUST), Optional (MAY) and
+  Operational, which starts closed and opens while the attribute filter is
+  set or a value there has a problem to fix. A row with one value is 30 px
+  tall; hovering a value shows its copy button, and DN values open their
+  entry. The attribute filter sits in the tab bar. Membership loads only while
+  its tab is open, with Direct or Nested in the tab bar. The tab, Direct or
+  Nested, whether Operational is open, and the attribute filter stay as you
+  move to another entry (Up and Down in the list, the tree, a link); Edit
+  ends when you leave the entry.
+
+  Values come with decoded AD values (SIDs, GUIDs, dates, `userAccountControl`
+  flags), photos and a Download button on binary values (on any profile);
+  Raw values in More shows them as stored. Membership lists direct and nested
+  groups with the "via" group; LDIF shows the
   entry as LDIF (non-ASCII text such as Cyrillic names is shown decoded, marked
-  `utf-8`, here and in the Review and Actions dialogs; values with edge spaces,
+  `utf-8`, here and in the Review and entry action dialogs; values with edge spaces,
   line breaks, control or invisible characters stay base64; Copy LDIF and
   downloads keep base64, as RFC 2849 requires).
   The Members list appears for groups that use `member` or
@@ -266,7 +295,7 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
 | Esc | Close the list (with focus in the list); the entry in the card and staged changes stay |
 | ⇧↵ / Shift+Enter | List the children of the focused container (in the tree) |
 | ⌘C / Ctrl+C | Copy the DN of the selected row (in the results list, with no text selected) |
-| `E` | Edit mode in the inspector (ignored while focus is in a text field, the tree, the results list or a dialog) |
+| `E` | Edit mode on the entry card (ignored while focus is in a text field, the tree, the results list or a dialog) |
 | ⌘S / Ctrl+S | Review the staged changes |
 | ⌘Z / Ctrl+Z, ⌘⇧Z / Ctrl+Shift+Z | Undo, redo a staged change (outside text fields) |
 | `N`, `C`, `R` or F2, `P`, `Delete` or ⌘⌫ / Ctrl+Backspace | New child, Clone, Rename/Move, Set password, Delete the open entry (ignored while focus is in a text field, the tree, the results list or a dialog) |
@@ -276,9 +305,9 @@ on non-Latin keyboard layouts.
 
 ### Editing
 
-- **Edit** (`E` in the inspector) turns attribute values into fields; a value
+- **Edit** (`E`, or Edit on the card) turns attribute values into fields; a value
   commits on Enter. Changes are staged, not written: added, changed, deleted
-  and stale values are marked in the inspector, the header shows
+  and stale values are marked on the card, the header shows
   "N changes", and staged entries get a dot in the tree and in the results.
   The batch is kept per connection for the browser tab and survives a reload.
 - **Review** (⌘S / Ctrl+S, or the header badge) shows the batch as LDIF to
@@ -291,11 +320,11 @@ on non-Latin keyboard layouts.
 - ⌘Z / Ctrl+Z undoes a staged change and ⌘⇧Z / Ctrl+Shift+Z redoes it
   (outside text fields). Disconnecting or closing the tab with unapplied
   changes asks first.
-- **Actions** (in the inspector, or the command palette): **New child** (`N`),
+- **Entry actions** (in the card's More, or the command palette): **New child** (`N`),
   **Clone** (`C`), **Rename/Move** (`R` or F2) and **Delete** (`Delete` or
   ⌘⌫ / Ctrl+Backspace). Each opens a dialog with the DN and the LDIF it
   writes, and writes at once; it is not staged. A read-only profile has no
-  Actions, and the server refuses these writes too.
+  entry actions, and the server refuses these writes too.
 - **New child** picks a structural class (common ones first), auxiliary
   classes, the RDN attribute and value, and asks for the MUST attributes.
   **Clone** starts from the entry, staged changes included, binary values
@@ -311,7 +340,7 @@ on non-Latin keyboard layouts.
   **Delete** removes an entry without children after you type its RDN. Both
   wait until staged changes of the entry and the entries below it are applied
   or discarded.
-- **Set password…** (`P`, in Actions and the command palette) is offered for
+- **Set password…** (`P`, in More and the command palette) is offered for
   entries whose classes allow `userPassword`, which needs the schema (on
   Active Directory, for `user` entries only). It asks for the new password
   twice and sets it at once: it is never staged, kept in the browser or
@@ -320,7 +349,8 @@ on non-Latin keyboard layouts.
   ldaplens stores it as SSHA. Active Directory takes it as `unicodePwd`, only
   over ldaps:// or StartTLS.
 - **Membership** in Edit, on the Membership tab: "Add to group…" in Member of
-  (also in the command palette) and "Add member…" in Members suggest groups
+  (also the card's Add to group and the command palette, which turn on Edit
+  and open it) and "Add member…" in Members suggest groups
   or entries by name; direct memberships have a remove button, nested ones
   say which group they come through. These are staged changes of the group's
   `member`, `uniqueMember` or `memberUid` (posixGroup, by the entry's `uid`),

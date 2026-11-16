@@ -25,6 +25,8 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   // 3. AD values come decoded: the SID, the account flags, a local time for whenCreated.
   await expect(attrRow(page, 'objectSid')).toContainText(/S-1-5-21-/)
   await expect(attrRow(page, 'userAccountControl')).toContainText('ACCOUNTDISABLE')
+  // The card says so up top, from the decoded flags.
+  await expect(page.getByText('Disabled', { exact: true })).toBeVisible()
   // The stored generalized time is the value's title; the UI shows it in local time.
   const created = attrRow(page, 'whenCreated').getByTitle(/^\d{14}(\.\d+)?Z$/)
   const stored = (await created.getAttribute('title'))!
@@ -69,7 +71,7 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   await expect(attrRow(page, 'description')).toContainText('set by e2e')
 
   // 6. Set password: AD's policy refuses 'x' and the dialog says why; a strong one is set.
-  await page.getByRole('button', exact('Actions')).click()
+  await page.getByRole('button', exact('More')).click()
   await page.getByRole('button', exact('Set password…')).click()
   const dialog = page.getByRole('dialog', { name: 'Set password' })
   const setTwice = async (pw: string) => {

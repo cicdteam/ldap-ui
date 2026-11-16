@@ -25,7 +25,7 @@ async function expectClosed(page: Page) {
   await expect(page).not.toHaveURL(/filter=/)
   await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(DN)}`))
   // Focus moves to the card's heading, not to the page.
-  await expect(page.getByRole('heading', exact('uid=layout'))).toBeFocused()
+  await expect(page.getByRole('heading', exact('E2E layout'))).toBeFocused()
   await expect(editButton(page)).toHaveAttribute('aria-pressed', 'true')
   await expect(attrRow(page, 'description').getByLabel('changed')).toHaveCount(1)
 }
@@ -68,7 +68,9 @@ test('Up and Down in the list move the card', async ({ page }) => {
   const rows = results(page).getByRole('row')
   await expect(rows).toHaveCount(4)
   const dns = await Promise.all([1, 2].map(async (i) => (await rows.nth(i).getAttribute('title'))!))
-  const heading = (dn: string) => page.getByRole('heading', exact(dn.split(',')[0]))
+  // The card is headed by the entry's name: the fixture's cn, E2E <uid>.
+  const heading = (dn: string) =>
+    page.getByRole('heading', exact(dn.split(',')[0].replace('uid=', 'E2E ')))
   await rows.nth(1).click()
   await expect(heading(dns[0])).toBeVisible()
   await page.keyboard.press('ArrowDown')

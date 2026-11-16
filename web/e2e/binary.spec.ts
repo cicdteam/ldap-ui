@@ -25,12 +25,16 @@ test('a read-only profile downloads a photo byte for byte and has no upload', as
   expect(file.bytes.equals(readFileSync(PHOTO))).toBe(true)
   await expect(page.getByRole('button', exact('Edit'))).toHaveCount(0)
   await expect(page.getByText('Upload file…')).toHaveCount(0)
-  // Raw values show a binary value's size, not its base64.
-  await page.getByRole('button', exact('Raw values')).click()
+  // Raw values (in More) show a binary value's size, not its base64.
+  const raw = async () => {
+    await page.getByRole('button', exact('More')).click()
+    await page.getByRole('button', exact('Raw values')).click()
+  }
+  await raw()
   const size = readFileSync(PHOTO).length
   await expect(attrRow(page, 'jpegPhoto')).toContainText(`base64, ${size} bytes`)
   await expect(attrRow(page, 'jpegPhoto')).not.toContainText(PHOTO_B64.slice(0, 40))
-  await page.getByRole('button', exact('Raw values')).click()
+  await raw()
 })
 
 /** Mod+S with nothing focused: the review dialog. */
@@ -187,7 +191,7 @@ test('a certificate goes in as userCertificate;binary', async ({ page }) => {
 
 test('Clone carries the photo into the new entry', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('clonephoto'))
-  await page.getByRole('button', exact('Actions')).click()
+  await page.getByRole('button', exact('More')).click()
   await page.getByRole('button', exact('Clone')).click()
   const dialog = page.getByRole('dialog', { name: 'Clone entry' })
   await expect(dialog.locator('[data-attr="jpegPhoto"] img')).toBeVisible()

@@ -21,6 +21,9 @@ const OPTIONAL_UID = /#'[01]*'B$/
 
 const RENAMING = 'Change the RDN with Rename/Move'
 
+// A value's own icon buttons: the height of its line.
+const SMALL = 'h-[18px]! w-[18px]!'
+
 export const MARKS: Record<Mark, { row: string; glyph: string; tone: string }> = {
   added: { row: 'border-l-2 border-ok', glyph: '+', tone: 'text-ok' },
   changed: { row: 'border-l-2 border-warn', glyph: '~', tone: 'text-warn' },
@@ -126,15 +129,17 @@ export function ValueView({
       title={value.mark === 'stale' ? STALE : title}
     >
       <MarkGlyph mark={value.mark} />
-      <div className="min-w-0 flex-1 py-0.5">{body}</div>
+      <div className="min-w-0 flex-1 leading-[18px]">{body}</div>
       {/* opacity, not visibility: a hidden button would drop out of the tab order */}
-      <span className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
-        <CopyButton text={copyText} label={`Copy ${attr} value`} />
+      <span className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+        {/* 18 px, the value's line: a row stays 30 px tall. */}
+        <CopyButton text={copyText} label={`Copy ${attr} value`} className={SMALL} />
         {value.base64 && (
           // Built from the value already loaded: no request, any profile.
           <Button
             size="icon"
             variant="ghost"
+            className={SMALL}
             aria-label={`Download ${attr} value`}
             title="Download this value as a file"
             onClick={() =>

@@ -126,7 +126,8 @@ export function fixtureLDIF(): string {
       'mail: jane.doe@example.org',
       '',
     ].join('\n'),
-    // The tree shows its displayName beside the RDN: uid=jdoe John Doe.
+    // The tree shows its displayName beside the RDN: uid=jdoe John Doe. The card pins a
+    // person's cn, uid, mail, title, manager and telephoneNumber.
     [
       `dn: uid=jdoe,${E2E_OU}`,
       'objectClass: inetOrgPerson',
@@ -134,6 +135,10 @@ export function fixtureLDIF(): string {
       'cn: J. Doe',
       'displayName: John Doe',
       'sn: Doe',
+      'mail: jdoe@example.org',
+      'title: Site Reliability Engineer',
+      `manager: uid=jane.doe,${E2E_OU}`,
+      'telephoneNumber: +49 30 5550 0142',
       '',
     ].join('\n'),
   ].join('\n')

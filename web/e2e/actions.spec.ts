@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { E2E_OU, e2eDN, e2eGroup } from './fixture'
 import { attrRow, blur, openEntry, postJSON } from './helpers'
 
-const actions = { name: 'Actions', exact: true }
+const actions = { name: 'More', exact: true }
 const HINT = 'Apply or discard 1 staged change first'
 
 test('rename and delete wait while the entry or one below it has staged changes', async ({
@@ -51,11 +51,20 @@ test('rename and delete wait while the entry or one below it has staged changes'
   await expect(menu).not.toContainText(HINT)
 })
 
-test('read-only profile: no Actions, no entry commands, and every write is refused', async ({
+test('read-only profile: no entry actions, no entry commands, and every write is refused', async ({
   page,
 }) => {
   await openEntry(page, 'demo-ro', e2eDN('read'))
-  await expect(page.getByRole('button', actions)).toHaveCount(0)
+  await expect(page.getByText('Read-only connection', { exact: true })).toBeVisible()
+  for (const name of ['Edit', 'Add to group'])
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
+  // More keeps what reads: raw values and reload.
+  await page.getByRole('button', actions).click()
+  await expect(page.getByRole('dialog', { name: 'Entry actions' }).getByRole('button')).toHaveText([
+    /^Raw values/,
+    'Reload entry',
+  ])
+  await page.keyboard.press('Escape')
   await page.keyboard.press('ControlOrMeta+K')
   // Neither entry commands nor batch ones.
   for (const name of ['Clone entry', 'Set password…', 'Add to group…', 'Review changes']) {

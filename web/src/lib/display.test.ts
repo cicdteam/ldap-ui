@@ -3,9 +3,11 @@ import {
   byteLength,
   formatDisplay,
   imageType,
+  pinnedAttributes,
   profileBadges,
   safeColor,
   shownValues,
+  statusChips,
 } from './display'
 
 describe('safeColor', () => {
@@ -91,5 +93,46 @@ describe('shownValues', () => {
       shown: [],
       total: 0,
     })
+  })
+})
+
+describe('pinnedAttributes', () => {
+  it.each([
+    ['user', false, ['cn', 'uid', 'mail', 'title', 'manager', 'telephoneNumber']],
+    ['user', true, ['cn', 'sAMAccountName', 'mail', 'title', 'manager', 'telephoneNumber']],
+    ['group', false, ['cn', 'description']],
+    ['group', true, ['cn', 'description']],
+    ['ou', false, ['cn', 'description']],
+    ['domain', false, ['cn', 'description']],
+    ['other', true, ['cn', 'description']],
+  ] as const)('%s, ad %s', (kind, ad, want) => {
+    expect(pinnedAttributes(kind, ad)).toEqual(want)
+  })
+})
+
+describe('statusChips', () => {
+  // userAccountControl as the server sends it on Active Directory: decoded flag names in display.
+  const uac = (text: string, display?: string) => ({
+    dn: 'CN=alice,DC=corp',
+    attributes: [{ name: 'userAccountControl', values: [{ text, display }] }],
+  })
+  const rw = { readOnly: false }
+
+  it('says Disabled when the account flags hold ACCOUNTDISABLE', () => {
+    expect(statusChips(uac('514', 'ACCOUNTDISABLE NORMAL_ACCOUNT'), rw)).toEqual([
+      { label: 'Disabled', tone: 'danger' },
+    ])
+    expect(statusChips(uac('512', 'NORMAL_ACCOUNT'), rw)).toEqual([])
+  })
+
+  it('reads only the decoded flags, which the server sends on Active Directory only', () => {
+    expect(statusChips(uac('514'), rw)).toEqual([])
+    expect(statusChips({ dn: 'uid=a,dc=x' }, rw)).toEqual([])
+  })
+
+  it('says Read-only connection on a read-only profile', () => {
+    expect(statusChips({ dn: 'uid=a,dc=x' }, { readOnly: true })).toEqual([
+      { label: 'Read-only connection', tone: 'neutral' },
+    ])
   })
 })

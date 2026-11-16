@@ -325,50 +325,63 @@ function RefList({
   )
 }
 
+/** Direct or nested memberships: the card's tab bar shows it, and the choice stays across entries. */
+export function Depth({
+  nested,
+  setNested,
+}: {
+  nested: boolean
+  setNested: (nested: boolean) => void
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Membership depth"
+      className="flex shrink-0 rounded-md border border-border-strong p-0.5 text-xs"
+    >
+      {[false, true].map((n) => (
+        <button
+          key={String(n)}
+          type="button"
+          role="radio"
+          aria-checked={nested === n}
+          title={
+            n
+              ? 'Also through other groups, with the group each one comes through'
+              : 'Direct memberships only'
+          }
+          onClick={() => setNested(n)}
+          className={cn(
+            'rounded px-2 py-0.5',
+            nested === n ? 'bg-selected font-semibold text-fg' : 'text-muted hover:text-fg',
+          )}
+        >
+          {n ? 'Nested' : 'Direct'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /**
- * Direct and nested memberships. In Edit they change through the 3a batch: staged adds and
- * deletes of the group's member, uniqueMember or memberUid. addingGroup is the Member of add
+ * Direct or nested (see Depth) memberships. In Edit they change through the 3a batch: staged adds
+ * and deletes of the group's member, uniqueMember or memberUid. addingGroup is the Member of add
  * field, which the inspector opens for the palette.
  */
 export function Membership({
   entry,
   editing,
+  nested,
   addingGroup,
 }: {
   entry: Entry
   editing: boolean
+  nested: boolean
   addingGroup: Adding
 }) {
-  const [nested, setNested] = useState(false)
   const addingMember = useState(0)
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 p-2">
-        <div
-          role="radiogroup"
-          aria-label="Membership depth"
-          className="flex rounded-md border border-border p-0.5 text-xs"
-        >
-          {[false, true].map((n) => (
-            <button
-              key={String(n)}
-              type="button"
-              role="radio"
-              aria-checked={nested === n}
-              onClick={() => setNested(n)}
-              className={cn(
-                'rounded px-2 py-0.5',
-                nested === n ? 'bg-selected text-fg' : 'text-muted hover:text-fg',
-              )}
-            >
-              {n ? 'Nested' : 'Direct'}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-muted">
-          {nested ? 'Includes memberships through other groups.' : 'Direct memberships only.'}
-        </span>
-      </div>
       <RefList
         kind="memberof"
         entry={entry}

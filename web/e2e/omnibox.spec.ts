@@ -34,7 +34,7 @@ test('a pasted DN under the base opens that entry, with no list', async ({ page 
   await page.keyboard.insertText(dn)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(dn)}$`))
-  await expect(page.getByRole('heading', exact('uid=read'))).toBeVisible()
+  await expect(page.getByRole('heading', exact('E2E read'))).toBeVisible()
   await expect(results(page)).toHaveCount(0)
   // The same text under another base is a filter.
   await queryBar(page).click()

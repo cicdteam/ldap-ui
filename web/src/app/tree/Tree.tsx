@@ -37,7 +37,8 @@ import { useBatch } from '../batch'
 import { useWorkspace } from '../context'
 import { childrenKey } from '../queries'
 
-const icons: Record<EntryKind, typeof User> = {
+/** The icon of each kind of entry, in the tree and on the card. */
+export const kindIcons: Record<EntryKind, typeof User> = {
   user: User,
   group: Users,
   ou: Folder,
@@ -49,7 +50,7 @@ function RowIcon({ row }: { row: TreeRow }) {
   if (row.type === 'more') return <List className="h-3.5 w-3.5 text-accent-text" />
   if (row.type === 'error') return <AlertTriangle className="h-3.5 w-3.5 text-danger" />
   if (row.type === 'loading') return null
-  const Icon = icons[row.kind]
+  const Icon = kindIcons[row.kind]
   return <Icon className="h-3.5 w-3.5 shrink-0 text-muted" />
 }
 

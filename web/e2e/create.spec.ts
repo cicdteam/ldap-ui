@@ -5,7 +5,7 @@ import { attrRow, blur, openEntry } from './helpers'
 const createButton = { name: 'Create', exact: true }
 
 async function openNewChild(page: Page) {
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await page.getByRole('button', { name: 'New child', exact: true }).click()
   return page.getByRole('dialog', { name: 'New child entry' })
 }
@@ -56,7 +56,7 @@ test('create an OU, a person in it, and refuse the same person twice', async ({ 
 
 test('clone leaves the RDN, uid and mail out, and holds while it writes', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('clonesrc'))
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await page.getByRole('button', { name: 'Clone', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Clone entry' })
   const rdn = dialog.getByLabel('RDN value')

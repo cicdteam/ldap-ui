@@ -1,4 +1,4 @@
-import { Lock, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Lock, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { batches } from '../../lib/batchStore'
 import { isBinaryAttr } from '../../lib/binary'
@@ -11,7 +11,7 @@ import {
   type Edit,
   type MarkedValue,
 } from '../../lib/changes'
-import { shownValues, valueMatches } from '../../lib/display'
+import { pinnedAttributes, shownValues, valueMatches } from '../../lib/display'
 import { auxiliaryCandidates, classLock, editorKind, lockReason } from '../../lib/edit'
 import { bannerShown, errorText, fieldMessage } from '../../lib/review'
 import {
@@ -21,10 +21,11 @@ import {
   groupAttributes,
   type SchemaIndex,
 } from '../../lib/schema'
+import { entryKind } from '../../lib/tree'
 import type { ApiErrorBody, Attribute, Entry } from '../../lib/types'
 import { Banner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
-import { Input, inputLook } from '../../ui/Input'
+import { inputLook } from '../../ui/Input'
 import { useBatch, useBatchError } from '../batch'
 import { useWorkspace } from '../context'
 import { AddAttribute } from './AddAttribute'
@@ -89,17 +90,18 @@ function AttributeRow({
       role="group"
       aria-label={attr.name}
       tabIndex={-1}
-      className="grid grid-cols-[minmax(7rem,11rem)_1fr] gap-2 border-b border-border/50 px-2 py-[var(--pad)]"
+      // 30 px with one value (comfortable): --pad above, 1px less below, an 18px line, the border.
+      className="grid grid-cols-[clamp(9rem,26%,12.5rem)_minmax(0,1fr)] gap-x-3 border-b border-border/50 pt-[var(--pad)] pr-4 pb-[calc(var(--pad)-1px)] pl-[30px] hover:bg-hover"
     >
       <div
-        className="truncate font-mono text-xs font-semibold"
+        className="truncate font-mono text-xs leading-[18px] font-semibold"
         title={attributeHelp(attr.name, schema)}
       >
         {attr.name}
       </div>
       <ul className="min-w-0" title={lock || undefined}>
         {attr.masked ? (
-          <li className="flex items-center gap-1 py-0.5 text-xs text-muted">
+          <li className="flex min-h-[18px] items-center gap-1 text-xs text-muted">
             <Lock className="h-3 w-3" /> hidden ({attr.masked}{' '}
             {attr.masked === 1 ? 'value' : 'values'})
           </li>
@@ -214,45 +216,79 @@ function AttributeRow({
   )
 }
 
+/**
+ * A titled group of rows. Without setOpen it cannot close: it is open because the filter or a
+ * problem shows rows in it. Closed rows stay in the page, hidden.
+ */
 function Section({
   title,
+  help,
   attrs,
   open,
+  setOpen,
   ...row
-}: RowProps & { title: string; attrs: Attribute[]; open: boolean }) {
+}: RowProps & {
+  title: string
+  help: string
+  attrs: Attribute[]
+  open: boolean
+  setOpen?: (open: boolean) => void
+}) {
   if (attrs.length === 0) return null
+  const Chevron = open ? ChevronDown : ChevronRight
   return (
-    <details open={open} className="border-b border-border">
-      <summary className="cursor-pointer bg-panel px-2 py-1 text-[11px] font-semibold tracking-[.04em] text-muted uppercase">
-        {title} <span className="font-normal">({attrs.length})</span>
-      </summary>
-      {attrs.map((a) => (
-        <AttributeRow key={a.name} attr={a} {...row} />
-      ))}
-    </details>
+    <section aria-label={title}>
+      <button
+        type="button"
+        aria-expanded={open}
+        title={setOpen ? help : `${help}. Open while the filter or a problem shows rows here`}
+        disabled={!setOpen}
+        onClick={() => setOpen?.(!open)}
+        className="flex h-[26px] w-full items-center gap-1.5 border-b border-border bg-panel pr-4 pl-3 text-[11px] font-semibold tracking-[.04em] text-muted uppercase hover:text-fg disabled:hover:text-muted"
+      >
+        <Chevron aria-hidden className="h-3 w-3" />
+        {title} <span className="font-normal tracking-normal">({attrs.length})</span>
+      </button>
+      <div hidden={!open}>
+        {attrs.map((a) => (
+          <AttributeRow key={a.name} attr={a} {...row} />
+        ))}
+      </div>
+    </section>
   )
 }
 
-/** The entry with its staged changes; editing turns values into editors. */
+/**
+ * The entry with its staged changes; editing turns values into editors. The card keeps filter and
+ * operational (Operational open) from entry to entry; the other sections start open on each.
+ */
 export function Attributes({
   entry,
   editing,
   reload,
+  filter,
+  operational,
+  setOperational,
 }: {
   entry: Entry
   editing: boolean
   /** Refetches the entry. */
   reload: () => void
+  /** The attribute filter's text. */
+  filter: string
+  operational: boolean
+  setOperational: (open: boolean) => void
 }) {
   const ws = useWorkspace()
   const batch = useBatch(ws.conn)
   const error = useBatchError(ws.conn, entry.dn)
+  // The sections the person closed on this entry, by title.
+  const [closed, setClosed] = useState<Record<string, boolean>>({})
   // dropStale keeps the batch identity when no staged edit is stale.
   const stale = dropStale(batch, entry) !== batch
   const ec = entryChanges(batch, entry.dn)
   const viewed = view(entry, ec)
-  const [q, setQ] = useState('')
-  const needle = q.trim().toLowerCase()
+  const needle = filter.trim().toLowerCase()
   const matches = (a: Attribute) =>
     !needle ||
     a.name.toLowerCase().includes(needle) ||
@@ -263,16 +299,31 @@ export function Attributes({
     ...(viewed.attributes ?? []),
     ...missingMust(entry, ec, ws.schema).map((name) => ({ name, values: [] })),
   ]
-  const g = groupAttributes(rows, ws.schema)
+  // The key attributes for the kind of entry lead, in their order, and are not repeated below.
+  const classes =
+    rows.find((a) => baseName(a.name) === 'objectclass')?.values?.map((v) => v.text) ?? []
+  const pins = pinnedAttributes(entryKind(classes), ws.info.activeDirectory).map(attrKey)
+  const pinned = pins.flatMap((k) => rows.filter((a) => attrKey(a.name) === k)).filter(matches)
+  const g = groupAttributes(
+    rows.filter((a) => !pins.includes(attrKey(a.name))),
+    ws.schema,
+  )
   const problems = validate(entry, ec, ws.schema)
   const must = g.must.filter(matches)
   const may = g.may.filter(matches)
-  const operational = g.operational.filter(matches)
-  // OPERATIONAL is closed unless a filter is typed or a row there has a problem to fix.
-  const opOpen = !!needle || operational.some((a) => problems.has(attrKey(a.name)))
-  const shown = [...must, ...may, ...(opOpen ? operational : [])].map((a) => a.name)
+  const ops = g.operational.filter(matches)
+  // Operational stays as the person left it, but opens while a filter is typed or a row there has
+  // a problem to fix.
+  const forced = !!needle || ops.some((a) => problems.has(attrKey(a.name)))
+  const opOpen = operational || forced
+  const shown = [...pinned, ...must, ...may, ...(opOpen ? ops : [])].map((a) => a.name)
   const banner = !!error && bannerShown(error, shown, problems)
   const row = { dn: entry.dn, editing, needle, schema: ws.schema, problems, error, banner }
+  const section = (title: string) => ({
+    title,
+    open: !closed[title],
+    setOpen: (open: boolean) => setClosed((c) => ({ ...c, [title]: !open })),
+  })
   return (
     <div>
       {/* Stays until the next apply: Reload entry turns the conflict into stale marks to drop. */}
@@ -300,27 +351,40 @@ export function Attributes({
           {errorText(error)}
         </Banner>
       )}
-      <div className="p-2">
-        <Input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Filter attributes and values"
-          aria-label="Filter attributes and values"
-          className="w-full"
-        />
-      </div>
       {!ws.schema.available && (
-        <p className="px-2 pb-2 text-xs text-warn">No schema: attributes are not grouped.</p>
+        <p className="px-2 py-1 text-xs text-warn">No schema: attributes are not grouped.</p>
       )}
-      <Section title="REQUIRED (MUST)" attrs={must} open {...row} />
       <Section
-        title={ws.schema.available ? 'OPTIONAL (MAY)' : 'ATTRIBUTES'}
-        attrs={may}
-        open
+        {...section('Pinned')}
+        help="Key attributes of this kind of entry. They are not repeated in the sections below"
+        attrs={pinned}
         {...row}
       />
-      <Section title="OPERATIONAL" attrs={operational} open={opOpen} {...row} />
-      {must.length + may.length + operational.length === 0 && (
+      <Section
+        {...section('Required')}
+        help="MUST attributes of the object classes"
+        attrs={must}
+        {...row}
+      />
+      <Section
+        {...section(ws.schema.available ? 'Optional' : 'Attributes')}
+        help={
+          ws.schema.available
+            ? 'MAY attributes of the object classes'
+            : 'Every attribute, ungrouped'
+        }
+        attrs={may}
+        {...row}
+      />
+      <Section
+        title="Operational"
+        help="Server-maintained attributes, and those the object classes do not name"
+        attrs={ops}
+        open={opOpen}
+        setOpen={forced ? undefined : setOperational}
+        {...row}
+      />
+      {pinned.length + must.length + may.length + ops.length === 0 && (
         <p className="p-2 text-muted">No attributes match.</p>
       )}
       {/* The missing MUST rows are there to fill, so the picker does not offer them again. */}
