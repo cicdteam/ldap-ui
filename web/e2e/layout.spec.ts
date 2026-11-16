@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
-import { e2eDN } from './fixture'
-import { attrRow, connect, exact, openEntry, queryBar } from './helpers'
+import { E2E_OU, e2eDN } from './fixture'
+import { attrRow, blur, connect, exact, openEntry, queryBar } from './helpers'
 
 const results = (page: Page) => page.getByRole('grid', exact('Search results'))
 // react-resizable-panels marks every pane with data-panel; the card is the last one.
@@ -24,7 +24,8 @@ async function expectClosed(page: Page) {
   await expect(results(page)).toHaveCount(0)
   await expect(page).not.toHaveURL(/filter=/)
   await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(DN)}`))
-  await expect(page.getByRole('heading', exact('uid=layout'))).toBeVisible()
+  // Focus moves to the card's heading, not to the page.
+  await expect(page.getByRole('heading', exact('uid=layout'))).toBeFocused()
   await expect(editButton(page)).toHaveAttribute('aria-pressed', 'true')
   await expect(attrRow(page, 'description').getByLabel('changed')).toHaveCount(1)
 }
@@ -147,4 +148,29 @@ test('Columns and Export open from the list; Esc in them leaves the list open', 
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: /^CSV\b/ }).click()
   expect((await download).suggestedFilename()).toBe('demo-search.csv')
+})
+
+test('with no entry open, closing the list focuses the tree', async ({ page }) => {
+  await connect(page, 'demo')
+  await search(page, '(uid=layout)')
+  await results(page).focus()
+  await page.keyboard.press('Escape')
+  await expect(panes(page)).toHaveCount(2)
+  await expect(page.getByRole('tree')).toBeFocused()
+})
+
+test('List children in the palette lists the entry one level down', async ({ page }) => {
+  await openEntry(page, 'demo', E2E_OU)
+  await blur(page)
+  await page.keyboard.press('ControlOrMeta+K')
+  await page.locator('[cmdk-input]').fill('List children of the current entry')
+  await page.keyboard.press('Enter')
+  await expect(panes(page)).toHaveCount(3)
+  await expect(results(page).getByRole('row', { name: /E2E layout/ })).toBeVisible()
+  const params = new URL(page.url()).searchParams
+  expect([params.get('scope'), params.get('base'), params.get('filter')]).toEqual([
+    'one',
+    E2E_OU,
+    '(objectClass=*)',
+  ])
 })

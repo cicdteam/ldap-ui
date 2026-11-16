@@ -213,7 +213,15 @@ export function Workspace() {
     search,
     select,
     runSearch,
-    closeList: () => runSearch(null),
+    closeList: () => {
+      // Before the list unmounts, so focus does not fall to the page: the card's heading, or
+      // the tree with no entry open.
+      const to =
+        document.getElementById('card-heading') ??
+        document.querySelector<HTMLElement>('[role="tree"]')
+      to?.focus()
+      runSearch(null)
+    },
     listChildren: (base) =>
       runSearch({
         base,

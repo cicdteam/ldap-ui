@@ -158,7 +158,8 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   or List children, opens a list pane between them, and the card stays
   beside it. Up and Down in the list move the card through the rows. The
   list's × button, or Esc while focus is in the list, closes it: the entry in
-  the card, its Edit mode and the staged changes stay. Pane sizes are
+  the card, its Edit mode and the staged changes stay, and focus moves to the
+  card's heading (to the tree with no entry open). Pane sizes are
   remembered separately with the list and without it. With no entry
   selected, the card says so.
 - **List children** (command palette, "List children of the current

@@ -104,7 +104,8 @@ function EntryView({
     <div className="flex h-full flex-col">
       <div className="shrink-0 space-y-1 border-b border-border p-2">
         <div className="flex items-center gap-1">
-          <h2 className="min-w-0 flex-1 truncate font-semibold">
+          {/* Focusable, so closing the list can move focus here (see closeList). */}
+          <h2 id="card-heading" tabIndex={-1} className="min-w-0 flex-1 truncate font-semibold">
             {first ? rdnDisplay(first) : dn}
           </h2>
           {q.isFetching && <Spinner />}
