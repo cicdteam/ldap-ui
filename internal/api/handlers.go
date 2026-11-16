@@ -161,10 +161,14 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // infoView is a connection's Info plus the profile settings the UI shows as
-// badges. They come with the info so the badges never wait on, or vanish
-// with, a separate profiles request.
+// badges and in its status bar. They come with the info so the badges never
+// wait on, or vanish with, a separate profiles request, and so that server
+// mode, whose profile list leaves out the URL, shows it only after a
+// successful bind.
 type infoView struct {
 	ldapx.Info
+	URL                string `json:"url"`
+	StartTLS           bool   `json:"startTLS"`
 	ReadOnly           bool   `json:"readOnly"`
 	InsecureSkipVerify bool   `json:"insecureSkipVerify"`
 	Color              string `json:"color,omitempty"`
@@ -173,6 +177,8 @@ type infoView struct {
 func newInfoView(info ldapx.Info, p profile.Profile) infoView {
 	return infoView{
 		Info:               info,
+		URL:                p.URL,
+		StartTLS:           p.StartTLS,
 		ReadOnly:           p.ReadOnly,
 		InsecureSkipVerify: p.InsecureSkipVerify,
 		Color:              p.Color,
@@ -288,17 +294,19 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newInfoView(dir.Info(), p))
 }
 
-// connectFailed logs and answers a failed connect to p. In server mode a
-// refused bind (result 49) says only that: the diagnostic, and the reason
-// decoded from it, would tell a stranger that an account exists, is locked
-// or is disabled. The log keeps the full error.
+// connectFailed logs and answers a failed connect to p, in server mode
+// with signInError. The log keeps the full error.
 func (s *server) connectFailed(w http.ResponseWriter, r *http.Request, p profile.Profile, err error) {
 	s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
-	if s.serverMode && ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-		writeError(w, http.StatusUnauthorized, apiError{Code: "invalid_credentials", Message: "invalid username or password"})
+	if !s.serverMode {
+		s.fail(w, err)
 		return
 	}
-	s.fail(w, err)
+	status, body := signInError(errorResponse(err))
+	if status == http.StatusInternalServerError {
+		s.log.Error("request failed", "error", err)
+	}
+	writeError(w, status, body)
 }
 
 // userLogin checks a connect to the bindDNTemplate profile p, in this

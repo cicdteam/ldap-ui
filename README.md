@@ -56,18 +56,25 @@ mode:
 - the profile list (`GET /api/profiles`) gives each profile's `name`,
   `color`, `readOnly`, `connected`, `userLogin` and `needsPassword` only,
   nothing about where or how it binds: no URL, base DN, bind DN, CA or TLS
-  settings;
+  settings. The server address and StartTLS show in the status bar once a
+  connect has succeeded;
 - the UI has no "New connection", no profile editing and no "Trust this CA
   and connect"; a save answers 403 `saving_disabled` with `this server keeps
   no saved connections`;
 - the connect dialog of a profile with a bind DN and no configured password
   asks for a "Password", without naming the DN;
-- a refused sign-in (LDAP result 49) answers 401 `invalid_credentials` with
-  `invalid username or password`, and no `diagnostic`, `reason` or
-  `matchedDN`: the directory's message, and the reason decoded from it, such
-  as Active Directory's `account locked out`, would tell anyone who tries a
-  name that the account exists. The server log keeps the full error in
-  `connect failed`.
+- a failed connect tells nothing about the directory. Every LDAP result,
+  not only 49 (invalid credentials) but also, for example, 389-DS's 19 and
+  53 for a locked or inactivated account, answers 401 `invalid_credentials`
+  with `invalid username or password`, and no `diagnostic`, `reason`,
+  `matchedDN` or `ldapResultCode`: the directory's message, and the reason
+  decoded from it, such as Active Directory's `account locked out`, would
+  tell anyone who tries a name that the account exists. A server that
+  cannot be reached answers 502 `network` with `cannot reach the directory
+  server`, and an untrusted certificate 502 `tls_untrusted` with `the
+  directory server's certificate is not trusted`, without host names, the
+  error text or the certificate chain. The server log keeps the full error
+  in `connect failed`.
 
 Local mode shows all of it.
 

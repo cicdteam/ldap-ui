@@ -4,7 +4,7 @@ import { expect, test, type Page } from '@playwright/test'
 // tell the modes apart and the profile list, and answer the connect with an
 // untrusted certificate, so they reach no directory.
 
-/** A tls_untrusted connect: one self-signed certificate. */
+/** A tls_untrusted connect in local mode: one self-signed certificate. */
 const untrusted = {
   code: 'tls_untrusted',
   message: 'the server certificate is not trusted',
@@ -19,10 +19,18 @@ const untrusted = {
   ],
 }
 
+/** The same in server mode, which shows nothing about the directory before sign-in. */
+const untrustedServer = {
+  code: 'tls_untrusted',
+  message: "the directory server's certificate is not trusted",
+}
+
 async function stub(page: Page, mode: 'local' | 'server', profiles: object[]) {
   await page.route('**/api/server', (r) => r.fulfill({ json: { mode } }))
   await page.route('**/api/profiles', (r) => r.fulfill({ json: profiles }))
-  await page.route('**/api/connect', (r) => r.fulfill({ status: 502, json: untrusted }))
+  await page.route('**/api/connect', (r) =>
+    r.fulfill({ status: 502, json: mode === 'server' ? untrustedServer : untrusted }),
+  )
   const loaded = page.waitForResponse('**/api/server')
   await page.goto('./')
   await loaded
@@ -42,11 +50,13 @@ test('server mode shows no saving and no trust', async ({ page }) => {
   await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(0)
   await expect(page.getByText('yaml', { exact: true })).toHaveCount(0)
 
-  // A bind DN the UI is not told: the field is just "Password".
+  // A bind DN the UI is not told: the field is just "Password", and password
+  // managers key it by the profile name.
   await row(page, 'fixed').click()
   let dialog = page.getByRole('dialog')
   await expect(dialog.getByLabel('Password', { exact: true })).toBeVisible()
   await expect(dialog.getByLabel('Username')).toHaveCount(0)
+  await expect(dialog.locator('input[autocomplete=username]')).toHaveValue('fixed')
   await dialog.getByRole('button', { name: 'Cancel' }).click()
 
   await row(page, 'team').click()
@@ -55,7 +65,8 @@ test('server mode shows no saving and no trust', async ({ page }) => {
   const password = dialog.getByLabel('Password', { exact: true })
   await password.fill('secret001')
   await password.press('Enter')
-  await expect(dialog.getByText('Server certificate', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('alert')).toContainText(untrustedServer.message)
+  await expect(dialog.getByText('Server certificate', { exact: true })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: 'Trust this CA and connect' })).toHaveCount(0)
 })
 

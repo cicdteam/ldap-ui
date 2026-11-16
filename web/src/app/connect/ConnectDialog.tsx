@@ -94,11 +94,12 @@ export function ConnectDialog({
               </label>
             ) : (
               /* Password managers key saved passwords by this username, so
-                 each bind DN gets its own instead of one for every profile. */
+                 each bind DN, or each profile where the bind DN is not shown
+                 (server mode), gets its own instead of one for every profile. */
               <input
                 type="text"
                 autoComplete="username"
-                value={profile.bindDN ?? ''}
+                value={profile.bindDN || profile.name}
                 readOnly
                 tabIndex={-1}
                 aria-hidden

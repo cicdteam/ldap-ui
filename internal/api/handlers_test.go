@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -164,7 +163,7 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 	t.Setenv("LDAPLENS_TEST_PW", "from-env")
 	cat, err := profile.NewCatalog([]profile.Profile{
 		{Name: "dev", URL: "ldap://dev:389", BindDN: "cn=admin,dc=example,dc=org", PasswordEnv: "LDAPLENS_TEST_PW"}, //nolint:gosec // env var name, not a credential
-		{Name: "manual", URL: "ldap://manual:389", BindDN: "cn=admin,dc=example,dc=org", ReadOnly: true, InsecureSkipVerify: true, Color: "red"},
+		{Name: "manual", URL: "ldap://manual:389", StartTLS: true, BindDN: "cn=admin,dc=example,dc=org", ReadOnly: true, InsecureSkipVerify: true, Color: "red"},
 		{Name: "anon", URL: "ldap://anon:389"},
 		{Name: "people", URL: "ldap://people:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"},
 	}, t.TempDir())
@@ -318,15 +317,17 @@ func TestInternalErrorHidesDetails(t *testing.T) {
 }
 
 // TestInfoCarriesProfileFlags checks that connect and info both return the
-// profile settings the workspace shows as badges.
+// profile settings the workspace shows as badges and in its status bar.
 func TestInfoCarriesProfileFlags(t *testing.T) {
 	type flags struct {
 		BaseDN             string `json:"baseDN"`
+		URL                string `json:"url"`
+		StartTLS           bool   `json:"startTLS"`
 		ReadOnly           bool   `json:"readOnly"`
 		InsecureSkipVerify bool   `json:"insecureSkipVerify"`
 		Color              string `json:"color"`
 	}
-	want := flags{BaseDN: "dc=example,dc=org", ReadOnly: true, InsecureSkipVerify: true, Color: "red"}
+	want := flags{BaseDN: "dc=example,dc=org", URL: "ldap://manual:389", StartTLS: true, ReadOnly: true, InsecureSkipVerify: true, Color: "red"}
 	check := func(name string, rec *httptest.ResponseRecorder) {
 		t.Helper()
 		if rec.Code != http.StatusOK {
@@ -534,23 +535,18 @@ func TestServerModeProfileView(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("profiles = %d %s, want 200", rec.Code, rec.Body)
 	}
-	var views []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &views); err != nil {
+	var got []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode %q: %v", rec.Body, err)
 	}
-	got := map[string][]string{}
-	for _, v := range views {
-		got[v["name"].(string)] = slices.Sorted(maps.Keys(v))
-	}
-	keys := []string{"connected", "name", "needsPassword", "readOnly", "userLogin"}
-	want := map[string][]string{
-		"dev":    keys,
-		"manual": {"color", "connected", "name", "needsPassword", "readOnly", "userLogin"},
-		"anon":   keys,
-		"people": keys,
+	want := []map[string]any{
+		{"name": "dev", "readOnly": false, "connected": false, "userLogin": false, "needsPassword": false},
+		{"name": "manual", "color": "red", "readOnly": true, "connected": false, "userLogin": false, "needsPassword": true},
+		{"name": "anon", "readOnly": false, "connected": false, "userLogin": false, "needsPassword": false},
+		{"name": "people", "readOnly": false, "connected": false, "userLogin": true, "needsPassword": true},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("profile keys mismatch (-want +got):\n%s", diff)
+		t.Errorf("profiles mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -580,46 +576,109 @@ func TestNeedsPassword(t *testing.T) {
 	}
 }
 
-// TestServerModeGenericBindError checks that in server mode a refused
-// sign-in tells the browser nothing about the account, while the log keeps
-// the full error; local mode still decodes AD's reason.
-func TestServerModeGenericBindError(t *testing.T) {
-	adErr := "80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 775, v4563"
+// TestServerModeConnectErrors checks that in server mode a failed connect
+// tells the browser nothing about the directory: any LDAP result is a
+// generic invalid_credentials, and a network or TLS failure keeps its code
+// with a generic message. The log keeps the full error, and local mode
+// answers as errorResponse does, AD's reason included.
+func TestServerModeConnectErrors(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	const typed = `{"profile":"manual","password":"wrong"}`
+	invalid := map[string]any{"code": "invalid_credentials", "message": "invalid username or password"}
 	tests := []struct {
-		name   string
-		server bool
-		want   map[string]any
+		name string
+		body string // the connect request
+		err  error  // the dial's
+		// logged is in the log in both modes.
+		logged string
+		// wantStatus and want are server mode's answer.
+		wantStatus int
+		want       map[string]any
+		// localReason is the reason local mode decodes.
+		localReason string
 	}{
 		{
-			name: "server", server: true,
-			want: map[string]any{"code": "invalid_credentials", "message": "invalid username or password"},
+			name: "AD account locked out", body: typed,
+			err:    ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 775, v4563")),
+			logged: "data 775", wantStatus: http.StatusUnauthorized, want: invalid, localReason: "account locked out",
 		},
 		{
-			name: "local",
-			want: map[string]any{
-				"code": "invalid_credentials", "message": "LDAP Result Code 49 \"Invalid Credentials\": " + adErr,
-				"ldapResultCode": float64(49), "diagnostic": adErr, "reason": "account locked out",
-			},
+			name: "shared profile, configured password refused", body: `{"profile":"dev"}`,
+			err:    ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 52e, v4563")),
+			logged: "data 52e", wantStatus: http.StatusUnauthorized, want: invalid, localReason: "invalid credentials",
+		},
+		{
+			name: "389-DS retry limit", body: typed,
+			err:    ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("Exceed password retry limit. Please try later.")),
+			logged: "Exceed password retry limit", wantStatus: http.StatusUnauthorized, want: invalid,
+		},
+		{
+			name: "389-DS inactivated account", body: typed,
+			err:    ldap.NewError(ldap.LDAPResultUnwillingToPerform, errors.New("Account inactivated. Contact system administrator.")),
+			logged: "Account inactivated", wantStatus: http.StatusUnauthorized, want: invalid,
+		},
+		{
+			name: "network", body: typed,
+			err:    ldap.NewError(ldap.ErrorNetwork, errors.New("dial tcp: lookup ldap.corp.internal: no such host")),
+			logged: "ldap.corp.internal", wantStatus: http.StatusBadGateway,
+			want: map[string]any{"code": "network", "message": "cannot reach the directory server"},
+		},
+		{
+			name: "untrusted certificate", body: typed,
+			err:    &ldapx.UntrustedCertError{Certificates: []*x509.Certificate{srv.Certificate()}, Err: x509.UnknownAuthorityError{}},
+			logged: "untrusted server certificate", wantStatus: http.StatusBadGateway,
+			want: map[string]any{"code": "tls_untrusted", "message": "the directory server's certificate is not trusted"},
 		},
 	}
-	for _, tc := range tests {
+	connect := func(t *testing.T, server bool, body string, dialErr error) (int, map[string]any, string) {
+		t.Helper()
 		var logs bytes.Buffer
-		env := newTestEnvWith(t, Options{Server: tc.server, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-		env.dialErr = ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New(adErr))
-		rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"manual","password":"wrong"}`)
+		env := newTestEnvWith(t, Options{Server: server, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		env.dialErr = dialErr
+		rec := env.do(t, http.MethodPost, "/api/connect", body)
 		var got map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-			t.Fatalf("%s: decode %q: %v", tc.name, rec.Body, err)
+			t.Fatalf("decode %q: %v", rec.Body, err)
 		}
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("%s: connect = %d, want 401", tc.name, rec.Code)
-		}
-		if diff := cmp.Diff(tc.want, got); diff != "" {
-			t.Errorf("%s: connect body mismatch (-want +got):\n%s", tc.name, diff)
-		}
-		if !strings.Contains(logs.String(), "data 775") {
-			t.Errorf("%s: server log = %q, want the full error", tc.name, logs.String())
-		}
+		return rec.Code, got, logs.String()
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			status, got, logs := connect(t, true, tc.body, tc.err)
+			if status != tc.wantStatus {
+				t.Errorf("server mode: connect = %d, want %d", status, tc.wantStatus)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("server mode: connect body mismatch (-want +got):\n%s", diff)
+			}
+			if !strings.Contains(logs, tc.logged) {
+				t.Errorf("server mode: log = %q, want %q in it", logs, tc.logged)
+			}
+
+			wantStatus, e := errorResponse(tc.err)
+			b, err := json.Marshal(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := json.Unmarshal(b, &want); err != nil {
+				t.Fatal(err)
+			}
+			status, got, logs = connect(t, false, tc.body, tc.err)
+			if status != wantStatus {
+				t.Errorf("local mode: connect = %d, want %d", status, wantStatus)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("local mode: connect body mismatch (-want +got):\n%s", diff)
+			}
+			if reason, _ := got["reason"].(string); reason != tc.localReason {
+				t.Errorf("local mode: reason = %q, want %q", reason, tc.localReason)
+			}
+			if !strings.Contains(logs, tc.logged) {
+				t.Errorf("local mode: log = %q, want %q in it", logs, tc.logged)
+			}
+		})
 	}
 }
 

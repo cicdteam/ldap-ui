@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { changeCount, connectionStatus, plural, type StatusTone } from './status'
 
-const info = { encrypted: false, insecureSkipVerify: false, activeDirectory: false }
-const ldaps = { url: 'ldaps://samba:636', startTLS: false }
+const info = {
+  url: 'ldaps://samba:636',
+  startTLS: false,
+  encrypted: false,
+  insecureSkipVerify: false,
+  activeDirectory: false,
+}
 
 describe('connectionStatus transport', () => {
   it.each<[string, boolean, boolean, boolean, string, StatusTone]>([
@@ -13,16 +18,8 @@ describe('connectionStatus transport', () => {
     ['ldaps, skip verify', true, true, false, 'TLS, certificate not verified', 'danger'],
     ['StartTLS, skip verify', true, true, true, 'StartTLS, certificate not verified', 'danger'],
   ])('%s', (_, encrypted, insecureSkipVerify, startTLS, text, tone) => {
-    const got = connectionStatus(
-      { ...info, encrypted, insecureSkipVerify },
-      { ...ldaps, startTLS },
-      0,
-    )
+    const got = connectionStatus({ ...info, encrypted, insecureSkipVerify, startTLS }, 0)
     expect(got.transport).toEqual({ text, tone })
-  })
-  it('encrypted, profile missing', () => {
-    const got = connectionStatus({ ...info, encrypted: true }, undefined, 0)
-    expect(got.transport).toEqual({ text: 'TLS', tone: 'ok' })
   })
 })
 
@@ -35,7 +32,7 @@ describe('connectionStatus server', () => {
     ['whitespace vendor', false, '  ', 'LDAP'],
     ['no vendor', false, undefined, 'LDAP'],
   ])('%s', (_, activeDirectory, vendor, want) => {
-    expect(connectionStatus({ ...info, activeDirectory, vendor }, ldaps, 0).server).toBe(want)
+    expect(connectionStatus({ ...info, activeDirectory, vendor }, 0).server).toBe(want)
   })
 })
 
@@ -45,7 +42,7 @@ describe('connectionStatus changes', () => {
     [1, '1 change'],
     [5, '5 changes'],
   ])('%i', (n, want) => {
-    expect(connectionStatus(info, ldaps, n).changes).toBe(want)
+    expect(connectionStatus(info, n).changes).toBe(want)
   })
 })
 
@@ -70,10 +67,7 @@ describe('plural', () => {
 })
 
 describe('connectionStatus address', () => {
-  it('is the profile URL', () => {
-    expect(connectionStatus(info, ldaps, 0).address).toBe('ldaps://samba:636')
-  })
-  it('is undefined without a profile', () => {
-    expect(connectionStatus(info, undefined, 0).address).toBeUndefined()
+  it("is the connection's URL", () => {
+    expect(connectionStatus(info, 0).address).toBe('ldaps://samba:636')
   })
 })

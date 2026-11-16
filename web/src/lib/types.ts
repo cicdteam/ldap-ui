@@ -48,9 +48,12 @@ export interface ProfileInput {
   readOnly: boolean
 }
 
-/** A connection's info plus the profile settings its badges show. */
+/** A connection's info plus the profile settings its badges and status bar show. */
 export interface Info {
   baseDN: string
+  /** The profile's URL; server mode shows it only here, after sign-in. */
+  url: string
+  startTLS: boolean
   /** The DN the connection bound as (a UPN on an AD UPN template); absent for anonymous. */
   bindDN?: string
   namingContexts?: string[]

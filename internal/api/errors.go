@@ -124,6 +124,24 @@ func errorResponse(err error) (int, apiError) {
 	return http.StatusInternalServerError, apiError{Code: "internal", Message: "internal error; see the server log"}
 }
 
+// signInError is errorResponse's answer to a failed connect, as server mode
+// gives it to someone who has not signed in: nothing about the directory.
+// Every LDAP result is a wrong username or password, since a diagnostic or
+// a code such as AD's "account locked out" or 389-DS's 19 and 53 tells that
+// the account exists. A network or TLS failure keeps its code, without the
+// host name, the error text or the certificate chain.
+func signInError(status int, e apiError) (int, apiError) {
+	switch {
+	case e.Code == "network":
+		return status, apiError{Code: e.Code, Message: "cannot reach the directory server"}
+	case e.Code == "tls_untrusted":
+		return status, apiError{Code: e.Code, Message: "the directory server's certificate is not trusted"}
+	case e.LDAPResultCode != 0: // every other LDAP result
+		return http.StatusUnauthorized, apiError{Code: "invalid_credentials", Message: "invalid username or password"}
+	}
+	return status, e
+}
+
 func certInfos(certs []*x509.Certificate) []certInfo {
 	var out []certInfo
 	for _, c := range certs {
