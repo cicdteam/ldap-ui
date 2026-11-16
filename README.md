@@ -166,7 +166,8 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   selected, the card says so.
 - **List children** (the list icon on a container in the tree, or "List
   children of the current entry" in the command palette): lists the entries
-  one level under it, with the default columns.
+  one level under it, with the default columns. The search bar keeps its own
+  text, base and scope, so a name typed next still searches under its base.
 - **Tree** (left): lazy, keyboard-driven (arrows, Home/End, `*`, type-ahead).
   Each row shows its RDN; an account row (`uid=` or `sAMAccountName=`) also
   shows the person's name, muted: `displayName`, else `cn`. A click on a

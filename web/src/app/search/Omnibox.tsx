@@ -54,6 +54,12 @@ function resolve(
   return { state: { base: d.base.trim(), scope: d.scope, filter, attrs: d.columns } }
 }
 
+/**
+ * List children's search (every entry one level under a container). It fills the list, not the
+ * bar: a name typed next still runs under the bar's own base and scope.
+ */
+const isListing = (s: SearchState | null) => s?.scope === 'one' && s.filter === '(objectClass=*)'
+
 const SCOPES: unknown[] = ['base', 'one', 'sub']
 const SCOPE_LABEL: Record<Scope, string> = { base: 'base', one: 'one level', sub: 'subtree' }
 
@@ -96,7 +102,9 @@ function SearchLine({ s }: { s: SearchState }) {
 export function Omnibox() {
   const ws = useWorkspace()
   const columns = defaultColumns(ws.info)
-  const [draft, setDraft] = useState<Draft>(() => toDraft(ws.search, columns))
+  const [draft, setDraft] = useState<Draft>(() =>
+    toDraft(isListing(ws.search) ? null : ws.search, columns),
+  )
   const [builder, setBuilder] = useState(false)
   const [group, setGroup] = useState<Group>({ type: 'and', children: [] })
   const [notice, setNotice] = useState('')
@@ -116,7 +124,10 @@ export function Omnibox() {
   const [synced, setSynced] = useState(ws.search)
   if (ws.search !== synced) {
     setSynced(ws.search)
-    if (!(ws.search && 'state' in current && same(ws.search, current.state))) {
+    if (
+      !isListing(ws.search) &&
+      !(ws.search && 'state' in current && same(ws.search, current.state))
+    ) {
       setDraft(toDraft(ws.search, columns))
     }
   }

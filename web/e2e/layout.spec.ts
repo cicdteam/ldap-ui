@@ -186,4 +186,12 @@ test('List children in the palette lists the entry one level down', async ({ pag
     E2E_OU,
     '(objectClass=*)',
   ])
+  // The bar keeps its own base and scope: a name typed next searches the whole base.
+  await expect(queryBar(page).locator('.cm-placeholder')).toBeVisible()
+  await queryBar(page).click()
+  await page.keyboard.type('doe')
+  await page.keyboard.press('Enter')
+  await expect(results(page).getByRole('row', { name: /Doe, John/ })).toBeVisible()
+  const next = new URL(page.url()).searchParams
+  expect([next.get('scope'), next.get('base')]).toEqual(['sub', null])
 })
