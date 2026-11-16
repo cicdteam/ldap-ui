@@ -143,7 +143,7 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, profile.ErrFixed):
 		writeError(w, http.StatusConflict, apiError{Code: "profile_fixed", Message: err.Error()})
 	case errors.Is(err, profile.ErrSavingDisabled):
-		writeError(w, http.StatusConflict, apiError{Code: "saving_disabled", Message: err.Error()})
+		writeError(w, http.StatusForbidden, apiError{Code: "saving_disabled", Message: err.Error()})
 	case errors.Is(err, profile.ErrLimit):
 		writeError(w, http.StatusConflict, apiError{Code: "profile_limit", Message: err.Error()})
 	case err != nil:

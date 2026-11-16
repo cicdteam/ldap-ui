@@ -527,6 +527,22 @@ func TestServerModeRefusesSaving(t *testing.T) {
 	}
 }
 
+// TestSaveWithoutDataDir checks that local mode without a data dir refuses a
+// save with the status server mode gives it.
+func TestSaveWithoutDataDir(t *testing.T) {
+	cat, err := profile.NewCatalog(nil, "")
+	if err != nil {
+		t.Fatalf("NewCatalog() error = %v", err)
+	}
+	o := newTestEnv(t).opts
+	o.Catalog = cat
+	env := &testEnv{h: New(o)}
+	rec := env.do(t, http.MethodPost, "/api/profiles", `{"name":"lab","url":"ldap://lab:389"}`)
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "saving_disabled" {
+		t.Errorf("save without a data dir = %d %s, want 403 saving_disabled", rec.Code, rec.Body)
+	}
+}
+
 // TestServerModeProfileView checks that server mode tells the UI only what
 // its connect page needs, nothing about where or how a profile binds.
 func TestServerModeProfileView(t *testing.T) {

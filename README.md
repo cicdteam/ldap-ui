@@ -351,7 +351,8 @@ login](#per-user-login) has the whole flow and its errors.
 
 Profiles created in the UI are kept, without passwords, in `profiles.json`
 in the data dir of local mode (see [Two modes](#two-modes)); without a data
-dir, as in server mode, the UI cannot save profiles. At most 200
+dir, as in server mode, the UI cannot save profiles, and a save fails with
+403 `saving_disabled`. At most 200
 profiles can be saved, each at most 4 KiB as JSON not counting `caPEM`, which
 has its own limit of 16 KiB; saving one more profile, or a bigger one, fails
 with 409 `profile_limit`. Saves are written to a temporary file, synced and
