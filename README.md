@@ -159,8 +159,9 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   beside it. Up and Down in the list move the card through the rows; Down in
   the search bar moves into the list, on its selected row or else the first.
   The list's × button, or Esc while focus is in the list, closes it: the entry
-  in the card, its Edit mode and the staged changes stay, and focus moves to
-  the card's heading (to the tree with no entry open). Pane sizes are
+  in the card, its Edit mode and the staged changes stay, the URL keeps only
+  the entry, and focus moves to the card's heading (to the tree with no entry
+  open). Pane sizes are
   remembered separately with the list and without it. With no entry
   selected, the card says so.
 - **List children** (the list icon on a container in the tree, or "List

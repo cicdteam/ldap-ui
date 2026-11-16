@@ -114,7 +114,7 @@ export function Workspace() {
         qc.removeQueries({ queryKey: searchKey(conn, s) })
         setRuns((n) => n + 1)
       }
-      navigate(workspaceURL(conn, { dn, search: s }, 'search'))
+      navigate(workspaceURL(conn, { dn, search: s }, s ? 'search' : 'entry'))
     },
     [conn, dn, search, navigate, qc],
   )

@@ -23,8 +23,8 @@ async function search(page: Page, text: string) {
 async function expectClosed(page: Page) {
   await expect(panes(page)).toHaveCount(2)
   await expect(results(page)).toHaveCount(0)
-  await expect(page).not.toHaveURL(/filter=/)
-  await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(DN)}`))
+  // The entry view, with the dn and no search left in the URL.
+  await expect(page).toHaveURL(new RegExp(`/c/demo/entry\\?dn=${encodeURIComponent(DN)}$`))
   // Focus moves to the card's heading, not to the page.
   await expect(page.getByRole('heading', exact('E2E layout'))).toBeFocused()
   await expect(editButton(page)).toHaveAttribute('aria-pressed', 'true')
@@ -169,6 +169,7 @@ test('with no entry open, closing the list focuses the tree', async ({ page }) =
   await page.keyboard.press('Escape')
   await expect(panes(page)).toHaveCount(2)
   await expect(page.getByRole('tree')).toBeFocused()
+  await expect(page).toHaveURL(/\/c\/demo\/entry$/)
 })
 
 test('List children in the palette lists the entry one level down', async ({ page }) => {
