@@ -164,7 +164,7 @@ func (c *Catalog) Find(name string) (Profile, error) {
 // profile over MaxProfileBytes without its caPEM.
 func (c *Catalog) Save(p Profile) (Profile, error) {
 	p.PasswordEnv, p.PasswordFile, p.CAFile = "", "", ""
-	p.BindDNTemplate, p.IdentityUser = "", ""
+	p.BindDNTemplate = ""
 	if err := p.normalize(); err != nil {
 		return Profile{}, err
 	}

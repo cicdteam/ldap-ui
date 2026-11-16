@@ -69,14 +69,9 @@ type Options struct {
 	// SecureCookies is set when the UI is served over HTTPS, e.g. behind a
 	// TLS-terminating ingress.
 	SecureCookies bool
-	// IdentityHeader names a request header, such as X-Auth-Request-Email,
-	// that an authenticating proxy sets to the user it verified. Its value
-	// counts only on requests from TrustedProxies: it is logged as "user",
-	// and for identityUser profiles it decides which username a person may
-	// sign in as.
-	IdentityHeader string
-	// TrustedProxies are the addresses of the proxies that set
-	// IdentityHeader.
+	// TrustedProxies are the addresses of reverse proxies whose
+	// X-Forwarded-For is trusted for the client address, which logs carry
+	// and the failed-login limit counts per.
 	TrustedProxies []netip.Prefix
 	// UI is the built web UI; nil serves a "not built" page.
 	UI     fs.FS
@@ -97,8 +92,9 @@ func New(opts Options) http.Handler {
 	s := &server{
 		catalog: opts.Catalog, dial: opts.Dial, sessions: opts.Sessions, cookies: cookies, log: logger,
 		shared:         &sharedConns{m: opts.Shared, conns: map[string]sharedConn{}, dials: map[string]chan struct{}{}},
-		identityHeader: opts.IdentityHeader, trustedProxies: opts.TrustedProxies,
-		attempts: newAttemptLimiter(5, time.Minute, 10000, time.Now),
+		trustedProxies: opts.TrustedProxies,
+		attempts:       newAttemptLimiter(5, time.Minute, 10000, time.Now),
+		clients:        newAttemptLimiter(20, time.Minute, 10000, time.Now),
 	}
 
 	app := http.NewServeMux()
@@ -123,7 +119,7 @@ func New(opts Options) http.Handler {
 	h := admit(64, 4, 10*time.Second, withDeadline(2*time.Minute, 4*time.Minute, app))
 	h = requireJSON(h)
 	h = http.NewCrossOriginProtection().Handler(h)
-	h = requireToken(opts.AuthToken, cookies, logger, h)
+	h = requireToken(opts.AuthToken, cookies, logger, s.origin, h)
 	h = hostCheck(opts.AllowedHosts, h)
 
 	// Probes answer at the root as well as under the base path: a kubelet

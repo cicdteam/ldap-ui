@@ -224,8 +224,6 @@ describe('errorMessage', () => {
   it.each([
     [400, 'username_required'],
     [400, 'invalid_username'],
-    [403, 'identity_required'],
-    [403, 'identity_mismatch'],
     [429, 'too_many_attempts'],
   ])('has UI text for %i %s', (status, code) => {
     expect(errorMessage(new ApiError(status, { code, message: '' }))).not.toBe('')
@@ -245,7 +243,6 @@ describe('toProfileInput', () => {
       hasPassword: false,
       connected: true,
       userLogin: false,
-      usernameLocked: false,
       caPEM: 'pem',
     }
     expect(toProfileInput(p)).toEqual({

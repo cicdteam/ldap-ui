@@ -25,10 +25,6 @@ export interface Profile {
   connected: boolean
   /** A bindDNTemplate profile: each person signs in with a username. */
   userLogin: boolean
-  /** The username the trusted identity allows, set when usernameLocked. */
-  username?: string
-  /** The username is fixed by the authenticating proxy's identity. */
-  usernameLocked: boolean
 }
 
 /** Body of POST /api/profiles; the server rejects unknown fields. */

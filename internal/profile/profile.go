@@ -62,7 +62,6 @@ type Profile struct {
 	BaseDN             string        `yaml:"baseDN" json:"baseDN,omitempty"`
 	BindDN             string        `yaml:"bindDN" json:"bindDN,omitempty"`
 	BindDNTemplate     string        `yaml:"bindDNTemplate" json:"-"`
-	IdentityUser       string        `yaml:"identityUser" json:"-"`
 	PasswordEnv        string        `yaml:"passwordEnv" json:"-"`
 	PasswordFile       string        `yaml:"passwordFile" json:"-"`
 	CAFile             string        `yaml:"caFile" json:"-"`
@@ -128,15 +127,6 @@ func (p *Profile) normalize() error {
 			return fmt.Errorf("%w: %s: bindDNTemplate cannot be combined with bindDN, passwordEnv or passwordFile", ErrInvalid, p.Name)
 		}
 	}
-	switch p.IdentityUser {
-	case "":
-	case "exact", "localpart":
-		if p.BindDNTemplate == "" {
-			return fmt.Errorf("%w: %s: identityUser requires bindDNTemplate", ErrInvalid, p.Name)
-		}
-	default:
-		return fmt.Errorf("%w: %s: identityUser must be exact or localpart, got %q", ErrInvalid, p.Name, p.IdentityUser)
-	}
 	if p.ConnectTimeout <= 0 {
 		p.ConnectTimeout = defaultConnectTimeout
 	}
@@ -174,17 +164,6 @@ func (p Profile) BindDNFor(username string) (string, error) {
 		username = ldap.EscapeDN(username)
 	}
 	return strings.Replace(p.BindDNTemplate, userPlaceholder, username, 1), nil
-}
-
-// IdentityUsername maps a trusted identity, such as the user a proxy
-// authenticated, to the username it may sign in as. With identityUser
-// localpart that is the part before the last "@"; otherwise the identity
-// itself.
-func (p Profile) IdentityUsername(identity string) string {
-	if i := strings.LastIndex(identity, "@"); p.IdentityUser == "localpart" && i >= 0 {
-		return identity[:i]
-	}
-	return identity
 }
 
 // ConfiguredPassword returns the bind password from PasswordEnv or

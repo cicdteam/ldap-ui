@@ -169,15 +169,12 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestParseFlagsIdentity(t *testing.T) {
+func TestParseFlagsTrustedProxies(t *testing.T) {
 	env := map[string]string{"LDAPLENS_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.7,,2001:db8::1"}
 	getenv := func(k string) string { return env[k] }
-	got, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, getenv, io.Discard)
+	got, err := parseFlags(nil, getenv, io.Discard)
 	if err != nil {
-		t.Fatalf("parseFlags(--identity-header) error = %v", err)
-	}
-	if got.identityHeader != "X-Auth-Request-Email" {
-		t.Errorf("parseFlags(--identity-header) identityHeader = %q, want X-Auth-Request-Email", got.identityHeader)
+		t.Fatalf("parseFlags() error = %v", err)
 	}
 	want := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),
@@ -189,37 +186,17 @@ func TestParseFlagsIdentity(t *testing.T) {
 	}
 
 	noEnv := func(string) string { return "" }
-	if _, err := parseFlags([]string{"--identity-header", "X-Auth-Request-Email"}, noEnv, io.Discard); err == nil {
-		t.Errorf("parseFlags(--identity-header without --trusted-proxies) error = nil, want error")
-	}
-	args := []string{"--identity-header", "X-Auth-Request-Email", "--trusted-proxies", "10.0.0.0/8,10.0.0.0/99"}
+	args := []string{"--trusted-proxies", "10.0.0.0/8,10.0.0.0/99"}
 	if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "10.0.0.0/99") {
 		t.Errorf("parseFlags(%q) error = %v, want an error naming 10.0.0.0/99", args, err)
 	}
-	// Headers that carry credentials would put them in the log.
-	for _, h := range []string{"Authorization", "proxy-authorization", "COOKIE"} {
-		args := []string{"--identity-header", h, "--trusted-proxies", "10.0.0.0/8"}
-		if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), h) {
-			t.Errorf("parseFlags(%q) error = %v, want an error naming %s", args, err, h)
-		}
-	}
 }
 
-// TestRunIdentityUserNeedsHeader checks that a profile tied to the proxy's
-// identity is a startup error without --identity-header: nobody could
-// connect to it.
-func TestRunIdentityUserNeedsHeader(t *testing.T) {
-	clearEnv(t)
-	cfg := filepath.Join(t.TempDir(), "connections.yaml")
-	yaml := "connections:\n  - name: corp-ad\n    url: ldaps://dc1.corp.example:636\n    bindDNTemplate: \"{user}@corp.example\"\n    identityUser: localpart\n"
-	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Port -1 cannot be listened on, so that without the check run fails
-	// there instead of serving.
-	err := run([]string{"--config", cfg, "--listen", "127.0.0.1:-1"})
-	if err == nil || !strings.Contains(err.Error(), "corp-ad") || !strings.Contains(err.Error(), "--identity-header") {
-		t.Errorf("run(identityUser profile, no --identity-header) = %v, want an error naming corp-ad and --identity-header", err)
+func TestParseFlagsNoIdentityHeader(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	args := []string{"--identity-header", "X-User", "--trusted-proxies", "10.0.0.0/8"}
+	if _, err := parseFlags(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -identity-header") {
+		t.Errorf("parseFlags(%q) error = %v, want an unknown flag error", args, err)
 	}
 }
 

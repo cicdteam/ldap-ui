@@ -76,10 +76,8 @@ const messages = new Map([
     'invalid_username',
     'A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long.',
   ],
-  ['identity_required', 'Open ldaplens through its sign-in proxy to use this connection.'],
-  ['identity_mismatch', 'Use the username you signed in to the proxy with.'],
   // ponytail: a fixed wait, not Retry-After; read the header into ApiError to show the seconds.
-  ['too_many_attempts', 'Too many failed sign-ins for this account. Wait a minute and try again.'],
+  ['too_many_attempts', 'Too many failed sign-ins. Wait a minute and try again.'],
 ])
 
 export function errorMessage(e: unknown): string {

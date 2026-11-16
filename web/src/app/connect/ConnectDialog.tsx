@@ -25,8 +25,7 @@ export function ConnectDialog({
 }) {
   const qc = useQueryClient()
   const [password, setPassword] = useState('')
-  const [typed, setTyped] = useState('')
-  const username = profile?.usernameLocked ? (profile.username ?? '') : typed
+  const [username, setUsername] = useState('')
   const needsPassword =
     !!profile && (profile.userLogin || (!profile.hasPassword && !!profile.bindDN))
   // Kept across retries: a pending connect clears the error, not the field.
@@ -86,12 +85,11 @@ export function ConnectDialog({
               <label className="block space-y-1">
                 <span className="text-xs text-muted">Username</span>
                 <Input
-                  autoFocus={!profile.usernameLocked}
+                  autoFocus
                   autoComplete="username"
                   required
-                  readOnly={profile.usernameLocked}
                   value={username}
-                  onChange={(e) => setTyped(e.target.value)}
+                  onChange={(e) => setUsername(e.target.value)}
                   className="w-full"
                 />
               </label>
@@ -126,7 +124,7 @@ export function ConnectDialog({
               {/* autoFocus also focuses the field when an error makes it appear. */}
               <Input
                 type="password"
-                autoFocus={!profile.userLogin || profile.usernameLocked}
+                autoFocus={!profile.userLogin}
                 autoComplete="current-password"
                 required={profile.userLogin}
                 aria-describedby={needsPassword ? undefined : hintId}

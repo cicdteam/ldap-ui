@@ -90,6 +90,13 @@ func TestLoadRejects(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsIdentityUser(t *testing.T) {
+	_, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://h', bindDNTemplate: '{user}@corp.example', identityUser: exact}]"))
+	if err == nil || !strings.Contains(err.Error(), "field identityUser not found") {
+		t.Errorf("Load(identityUser) error = %v, want an unknown field error", err)
+	}
+}
+
 func TestLoadErrorHidesURLPassword(t *testing.T) {
 	_, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://cn=admin:s3cret@h:badport'}]"))
 	if err == nil || strings.Contains(err.Error(), "s3cret") {
@@ -194,15 +201,13 @@ func TestNormalizeTemplate(t *testing.T) {
 		wantInvalid bool
 	}{
 		{name: "dn", p: Profile{BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"}},
-		{name: "upn", p: Profile{BindDNTemplate: "{user}@corp.example", IdentityUser: "localpart"}},
-		{name: "down-level", p: Profile{BindDNTemplate: `CORP\{user}`, IdentityUser: "exact"}},
+		{name: "upn", p: Profile{BindDNTemplate: "{user}@corp.example"}},
+		{name: "down-level", p: Profile{BindDNTemplate: `CORP\{user}`}},
 		{name: "no placeholder", p: Profile{BindDNTemplate: "uid=x,dc=example,dc=org"}, wantInvalid: true},
 		{name: "two placeholders", p: Profile{BindDNTemplate: "uid={user},ou={user},dc=org"}, wantInvalid: true},
 		{name: "with bindDN", p: Profile{BindDNTemplate: "{user}@corp.example", BindDN: "cn=reader"}, wantInvalid: true},
 		{name: "with passwordEnv", p: Profile{BindDNTemplate: "{user}@corp.example", PasswordEnv: "PW"}, wantInvalid: true},
 		{name: "with passwordFile", p: Profile{BindDNTemplate: "{user}@corp.example", PasswordFile: "/pw"}, wantInvalid: true},
-		{name: "identityUser without template", p: Profile{IdentityUser: "localpart"}, wantInvalid: true},
-		{name: "unknown identityUser", p: Profile{BindDNTemplate: "{user}@corp.example", IdentityUser: "email"}, wantInvalid: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,42 +255,25 @@ func TestBindDNFor(t *testing.T) {
 	}
 }
 
-func TestIdentityUsername(t *testing.T) {
-	tests := []struct {
-		mode, identity, want string
-	}{
-		{mode: "exact", identity: "alice", want: "alice"},
-		{mode: "localpart", identity: "alice@corp.example", want: "alice"},
-		{mode: "localpart", identity: "a@b@corp", want: "a@b"},
-		{mode: "localpart", identity: "alice", want: "alice"},
-	}
-	for _, tc := range tests {
-		if got := (Profile{IdentityUser: tc.mode}).IdentityUsername(tc.identity); got != tc.want {
-			t.Errorf("IdentityUsername(%q) with %s = %q, want %q", tc.identity, tc.mode, got, tc.want)
-		}
-	}
-}
-
 func TestLoadTemplateFromYAML(t *testing.T) {
 	ps, err := Load(writeFile(t, `
 connections:
   - name: people
     url: ldap://h
     bindDNTemplate: uid={user},ou=people,dc=example,dc=org
-    identityUser: exact
 `))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := ps[0]; got.BindDNTemplate != "uid={user},ou=people,dc=example,dc=org" || got.IdentityUser != "exact" || !got.UserLogin() {
-		t.Errorf("Load() = %+v, want bindDNTemplate and identityUser set", got)
+	if got := ps[0]; got.BindDNTemplate != "uid={user},ou=people,dc=example,dc=org" || !got.UserLogin() {
+		t.Errorf("Load() = %+v, want bindDNTemplate set", got)
 	}
 
 	var p Profile
-	if err := json.Unmarshal([]byte(`{"name":"x","bindDNTemplate":"{user}@corp.example","identityUser":"exact"}`), &p); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"x","bindDNTemplate":"{user}@corp.example"}`), &p); err != nil {
 		t.Fatal(err)
 	}
-	if p.BindDNTemplate != "" || p.IdentityUser != "" || p.UserLogin() {
-		t.Errorf("json.Unmarshal() = %+v, want bindDNTemplate and identityUser empty", p)
+	if p.BindDNTemplate != "" || p.UserLogin() {
+		t.Errorf("json.Unmarshal() = %+v, want bindDNTemplate empty", p)
 	}
 }

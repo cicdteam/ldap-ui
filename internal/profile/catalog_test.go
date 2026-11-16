@@ -49,12 +49,12 @@ func TestCatalogSaveStripsFileReferences(t *testing.T) {
 	}
 	got, err := c.Save(Profile{
 		Name: "x", URL: "ldap://h", PasswordFile: "/etc/passwd", PasswordEnv: "HOME", CAFile: "/etc/hosts",
-		BindDNTemplate: "{user}@corp.example", IdentityUser: "exact",
+		BindDNTemplate: "{user}@corp.example",
 	})
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if got.PasswordFile != "" || got.PasswordEnv != "" || got.CAFile != "" || got.BindDNTemplate != "" || got.IdentityUser != "" {
+	if got.PasswordFile != "" || got.PasswordEnv != "" || got.CAFile != "" || got.BindDNTemplate != "" {
 		t.Errorf("Save() = %+v, want file, env and config-only fields cleared", got)
 	}
 }

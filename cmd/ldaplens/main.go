@@ -48,7 +48,6 @@ type config struct {
 	secureCookies bool
 	showVersion   bool
 
-	identityHeader string
 	trustedProxies []netip.Prefix
 }
 
@@ -120,10 +119,8 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 	fs.StringVar(&hosts, "allowed-hosts", env("LDAPLENS_ALLOWED_HOSTS", ""), "extra Host header values to accept, comma-separated (env LDAPLENS_ALLOWED_HOSTS)")
 	fs.DurationVar(&c.sessionIdle, "session-idle", idle, "close LDAP connections after this much inactivity (env LDAPLENS_SESSION_IDLE)")
 	fs.DurationVar(&c.sessionMaxAge, "session-max-age", maxAge, "close each LDAP connection this long after it was connected, however active (env LDAPLENS_SESSION_MAX_AGE)")
-	fs.StringVar(&c.identityHeader, "identity-header", env("LDAPLENS_IDENTITY_HEADER", ""),
-		"header an authenticating proxy sets to the user, e.g. X-Auth-Request-Email; logged as user, and for identityUser profiles it decides which username a person may sign in as (env LDAPLENS_IDENTITY_HEADER)")
 	fs.StringVar(&proxies, "trusted-proxies", env("LDAPLENS_TRUSTED_PROXIES", ""),
-		"CIDRs or IPs of the proxies whose --identity-header is trusted, comma-separated (env LDAPLENS_TRUSTED_PROXIES)")
+		"CIDRs or IPs of reverse proxies whose X-Forwarded-For is trusted for the client address, comma-separated (env LDAPLENS_TRUSTED_PROXIES)")
 	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure when served over HTTPS, e.g. behind a TLS ingress (env LDAPLENS_SECURE_COOKIES)")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -172,17 +169,6 @@ func parseFlags(args []string, getenv func(string) string, usage io.Writer) (con
 			return config{}, fmt.Errorf("--trusted-proxies: %w", err)
 		}
 		c.trustedProxies = append(c.trustedProxies, p)
-	}
-	// Without trusted proxies any client could set the header.
-	if c.identityHeader != "" && len(c.trustedProxies) == 0 {
-		return config{}, errors.New("--identity-header needs --trusted-proxies, the addresses of the proxy that sets it")
-	}
-	// These carry the browser's or the proxy's credentials, which must not
-	// reach the log.
-	for _, h := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
-		if strings.EqualFold(c.identityHeader, h) {
-			return config{}, fmt.Errorf("--identity-header %s: carries credentials; want the header the proxy sets to the user", c.identityHeader)
-		}
 	}
 	if c.sessionIdle <= 0 {
 		return config{}, fmt.Errorf("--session-idle %v: want a positive duration", c.sessionIdle)
@@ -307,12 +293,6 @@ func runTo(args []string, stdout io.Writer) error {
 			return err
 		}
 	}
-	// Without the header there is no identity, so every connect would fail.
-	for _, p := range fixed {
-		if p.IdentityUser != "" && cfg.identityHeader == "" {
-			return fmt.Errorf("profile %s: identityUser needs --identity-header, the header the authenticating proxy sets to the user", p.Name)
-		}
-	}
 	catalog, err := profile.NewCatalog(fixed, cfg.dataDir)
 	if err != nil {
 		return err
@@ -341,7 +321,7 @@ func runTo(args []string, stdout io.Writer) error {
 	srv := newHTTPServer(api.New(api.Options{
 		Catalog: catalog, Dial: dial, Sessions: sessions, Shared: shared,
 		AllowedHosts: cfg.allowedHosts, AuthToken: cfg.authToken, BasePath: cfg.basePath,
-		SecureCookies: cfg.secureCookies, IdentityHeader: cfg.identityHeader, TrustedProxies: cfg.trustedProxies,
+		SecureCookies: cfg.secureCookies, TrustedProxies: cfg.trustedProxies,
 		UI: web.Dist(), Logger: logger,
 	}))
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)

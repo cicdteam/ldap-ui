@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -168,7 +167,6 @@ func newTestEnvWith(t *testing.T, opts Options) *testEnv {
 		{Name: "anon", URL: "ldap://anon:389"},
 		{Name: "prodrw", URL: "ldap://prodrw:389", Environment: profile.Prod, ReadOnly: &no},
 		{Name: "people", URL: "ldap://people:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org"},
-		{Name: "self", URL: "ldap://self:389", BindDNTemplate: "uid={user},ou=people,dc=example,dc=org", IdentityUser: "localpart"},
 	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
@@ -621,7 +619,7 @@ func TestWriteLogsAttribution(t *testing.T) {
 		token    = "attribution-token-not-logged" //nolint:gosec // test value, not a credential
 		typedPW  = "typed-password-not-logged"
 		bindDN   = "cn=admin,dc=example,dc=org"
-		remote   = "192.0.2.1:1234" // httptest.NewRequest's RemoteAddr
+		remote   = "192.0.2.1" // httptest.NewRequest's RemoteAddr, without the port
 		applyOne = `{"entries":[{"dn":"uid=a,dc=example,dc=org","changes":[{"op":"add","attr":"description","values":["secret-value"]}]}]}`
 	)
 	var logs bytes.Buffer
@@ -738,8 +736,8 @@ func TestBadTokenLogged(t *testing.T) {
 		t.Fatalf("bad token = %d %s, want 401 unauthorized", rec.Code, rec.Body)
 	}
 	got := withMsg(jsonLogs(t, &logs), "auth failed")
-	if len(got) != 1 || got[0]["remote"] != req.RemoteAddr {
-		t.Errorf("auth failed lines = %v, want one with remote %q", got, req.RemoteAddr)
+	if len(got) != 1 || got[0]["remote"] != "192.0.2.1" {
+		t.Errorf("auth failed lines = %v, want one with remote 192.0.2.1, httptest's client", got)
 	}
 	for _, secret := range []string{token, "wrong-token-not-logged"} {
 		if strings.Contains(logs.String(), secret) {
@@ -918,179 +916,6 @@ func TestConnectTemplateRefusals(t *testing.T) {
 	}
 }
 
-// identityOptions trusts httptest's remote, 192.0.2.1, to set X-User.
-var identityOptions = Options{IdentityHeader: "X-User", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}
-
-func TestConnectIdentityLock(t *testing.T) {
-	tests := []struct {
-		name       string
-		remote     string
-		user       string // X-User
-		username   string
-		wantStatus int
-		wantCode   string
-		wantBindDN string
-	}{
-		{name: "same user", user: "alice@corp.example", username: "alice", wantStatus: http.StatusOK, wantBindDN: "uid=alice,ou=people,dc=example,dc=org"},
-		{name: "other user", user: "alice@corp.example", username: "bob", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
-		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
-		{name: "no header", username: "alice", wantStatus: http.StatusForbidden, wantCode: "identity_required"},
-		{name: "case-insensitive", user: "alice@corp.example", username: "ALICE", wantStatus: http.StatusOK, wantBindDN: "uid=ALICE,ou=people,dc=example,dc=org"},
-		// The Kelvin sign folds to k in Unicode, but is no ASCII k.
-		{name: "Kelvin sign", user: "\u212Aate@corp.example", username: "kate", wantStatus: http.StatusForbidden, wantCode: "identity_mismatch"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			env := newTestEnvWith(t, identityOptions)
-			env.remote = tc.remote
-			if tc.user != "" {
-				env.header = http.Header{"X-User": {tc.user}}
-			}
-			rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"`+tc.username+`","password":"pw"}`)
-			if rec.Code != tc.wantStatus || (tc.wantCode != "" && errorCode(t, rec) != tc.wantCode) {
-				t.Fatalf("connect as %s with X-User %q = %d %s, want %d %s", tc.username, tc.user, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
-			}
-			wantDials := 0
-			if tc.wantBindDN != "" {
-				wantDials = 1
-			}
-			if env.dials != wantDials || env.dialed.BindDN != tc.wantBindDN {
-				t.Errorf("connect as %s dialed %d times as %q, want %d as %q", tc.username, env.dials, env.dialed.BindDN, wantDials, tc.wantBindDN)
-			}
-		})
-	}
-}
-
-// TestConnectIdentityRefusalLogged checks that a connect refused for the
-// trusted identity is logged with its code, without the username it asked
-// for.
-func TestConnectIdentityRefusalLogged(t *testing.T) {
-	var logs bytes.Buffer
-	opts := identityOptions
-	opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
-	env := newTestEnvWith(t, opts)
-	env.remote, env.header = "198.51.100.1:1234", http.Header{"X-User": {"alice@corp.example"}}
-	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("connect from an untrusted remote = %d %s, want 403", rec.Code, rec.Body)
-	}
-	env.remote = ""
-	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"self","username":"mallory","password":"pw"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("connect as mallory with X-User alice = %d %s, want 403", rec.Code, rec.Body)
-	}
-	var got []map[string]any
-	for _, l := range withMsg(jsonLogs(t, &logs), "connect refused") {
-		if _, ok := l["session"]; !ok {
-			t.Errorf("connect refused line = %v, want who made it", l)
-		}
-		got = append(got, map[string]any{"profile": l["profile"], "code": l["code"], "bindDN": l["bindDN"], "remote": l["remote"], "user": l["user"]})
-	}
-	want := []map[string]any{
-		{"profile": "self", "code": "identity_required", "bindDN": "", "remote": "198.51.100.1:1234", "user": nil},
-		{"profile": "self", "code": "identity_mismatch", "bindDN": "", "remote": "192.0.2.1:1234", "user": "alice@corp.example"},
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("connect refused lines mismatch (-want +got):\n%s", diff)
-	}
-	if strings.Contains(logs.String(), "mallory") {
-		t.Errorf("log contains the username:\n%s", logs.String())
-	}
-}
-
-func TestListProfilesIdentity(t *testing.T) {
-	type view struct {
-		UserLogin      bool   `json:"userLogin"`
-		Username       string `json:"username"`
-		UsernameLocked bool   `json:"usernameLocked"`
-	}
-	views := func(t *testing.T, env *testEnv) map[string]view {
-		t.Helper()
-		rec := env.do(t, http.MethodGet, "/api/profiles", "")
-		var list []struct {
-			Name string `json:"name"`
-			view
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-			t.Fatalf("decode profiles %q: %v", rec.Body, err)
-		}
-		m := map[string]view{}
-		for _, v := range list {
-			if v.Name == "dev" || v.Name == "people" || v.Name == "self" {
-				m[v.Name] = v.view
-			}
-		}
-		return m
-	}
-	env := newTestEnvWith(t, identityOptions)
-	env.header = http.Header{"X-User": {"alice@corp.example"}}
-	want := map[string]view{
-		"dev":    {},
-		"people": {UserLogin: true},
-		"self":   {UserLogin: true, Username: "alice", UsernameLocked: true},
-	}
-	if diff := cmp.Diff(want, views(t, env)); diff != "" {
-		t.Errorf("profiles with X-User mismatch (-want +got):\n%s", diff)
-	}
-	env.header = nil
-	want["self"] = view{UserLogin: true}
-	if diff := cmp.Diff(want, views(t, env)); diff != "" {
-		t.Errorf("profiles without X-User mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// TestIdentityCheckedEveryRequest checks that a connection made under a
-// trusted identity serves only requests with that identity: a request with
-// another one, or with none, drops the connection and gets 401
-// not_connected, which makes the UI ask to connect again.
-func TestIdentityCheckedEveryRequest(t *testing.T) {
-	tests := []struct {
-		name     string
-		remote   string
-		user     string // X-User of the request after the connect
-		wantDrop bool
-	}{
-		{name: "same identity", user: "alice@corp.example"},
-		{name: "other identity", user: "bob@corp.example", wantDrop: true},
-		{name: "untrusted remote", remote: "198.51.100.1:1234", user: "alice@corp.example", wantDrop: true},
-		{name: "no header", wantDrop: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var logs bytes.Buffer
-			opts := identityOptions
-			opts.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
-			env := newTestEnvWith(t, opts)
-			env.header = http.Header{"X-User": {"alice@corp.example"}}
-			connectTo(t, env, `{"profile":"self","username":"alice","password":"pw"}`)
-
-			env.remote, env.header = tc.remote, nil
-			if tc.user != "" {
-				env.header = http.Header{"X-User": {tc.user}}
-			}
-			rec := env.do(t, http.MethodGet, "/api/c/self/info", "")
-			if !tc.wantDrop {
-				if rec.Code != http.StatusOK || env.dir.closed {
-					t.Errorf("info with X-User %q = %d %s, closed %v, want 200 and the connection open", tc.user, rec.Code, rec.Body, env.dir.closed)
-				}
-				return
-			}
-			if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "not_connected" {
-				t.Errorf("info with X-User %q from %q = %d %s, want 401 not_connected", tc.user, tc.remote, rec.Code, rec.Body)
-			}
-			if !env.dir.closed {
-				t.Error("connection is open after a request with another identity, want it closed")
-			}
-			env.remote, env.header = "", http.Header{"X-User": {"alice@corp.example"}}
-			if rec := env.do(t, http.MethodGet, "/api/c/self/info", ""); rec.Code != http.StatusUnauthorized {
-				t.Errorf("info with X-User alice after the drop = %d %s, want 401", rec.Code, rec.Body)
-			}
-			found := withMsg(jsonLogs(t, &logs), "identity changed")
-			if len(found) != 1 || found[0]["profile"] != "self" || found[0]["bindDN"] != "uid=alice,ou=people,dc=example,dc=org" {
-				t.Errorf(`"identity changed" lines = %v, want one with profile self and alice's bindDN`, found)
-			}
-		})
-	}
-}
-
 // TestWriteLogsResolvedBindDN checks that a template connection's lines
 // carry the DN it bound as, not the template's empty bindDN.
 func TestWriteLogsResolvedBindDN(t *testing.T) {
@@ -1239,8 +1064,8 @@ func TestConnectThrottlePerAccount(t *testing.T) {
 		t.Errorf("connect as user002: %d dials, last as %q, want 6, the last as user002", env.dials, env.dialed.BindDN)
 	}
 	found := withMsg(jsonLogs(t, &logs), "connect throttled")
-	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1:1234" {
-		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q and remote 192.0.2.1:1234`, found, userDN)
+	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1" {
+		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q and remote 192.0.2.1`, found, userDN)
 	}
 	if strings.Contains(logs.String(), "secret-not-logged") {
 		t.Errorf("log contains the password:\n%s", logs.String())
@@ -1273,6 +1098,63 @@ func TestConnectThrottlePerServer(t *testing.T) {
 	}
 	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user001","password":"pw"}`); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("connect as user001 to ldap://people:389 after a success on ldap://other:389 = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// connectAs connects env to the people profile as username with a wrong
+// password and returns the response.
+func connectAs(t *testing.T, env *testEnv, username string) *httptest.ResponseRecorder {
+	t.Helper()
+	return env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"`+username+`","password":"wrong"}`)
+}
+
+// TestConnectThrottledPerClient checks that 20 wrong passwords from one
+// client, each for another account, refuse its 21st connect without
+// dialing, and that another client is still admitted.
+func TestConnectThrottledPerClient(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for i := range 20 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+1)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("connect %d as another account = %d %s, want 401", i+1, rec.Code, rec.Body)
+		}
+	}
+	rec := connectAs(t, env, "user021")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Errorf("21st connect from one client = %d %s, want 429 too_many_attempts", rec.Code, rec.Body)
+	}
+	if got := retryAfter(rec); got < 1 || got > 60 {
+		t.Errorf("21st connect from one client Retry-After = %q, want whole seconds in 1..60", rec.Header().Get("Retry-After"))
+	}
+	if env.dials != 20 {
+		t.Errorf("21 connects from one client: %d dials, want 20", env.dials)
+	}
+	env.remote = "198.51.100.1:1234"
+	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("connect from another client = %d %s, want 401", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectPerAccountRefusalNotCounted checks that a connect the
+// per-account limit refuses does not count against its client.
+func TestConnectPerAccountRefusalNotCounted(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for range 5 {
+		connectAs(t, env, "user001")
+	}
+	for range 30 {
+		if rec := connectAs(t, env, "user001"); rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("connect as user001 after 5 failures = %d %s, want 429", rec.Code, rec.Body)
+		}
+	}
+	for i := range 15 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+2)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("connect %d as another account after 5 failures and 30 refusals = %d %s, want 401", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := connectAs(t, env, "user017"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after 20 failures from one client = %d %s, want 429", rec.Code, rec.Body)
 	}
 }
 

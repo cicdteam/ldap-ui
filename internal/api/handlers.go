@@ -13,7 +13,6 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +33,13 @@ type server struct {
 	cookies  cookieOptions
 	log      *slog.Logger
 	// attempts counts wrong passwords per server and bind DN, keyed by
-	// serverKey and limiterKey.
+	// serverKey and limiterKey; clients counts them per client address,
+	// keyed "client|" and the address.
 	attempts *attemptLimiter
+	clients  *attemptLimiter
 
-	identityHeader string
+	// trustedProxies are the reverse proxies whose X-Forwarded-For names
+	// the client (see clientAddr).
 	trustedProxies []netip.Prefix
 }
 
@@ -49,17 +51,13 @@ type profileView struct {
 	HasPassword bool `json:"hasPassword"` // the server can bind without asking
 	Connected   bool `json:"connected"`
 	// UserLogin is set for a bindDNTemplate profile, which asks for a
-	// username. Under identityUser, Username is the one the caller's
-	// trusted identity allows, and UsernameLocked says it cannot be changed.
-	UserLogin      bool   `json:"userLogin"`
-	Username       string `json:"username,omitempty"`
-	UsernameLocked bool   `json:"usernameLocked"`
+	// username.
+	UserLogin bool `json:"userLogin"`
 }
 
-// view is p as the UI sees it. identity is the caller's trusted identity,
-// "" without one.
-func (s *server) view(p profile.Profile, editable bool, connected map[string]bool, identity string) profileView {
-	v := profileView{
+// view is p as the UI sees it.
+func (s *server) view(p profile.Profile, editable bool, connected map[string]bool) profileView {
+	return profileView{
 		Profile:     p,
 		ReadOnly:    p.IsReadOnly(),
 		Editable:    editable,
@@ -67,10 +65,6 @@ func (s *server) view(p profile.Profile, editable bool, connected map[string]boo
 		Connected:   connected[p.Name],
 		UserLogin:   p.UserLogin(),
 	}
-	if p.IdentityUser != "" && identity != "" {
-		v.Username, v.UsernameLocked = p.IdentityUsername(identity), true
-	}
-	return v
 }
 
 func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
@@ -84,13 +78,12 @@ func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 			connected[p.Name] = true
 		}
 	}
-	identity, _ := s.identity(r)
 	views := make([]profileView, 0, len(fixed)+len(saved))
 	for _, p := range fixed {
-		views = append(views, s.view(p, false, connected, identity))
+		views = append(views, s.view(p, false, connected))
 	}
 	for _, p := range saved {
-		views = append(views, s.view(p, true, connected, identity))
+		views = append(views, s.view(p, true, connected))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -123,7 +116,7 @@ func (s *server) saveProfile(w http.ResponseWriter, r *http.Request) {
 			"name", saved.Name, "oldURL", old.URL, "url", saved.URL,
 			"readOnly", saved.IsReadOnly(), "insecureSkipVerify", saved.InsecureSkipVerify,
 		}, s.who(r))...)
-		writeJSON(w, http.StatusOK, s.view(saved, true, nil, ""))
+		writeJSON(w, http.StatusOK, s.view(saved, true, nil))
 	}
 }
 
@@ -180,7 +173,7 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p.UserLogin() {
-		bound, ok := s.userLogin(w, r, p, req)
+		bound, ok := s.userLogin(w, p, req)
 		if !ok {
 			return
 		}
@@ -190,43 +183,54 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Only a typed password is limited: a wrong configured one would lock
-	// its DN for everyone. end is how a limited attempt ends, set from the
-	// dial: fail for a wrong password, succeed, else done. The defer ends it
-	// on every path, a panic included.
-	end := s.attempts.done
+	// its DN for everyone. A login counts against its client and its
+	// account, and both must admit it. end is how a limited attempt ends,
+	// set from the dial: fail for a wrong password, succeed, else done. The
+	// defer ends it on every path, a panic included.
+	end := (*attemptLimiter).done
 	if req.Password != "" && p.BindDN != "" {
-		// Per server, so that a success elsewhere, as on a server a saved
-		// profile points at, cannot clear this server's count.
-		key := serverKey(p.URL) + "|" + limiterKey(p.BindDN)
-		wait, ok := s.attempts.begin(key)
-		if !ok {
+		throttled := func(wait time.Duration, whose string) {
 			secs := int((wait + time.Second - 1) / time.Second) // rounded up
 			s.log.Info("connect throttled", s.attributed(r, p, "profile", p.Name)...)
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			writeError(w, http.StatusTooManyRequests, apiError{
 				Code:    "too_many_attempts",
-				Message: fmt.Sprintf("too many sign-in attempts for this account; try again in %d s", secs),
+				Message: fmt.Sprintf("too many sign-in attempts %s; try again in %d s", whose, secs),
 			})
+		}
+		// Whatever the profile, so that spraying many DNs from one client
+		// is caught.
+		client := "client|" + s.clientAddr(r).String()
+		wait, ok := s.clients.begin(client)
+		if !ok {
+			throttled(wait, "from this address")
 			return
 		}
-		defer func() { end(key) }()
+		// Per server, so that a success elsewhere, as on a server a saved
+		// profile points at, cannot clear this server's count.
+		key := serverKey(p.URL) + "|" + limiterKey(p.BindDN)
+		if wait, ok = s.attempts.begin(key); !ok {
+			s.clients.done(client)
+			throttled(wait, "for this account")
+			return
+		}
+		defer func() {
+			end(s.clients, client)
+			end(s.attempts, key)
+		}()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), p.ConnectTimeout+p.SearchTimeout)
 	defer cancel()
 	dir, err := s.dial(ctx, p, req.Password)
 	if err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			end = s.attempts.fail
+			end = (*attemptLimiter).fail
 		}
 		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
 		s.fail(w, err)
 		return
 	}
-	end = s.attempts.succeed
-	if p.IdentityUser != "" {
-		identity, _ := s.identity(r) // userLogin made sure there is one
-		dir = identityDir{Directory: dir, identity: identity}
-	}
+	end = (*attemptLimiter).succeed
 	// Every connect moves the browser to a new session ID, so an ID that
 	// leaked before it reaches no connection. The cookie is set before Put:
 	// a refused Put leaves the session, under its new ID, as it was.
@@ -246,39 +250,19 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 }
 
 // userLogin checks a connect to the bindDNTemplate profile p, in this
-// order: a username (400 username_required); under identityUser, a trusted
-// identity (403 identity_required) that maps to the username, compared
-// case-insensitively (403 identity_mismatch); a username the template
+// order: a username (400 username_required); a username the template
 // accepts (400 invalid_username); a password (400 password_required). It
 // returns p with BindDN set to the DN to bind as, or writes the refusal and
 // returns false, so that a template profile never binds anonymously:
 // RFC 4513 treats a bind with an empty password as unauthenticated, and
 // many servers accept it.
-func (s *server) userLogin(w http.ResponseWriter, r *http.Request, p profile.Profile, req connectRequest) (profile.Profile, bool) {
+func (s *server) userLogin(w http.ResponseWriter, p profile.Profile, req connectRequest) (profile.Profile, bool) {
 	refuse := func(status int, code, msg string) (profile.Profile, bool) {
 		writeError(w, status, apiError{Code: code, Message: msg})
 		return profile.Profile{}, false
 	}
-	// forbid is refuse for the identity checks, which are logged: they are
-	// about who may sign in, not a typo.
-	forbid := func(code, msg string) (profile.Profile, bool) {
-		s.log.Info("connect refused", s.attributed(r, p, "profile", p.Name, "code", code)...)
-		return refuse(http.StatusForbidden, code, msg)
-	}
 	if req.Username == "" {
 		return refuse(http.StatusBadRequest, "username_required", "this profile needs a username")
-	}
-	if p.IdentityUser != "" {
-		identity, ok := s.identity(r)
-		if !ok || identity == "" {
-			return forbid("identity_required", "this profile needs the user verified by the authenticating proxy")
-		}
-		// Equal byte lengths keep EqualFold to ASCII: BindDNFor below takes
-		// only ASCII usernames, and every non-ASCII rune that folds to an
-		// ASCII letter (the Kelvin sign, the long s) is longer.
-		if mapped := p.IdentityUsername(identity); len(mapped) != len(req.Username) || !strings.EqualFold(mapped, req.Username) {
-			return forbid("identity_mismatch", "the username must be the user the authenticating proxy verified")
-		}
 	}
 	dn, err := p.BindDNFor(req.Username)
 	if errors.Is(err, profile.ErrInvalidUsername) {
@@ -406,21 +390,10 @@ func (s *server) refs(w http.ResponseWriter, r *http.Request, list func(Director
 	writeJSON(w, http.StatusOK, m)
 }
 
-// identityDir is the connection of an identityUser profile with the
-// trusted identity its connect carried.
-type identityDir struct {
-	Directory
-	identity string
-}
-
 // directory returns the connection named by the {conn} path segment, or
 // writes an error and returns false. Without one in the browser's session,
 // a shared profile gets this process's connection, dialed by the first
-// request that needs it. A connection made under a trusted
-// identity serves only requests that carry the same identity, byte for
-// byte: any other request, for example from a shared browser after its
-// proxy sign-in switched to another person, drops the connection and gets
-// 401 not_connected, which makes the UI ask to connect again.
+// request that needs it.
 func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, bool) {
 	name := r.PathValue("conn")
 	d, err := s.sessions.Get(sessionID(r), name)
@@ -432,14 +405,6 @@ func (s *server) directory(w http.ResponseWriter, r *http.Request) (Directory, b
 	if err != nil {
 		s.fail(w, err)
 		return nil, false
-	}
-	if id, ok := d.(identityDir); ok {
-		if user, _ := s.identity(r); user != id.identity {
-			s.sessions.Drop(sessionID(r), name)
-			s.log.Info("identity changed", s.attributed(r, profile.Profile{BindDN: d.Info().BindDN}, "profile", name)...)
-			s.fail(w, session.ErrNotConnected)
-			return nil, false
-		}
 	}
 	return d, true
 }
