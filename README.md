@@ -352,8 +352,9 @@ password counts against both; a connect refused for its DN does not count
 against its address. Connects still waiting for the server count too, so a
 burst of them at once gets no more tries than the limit: a connect refused
 while those in flight fill it gets `Retry-After: 1`. A successful connect
-clears the counts of its DN and its address; other failures, such as a
-server that cannot be reached, do not count. The DN limit is per account on
+clears the count of its DN but not that of its address, so that one valid
+account cannot reset the count between guesses at others; other failures,
+such as a server that cannot be reached, do not count. The DN limit is per account on
 each server: it is keyed by the server and the bind DN (see below), and a
 successful connect as the same DN to another server does not clear it. The
 address limit is keyed by the client address the logs carry as `remote`:
@@ -439,7 +440,7 @@ The lines:
 | Message | Fields |
 |---|---|
 | `connected`, `connect failed` | `profile`, `bindDN`; `connected` adds `previous` (the `session` fingerprint of the cookie the request carried, empty without one) unless the profile is shared, `connect failed` adds `error` |
-| `connect throttled` | `profile`, `bindDN`: a connect refused with 429 `too_many_attempts`, for its DN or its client address |
+| `connect throttled` | `profile`, `limit` (`account` for its DN, `client` for its client address), `bindDN`: a connect refused with 429 `too_many_attempts` |
 | `disconnected` | `profile`, `bindDN` |
 | `modified` | `profile`, `dn`, `changes` (how many), `attrs` (the attribute of each change), `bindDN` |
 | `added` | `profile`, `dn`, `attributes` (how many), `bindDN` |
@@ -448,7 +449,7 @@ The lines:
 | `deleted` | `profile`, `dn`, `bindDN` |
 | `modify rejected`, `add rejected`, `rename rejected`, `password rejected`, `delete rejected` | the fields of the write, `code`, `ldapResultCode`, `bindDN`; an unexpected error also logs `<op> failed` with `error` |
 | `profile saved` | `name`, `oldURL` (empty for a new profile), `url`, `readOnly`, `insecureSkipVerify` |
-| `auth failed` | `remote` and `proxy` only: a request refused with 401 for a missing or wrong token |
+| `auth failed` | `remote` only, and `proxy` when it differs from `remote`: a request refused with 401 for a missing or wrong token |
 
 `bindDN` is the DN the connection bound as: the profile's `bindDN`, or for a
 `bindDNTemplate` profile the template with the username filled in; empty for
@@ -666,8 +667,9 @@ server {
 }
 ```
 
-Traefik (file provider) keeps the Host header and sets no body size limit
-or backend timeout by default:
+Traefik (file provider) keeps the Host header, sends `X-Forwarded-For` and
+sets no body size limit or backend timeout by default; run ldaplens as for
+nginx, with `LDAPLENS_TRUSTED_PROXIES=127.0.0.1`:
 
 ```yaml
 http:

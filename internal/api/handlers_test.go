@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1064,8 +1065,8 @@ func TestConnectThrottlePerAccount(t *testing.T) {
 		t.Errorf("connect as user002: %d dials, last as %q, want 6, the last as user002", env.dials, env.dialed.BindDN)
 	}
 	found := withMsg(jsonLogs(t, &logs), "connect throttled")
-	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1" {
-		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q and remote 192.0.2.1`, found, userDN)
+	if len(found) != 3 || found[0]["bindDN"] != userDN || found[0]["remote"] != "192.0.2.1" || found[0]["limit"] != "account" {
+		t.Errorf(`"connect throttled" lines = %v, want 3, the first with bindDN %q, remote 192.0.2.1 and limit account`, found, userDN)
 	}
 	if strings.Contains(logs.String(), "secret-not-logged") {
 		t.Errorf("log contains the password:\n%s", logs.String())
@@ -1110,9 +1111,11 @@ func connectAs(t *testing.T, env *testEnv, username string) *httptest.ResponseRe
 
 // TestConnectThrottledPerClient checks that 20 wrong passwords from one
 // client, each for another account, refuse its 21st connect without
-// dialing, and that another client is still admitted.
+// dialing, that the refusal is logged, and that another client is still
+// admitted.
 func TestConnectThrottledPerClient(t *testing.T) {
-	env := newTestEnv(t)
+	var logs bytes.Buffer
+	env := newTestEnvWith(t, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 	env.dialErr = invalidCredentials
 	for i := range 20 {
 		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+1)); rec.Code != http.StatusUnauthorized {
@@ -1129,9 +1132,75 @@ func TestConnectThrottledPerClient(t *testing.T) {
 	if env.dials != 20 {
 		t.Errorf("21 connects from one client: %d dials, want 20", env.dials)
 	}
+	found := withMsg(jsonLogs(t, &logs), "connect throttled")
+	if len(found) != 1 || found[0]["remote"] != "192.0.2.1" || found[0]["limit"] != "client" {
+		t.Errorf(`"connect throttled" lines = %v, want one with remote 192.0.2.1 and limit client`, found)
+	}
 	env.remote = "198.51.100.1:1234"
 	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("connect from another client = %d %s, want 401", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectSuccessKeepsClientCount checks that a successful connect does
+// not clear its client's failures, so that one valid account cannot reset
+// the count between guesses at others.
+func TestConnectSuccessKeepsClientCount(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = invalidCredentials
+	for i := range 19 {
+		connectAs(t, env, fmt.Sprintf("user%03d", i+1))
+	}
+	env.dialErr = nil
+	if rec := env.do(t, http.MethodPost, "/api/connect", `{"profile":"people","username":"user020","password":"right"}`); rec.Code != http.StatusOK {
+		t.Fatalf("connect as user020 after 19 failures = %d %s, want 200", rec.Code, rec.Body)
+	}
+	env.dialErr = invalidCredentials
+	if rec := connectAs(t, env, "user021"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("connect after 19 failures and a success = %d %s, want 401", rec.Code, rec.Body)
+	}
+	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after 20 failures and a success = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectUnreachableNotCounted checks that a connect failing for
+// another reason than a wrong password does not count against its client.
+func TestConnectUnreachableNotCounted(t *testing.T) {
+	env := newTestEnv(t)
+	env.dialErr = ldap.NewError(ldap.ErrorNetwork, errors.New("connection refused"))
+	for i := range 25 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+1)); rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("connect %d to an unreachable server = %d %s, want a dial", i+1, rec.Code, rec.Body)
+		}
+	}
+	env.dialErr = invalidCredentials
+	for i := range 20 {
+		if rec := connectAs(t, env, fmt.Sprintf("user%03d", i+26)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("wrong password %d after 25 unreachable = %d %s, want 401", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := connectAs(t, env, "user046"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("connect after 20 wrong passwords = %d %s, want 429", rec.Code, rec.Body)
+	}
+}
+
+// TestConnectClientsBehindProxy checks that two clients behind one trusted
+// proxy, told apart by X-Forwarded-For, are counted apart.
+func TestConnectClientsBehindProxy(t *testing.T) {
+	// httptest's remote, 192.0.2.1, is the proxy.
+	env := newTestEnvWith(t, Options{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}})
+	env.dialErr = invalidCredentials
+	env.header = http.Header{"X-Forwarded-For": {"203.0.113.7"}}
+	for i := range 20 {
+		connectAs(t, env, fmt.Sprintf("user%03d", i+1))
+	}
+	if rec := connectAs(t, env, "user021"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("21st connect from 203.0.113.7 = %d %s, want 429", rec.Code, rec.Body)
+	}
+	env.header = http.Header{"X-Forwarded-For": {"203.0.113.8"}}
+	if rec := connectAs(t, env, "user022"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("connect from 203.0.113.8 through the same proxy = %d %s, want 401", rec.Code, rec.Body)
 	}
 }
 

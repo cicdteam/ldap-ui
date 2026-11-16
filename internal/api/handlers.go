@@ -184,14 +184,17 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only a typed password is limited: a wrong configured one would lock
 	// its DN for everyone. A login counts against its client and its
-	// account, and both must admit it. end is how a limited attempt ends,
-	// set from the dial: fail for a wrong password, succeed, else done. The
-	// defer ends it on every path, a panic included.
-	end := (*attemptLimiter).done
+	// account, and both must admit it. endClient and endAccount end a
+	// limited attempt, set from the dial: fail for a wrong password, else
+	// done, but succeed for the account on a success. A success leaves the
+	// client's count, so that one valid account cannot reset it between
+	// guesses at others. The defer ends both on every path, a panic
+	// included.
+	endClient, endAccount := (*attemptLimiter).done, (*attemptLimiter).done
 	if req.Password != "" && p.BindDN != "" {
-		throttled := func(wait time.Duration, whose string) {
+		throttled := func(wait time.Duration, limit, whose string) {
 			secs := int((wait + time.Second - 1) / time.Second) // rounded up
-			s.log.Info("connect throttled", s.attributed(r, p, "profile", p.Name)...)
+			s.log.Info("connect throttled", s.attributed(r, p, "profile", p.Name, "limit", limit)...)
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			writeError(w, http.StatusTooManyRequests, apiError{
 				Code:    "too_many_attempts",
@@ -201,22 +204,22 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 		// Whatever the profile, so that spraying many DNs from one client
 		// is caught.
 		client := "client|" + s.clientAddr(r).String()
-		wait, ok := s.clients.begin(client)
-		if !ok {
-			throttled(wait, "from this address")
-			return
-		}
 		// Per server, so that a success elsewhere, as on a server a saved
 		// profile points at, cannot clear this server's count.
 		key := serverKey(p.URL) + "|" + limiterKey(p.BindDN)
+		wait, ok := s.clients.begin(client)
+		if !ok {
+			throttled(wait, "client", "from this address")
+			return
+		}
 		if wait, ok = s.attempts.begin(key); !ok {
 			s.clients.done(client)
-			throttled(wait, "for this account")
+			throttled(wait, "account", "for this account")
 			return
 		}
 		defer func() {
-			end(s.clients, client)
-			end(s.attempts, key)
+			endClient(s.clients, client)
+			endAccount(s.attempts, key)
 		}()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), p.ConnectTimeout+p.SearchTimeout)
@@ -224,13 +227,13 @@ func (s *server) connect(w http.ResponseWriter, r *http.Request) {
 	dir, err := s.dial(ctx, p, req.Password)
 	if err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			end = (*attemptLimiter).fail
+			endClient, endAccount = (*attemptLimiter).fail, (*attemptLimiter).fail
 		}
 		s.log.Info("connect failed", s.attributed(r, p, "profile", p.Name, "error", err)...)
 		s.fail(w, err)
 		return
 	}
-	end = (*attemptLimiter).succeed
+	endAccount = (*attemptLimiter).succeed
 	// Every connect moves the browser to a new session ID, so an ID that
 	// leaked before it reaches no connection. The cookie is set before Put:
 	// a refused Put leaves the session, under its new ID, as it was.
