@@ -47,6 +47,13 @@ describe('values', () => {
     expect(rdnDisplay('cn=Doe\\, John')).toBe('cn=Doe, John')
     expect(rdnValue('cn=a\\=b')).toBe('a=b')
   })
+
+  it('shows hidden characters in rdnDisplay only', () => {
+    const rdn = 'cn=\\E2\\80\\AEnimda'
+    expect(rdnDisplay(rdn)).toBe('cn=<U+202E>nimda')
+    expect(rdnValue(rdn)).toBe('\u202Enimda')
+    expect(normDN(rdn)).toBe('cn=\u202Enimda')
+  })
 })
 
 describe('relations', () => {

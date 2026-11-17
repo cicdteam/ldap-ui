@@ -7,8 +7,13 @@ const SAFE_INIT = /^[\x01-\x09\x0B\x0C\x0E-\x1F\x21-\x39\x3B\x3D-\x7F]/
 const SAFE = /^[\x01-\x09\x0B\x0C\x0E-\x7F]*$/
 const NON_ASCII = /[^\x00-\x7F]/
 /* eslint-enable no-control-regex */
-/** Characters a reader cannot see or that reorder text: controls, format (bidi, zero-width, BOM), line and paragraph separators. */
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+/**
+ * Characters a reader cannot see or that reorder text: controls, format (bidi, zero-width, BOM),
+ * line and paragraph separators, default-ignorables (variation selectors, fillers), private use
+ * and unassigned code points. No g flag: test() keeps no state.
+ */
+export const HIDDEN =
+  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Co}\P{Assigned}]/u
 
 /** RFC 4512 attribute description: a name or numeric OID, then options (;lang-de, ;binary, AD's ;range=0-1499). */
 const ATTR_DESCRIPTION = /^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)(;[A-Za-z0-9=*-]+)*$/

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { api } from '../../lib/api'
 import { batches } from '../../lib/batchStore'
 import { dropEntry, toLDIF, touchedAttributes, type EntryChanges } from '../../lib/changes'
+import { visible } from '../../lib/display'
 import { afterApply, canApply, errorText, invalidCount } from '../../lib/review'
 import { changesIn } from '../../lib/status'
 import type { ApplyRequest } from '../../lib/types'
@@ -139,7 +140,7 @@ function EntryBlock({ conn, ec, applying }: { conn: string; ec: EntryChanges; ap
       className={cn('space-y-1 rounded-md border p-2', error ? 'border-danger' : 'border-border')}
     >
       <div className="flex items-center gap-1">
-        <span className="min-w-0 flex-1 font-mono text-xs break-all">{ec.dn}</span>
+        <span className="min-w-0 flex-1 font-mono text-xs break-all">{visible(ec.dn)}</span>
         <CopyButton text={ldif} label={`Copy LDIF for ${ec.dn}`} title={COPY_LDIF_HINT} />
         <Button
           size="sm"

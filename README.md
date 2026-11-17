@@ -189,7 +189,9 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   the entry, and focus moves to the card's heading (to the tree with no entry
   open). Pane sizes are
   remembered separately with the list and without it. With no entry
-  selected, the card says so.
+  selected, the card says so. Invisible and direction-changing characters in
+  names and DNs (a right-to-left override, a zero-width space) show as
+  `<U+XXXX>`, such as `<U+202E>`; Copy DN, LDIF and writes use the real value.
 - **List children** (the list icon on a container in the tree, or "List
   children of the current entry" in the command palette): lists the entries
   one level under it, with the default columns. The search bar keeps its own
@@ -297,7 +299,7 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   groups with the "via" group; LDIF shows the
   entry as LDIF (non-ASCII text such as Cyrillic names is shown decoded, marked
   `utf-8`, here and in the Review and entry action dialogs; values with edge spaces,
-  line breaks, control or invisible characters stay base64; Copy LDIF and
+  line breaks, control, invisible, private-use or unassigned characters stay base64; Copy LDIF and
   downloads keep base64, as RFC 2849 requires).
   The Members list appears for groups that use `member` or
   `uniqueMember` (not for a posixGroup's `memberUid`); Member of also lists

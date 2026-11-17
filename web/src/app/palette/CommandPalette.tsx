@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { api, errorMessage } from '../../lib/api'
 import { looksLikeDN, rdnDisplay, splitDN } from '../../lib/dn'
+import { visible } from '../../lib/display'
 import { canSetPassword, stagedHint, stagedUnder } from '../../lib/entryOps'
 import { getPrefs, nextTheme, setPrefs } from '../../lib/prefs'
 import { keyLabel } from '../../lib/shortcuts'
@@ -252,8 +253,10 @@ export function CommandPalette({
                   {row(
                     <Icon className="h-4 w-4 shrink-0 text-muted" />,
                     <>
-                      {get('displayname') ?? get('cn') ?? (first ? rdnDisplay(first) : e.dn)}
-                      <span className="ml-2 font-mono text-[11px] text-muted">{e.dn}</span>
+                      {visible(
+                        get('displayname') ?? get('cn') ?? (first ? rdnDisplay(first) : e.dn),
+                      )}
+                      <span className="ml-2 font-mono text-[11px] text-muted">{visible(e.dn)}</span>
                     </>,
                     get('mail') && <span className="text-xs text-muted">{get('mail')}</span>,
                   )}

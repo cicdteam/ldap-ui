@@ -3,6 +3,8 @@
 // case-insensitive attributes DNs use in practice. It does not apply full
 // schema-aware normalization (OID vs name types, multi-valued RDN order).
 
+import { visible } from './display'
+
 /** Removes unescaped spaces around an RDN ("cn=a , dc=x" from sloppy input). */
 function trimRDN(s: string): string {
   let r = s.trimStart()
@@ -83,10 +85,10 @@ export function rdnValue(rdn: string): string {
   return unescapeDNValue(i < 0 ? rdn : rdn.slice(i + 1))
 }
 
-/** "cn=Doe, John" for "cn=Doe\, John": readable, not for sending back. */
+/** "cn=Doe, John" for "cn=Doe\, John", hidden characters as <U+XXXX>: readable, not for sending back. */
 export function rdnDisplay(rdn: string): string {
   const t = rdnType(rdn)
-  return t ? `${t}=${rdnValue(rdn)}` : rdnValue(rdn)
+  return visible(t ? `${t}=${rdnValue(rdn)}` : rdnValue(rdn))
 }
 
 /** Comparison key; "\" and "," are re-escaped so keys join without ambiguity. */
