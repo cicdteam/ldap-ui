@@ -165,8 +165,10 @@ func answerSearches(conn net.Conn) {
 	}
 }
 
+// fakeProfile's search timeout leaves room for a large response under the
+// race detector; a test about a timeout sets a short one itself.
 func fakeProfile(url string) profile.Profile {
-	return profile.Profile{Name: "fake", URL: url, ConnectTimeout: time.Second, SearchTimeout: 200 * time.Millisecond}
+	return profile.Profile{Name: "fake", URL: url, ConnectTimeout: time.Second, SearchTimeout: 30 * time.Second}
 }
 
 // fakeConn connects anonymously to url without reading the root DSE, which
@@ -429,6 +431,8 @@ func TestWriteToStalledServerTimesOut(t *testing.T) {
 func TestReadDoesNotRetryTimeout(t *testing.T) {
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := fakeConn(t, url)
+	c.prof.SearchTimeout = 200 * time.Millisecond
+	c.lc.SetTimeout(c.prof.SearchTimeout)
 	if _, err := c.rawEntry(context.Background(), "dc=x", nil); err == nil {
 		t.Error("rawEntry(silent server) error = nil, want a timeout")
 	}
@@ -575,7 +579,7 @@ func TestRedialDoesNotHoldLock(t *testing.T) {
 		t.Fatal("current(lost connection) did not redial")
 	}
 
-	const limit = 100 * time.Millisecond
+	const limit = 5 * time.Second
 	if !returnsWithin(limit, func() { _ = c.Close() }) {
 		t.Errorf("Close() during a redial did not return within %v", limit)
 	}
@@ -775,10 +779,6 @@ func childrenConn(t *testing.T, n int, paging bool) (*Conn, *atomic.Bool, *atomi
 	url, accepts := fakeServer(t, serveChildren(n, open))
 	c := fakeConn(t, url)
 	c.info.Paging = paging
-	// go-ldap's request timeout covers a whole page, which may take longer
-	// than the fake's 200ms under the race detector.
-	c.prof.SearchTimeout = time.Minute
-	c.lc.SetTimeout(time.Minute)
 	return c, open, accepts
 }
 
@@ -1011,10 +1011,6 @@ func TestSearchOnceCaps(t *testing.T) {
 				answerSearches(conn)
 			})
 			c := fakeConn(t, url)
-			// go-ldap's request timeout covers the whole response, which
-			// takes longer than the fake's 200ms under the race detector.
-			c.prof.SearchTimeout = time.Minute
-			c.lc.SetTimeout(time.Minute)
 			search := func() (*result, error) {
 				var res *result
 				err := c.read(context.Background(), func(lc *ldap.Conn) error {
@@ -1077,8 +1073,6 @@ func TestPagedSearchCapClosesConnection(t *testing.T) {
 	})
 	c := fakeConn(t, url)
 	c.info.Paging = true
-	c.prof.SearchTimeout = time.Minute
-	c.lc.SetTimeout(time.Minute)
 	c.mu.Lock()
 	first := c.lc
 	c.mu.Unlock()

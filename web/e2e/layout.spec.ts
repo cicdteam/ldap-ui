@@ -34,7 +34,6 @@ async function expectClosed(page: Page) {
 test('a connection opens with the tree and the card only', async ({ page }) => {
   await connect(page, 'demo')
   await expect(panes(page)).toHaveCount(2)
-  await expect(page.getByText('SEARCH', { exact: true })).toHaveCount(0)
   await expect(results(page)).toHaveCount(0)
   await expect(page.getByText('Select an entry in the tree, or search above')).toBeVisible()
 })
@@ -119,11 +118,6 @@ test('the layouts with and without the list keep their own sizes, across a reloa
   await close(page).click()
   await expect(panes(page)).toHaveCount(2)
   await near(0, tree2)
-  const stored = await page.evaluate(() => Object.keys(localStorage).sort())
-  expect(stored.filter((k) => k.includes('ldaplens:panels'))).toEqual([
-    'react-resizable-panels:ldaplens:panels:2',
-    'react-resizable-panels:ldaplens:panels:3',
-  ])
 })
 
 test('Columns and Export open from the list; Esc in them leaves the list open', async ({

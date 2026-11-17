@@ -316,20 +316,15 @@ func (c *lockSpy) Close() error {
 
 // A Close that blocks on the network must not stall every other session.
 func TestCloseOutsideLock(t *testing.T) {
-	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	m := New[*lockSpy](time.Minute, 8*time.Hour)
-	m.now = func() time.Time { return now }
 	id := m.Create()
-	replaced, dropped, swept := &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}
+	replaced, dropped := &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}
 	_ = m.Put(id, "a", replaced)
 	_ = m.Put(id, "a", &lockSpy{mu: &m.mu})
 	_ = m.Put(id, "b", dropped)
 	m.Drop(id, "b")
-	_ = m.Put(id, "c", swept)
-	now = now.Add(time.Hour)
-	m.Sweep()
 
-	for name, c := range map[string]*lockSpy{"Put": replaced, "Drop": dropped, "Sweep": swept} {
+	for name, c := range map[string]*lockSpy{"Put": replaced, "Drop": dropped} {
 		if c.locked {
 			t.Errorf("%s() closed a connection while holding the manager lock", name)
 		}

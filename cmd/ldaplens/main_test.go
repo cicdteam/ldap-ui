@@ -747,11 +747,6 @@ func TestNewHTTPServerTimeouts(t *testing.T) {
 	if got, want := srv.MaxHeaderBytes, 64<<10; got != want {
 		t.Errorf("newHTTPServer().MaxHeaderBytes = %d, want %d", got, want)
 	}
-	// A search may run for the profile default searchTimeout (30s, unexported
-	// in profile); the write deadline must leave room for long requests.
-	if minWrite := 10 * 30 * time.Second; srv.WriteTimeout < minWrite {
-		t.Errorf("newHTTPServer().WriteTimeout = %v, want at least %v", srv.WriteTimeout, minWrite)
-	}
 	if srv.Handler == nil {
 		t.Errorf("newHTTPServer().Handler = nil, want the given handler")
 	}

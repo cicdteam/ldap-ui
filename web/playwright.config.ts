@@ -5,6 +5,7 @@ export default defineConfig({
   testDir: 'e2e',
   workers: 1,
   fullyParallel: false,
+  forbidOnly: !!process.env.CI,
   timeout: 30_000,
   expect: { timeout: 8_000 },
   globalSetup: './e2e/global-setup.ts',
