@@ -151,6 +151,16 @@ func TestWritesRefuseBadBase64(t *testing.T) {
 	}
 }
 
+func TestModifyUnknownOp(t *testing.T) {
+	// As above, ErrInvalidRequest on a closed Conn shows the operation was
+	// refused before a request reached the connection.
+	c := &Conn{closed: true}
+	err := c.Modify(context.Background(), "uid=x", []Change{{Op: "increment", Attr: "mail", Values: []string{"x"}}})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("Modify(increment) error = %v, want ErrInvalidRequest", err)
+	}
+}
+
 func TestReplaceBinaryDeletes(t *testing.T) {
 	const photo, other, next = "\xff\xd8\xff photo", "\xff\xd8\xff other", "\xff\xd8\xff next"
 	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }

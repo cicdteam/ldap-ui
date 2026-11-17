@@ -262,11 +262,12 @@ func TestDialUntrustedCertificate(t *testing.T) {
 	}
 }
 
-// TestIdleTLSConnectionSurvivesConnectTimeout checks that the connect-phase
-// deadline does not outlive connect over TLS either: an ldaps:// or StartTLS
+// TestIdleConnectionSurvivesConnectTimeout checks that the connect-phase
+// deadline does not outlive connect: an ldap://, ldaps:// or StartTLS
 // connection idle for longer than the connect timeout still serves a search,
 // without a redial.
-func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
+func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
+	t.Parallel()
 	cert, caPEM := selfSignedCert(t)
 	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	ldaps := func(_ int32, conn net.Conn) {
@@ -288,16 +289,18 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 		startTLS bool
 		serve    func(int32, net.Conn)
 	}{
+		{name: "ldap", scheme: "ldap", serve: func(_ int32, conn net.Conn) { answerSearches(conn) }},
 		{name: "ldaps", scheme: "ldaps", serve: ldaps},
 		{name: "StartTLS", scheme: "ldap", startTLS: true, serve: startTLS},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			url, accepts := fakeServer(t, tc.serve)
 			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
 			p.StartTLS = tc.startTLS
 			p.CAPEM = caPEM
-			p.ConnectTimeout = 300 * time.Millisecond
+			p.ConnectTimeout = 100 * time.Millisecond
 			cfg, err := p.TLSConfig()
 			if err != nil {
 				t.Fatalf("TLSConfig() error = %v", err)
@@ -308,7 +311,7 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 			}
 			c := &Conn{prof: p, lc: lc}
 			defer c.Close()
-			time.Sleep(time.Second)
+			time.Sleep(300 * time.Millisecond)
 			if lc.IsClosing() {
 				t.Error("connection closed while idle, want it open past the connect timeout")
 			}
@@ -330,6 +333,7 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 // StartTLS failure into ErrorNetwork text, and a StartTLS request timeout
 // was ErrorNetwork before connect had a deadline.
 func TestConnectTimeoutErrors(t *testing.T) {
+	t.Parallel()
 	silent := func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
 	stallHandshake := func(n int32, conn net.Conn) {
 		id, err := readRequest(conn)
@@ -390,6 +394,7 @@ func TestConnectTimeoutErrors(t *testing.T) {
 // not read fails after the search timeout, and that the connection is then
 // closed: a request cut off midway leaves the stream unusable.
 func TestWriteToStalledServerTimesOut(t *testing.T) {
+	t.Parallel()
 	read, hungUp := make(chan struct{}), make(chan struct{})
 	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
 		<-read
@@ -429,6 +434,7 @@ func TestWriteToStalledServerTimesOut(t *testing.T) {
 }
 
 func TestReadDoesNotRetryTimeout(t *testing.T) {
+	t.Parallel()
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := fakeConn(t, url)
 	c.prof.SearchTimeout = 200 * time.Millisecond
@@ -692,6 +698,7 @@ func TestSearchTimeLimit(t *testing.T) {
 // hand its connection back to the shared slot: go-ldap sends no Abandon, so
 // the paged search may still be running on it.
 func TestPagedSearchClosesConnectionOnFirstPageError(t *testing.T) {
+	t.Parallel()
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := fakeConn(t, url)
 	c.info.Paging = true
@@ -851,6 +858,30 @@ func TestSearchNoPagingLimit(t *testing.T) {
 	checkChildren(t, page.Entries, 500)
 	if !page.More || page.Truncated {
 		t.Errorf("Search(600 children, no paging, sizeLimit 500) = more %v, truncated %v; want more, not truncated", page.More, page.Truncated)
+	}
+}
+
+func TestSearchCanceled(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
+	c := fakeConn(t, url)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Search(ctx, SearchRequest{BaseDN: "dc=x"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Search(canceled) error = %v, want context.Canceled", err)
+	}
+}
+
+// TestAllDNsPassesMaxRefs checks that allDNs at the group index limit
+// returns every match, past maxRefs and over pages, without truncation:
+// the group list of Members(nested) is not held to the membership cap.
+func TestAllDNsPassesMaxRefs(t *testing.T) {
+	n := maxRefs + 2000
+	c, _, _ := childrenConn(t, n, true)
+	c.info.BaseDN = "dc=x"
+	dns, truncated, err := c.allDNs(context.Background(), "(objectClass=*)", maxGroupIndex)
+	if err != nil || len(dns) != n || truncated {
+		t.Errorf("allDNs(%d entries, limit %d) = %d DNs truncated %v, %v; want %d not truncated",
+			n, maxGroupIndex, len(dns), truncated, err, n)
 	}
 }
 
