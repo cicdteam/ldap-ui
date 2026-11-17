@@ -142,6 +142,30 @@ people 001-040 bind with `Demo-Passw0rd!`, 041-045 are disabled). The
 directories reset on every start. `make demo-stop` stops it; `make demo-start DEMO_PORT=8090` picks another port.
 `make help` lists all targets.
 
+### Verify the image
+
+Release images are built only from `v*` tags on `main`, and each carries a
+signed build provenance (a GitHub artifact attestation) and an SBOM. Check
+that an image came from this repository's workflow and release tag with the
+[GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify oci://ghcr.io/cicdteam/ldaplens:<version> \
+  --repo cicdteam/ldaplens \
+  --signer-workflow cicdteam/ldaplens/.github/workflows/ci.yml \
+  --source-ref refs/tags/v<version>
+```
+
+The SBOM (SPDX) is attached to the image:
+
+```sh
+docker buildx imagetools inspect ghcr.io/cicdteam/ldaplens:<version> --format '{{json .SBOM}}'
+```
+
+Tags can be moved, digests cannot: in Kubernetes manifests, pin the verified
+image by digest, `ghcr.io/cicdteam/ldaplens@sha256:...` (the `Digest:` that
+`docker buildx imagetools inspect ghcr.io/cicdteam/ldaplens:<version>` prints).
+
 ## Using the UI
 
 - **Connections** (`/`): profiles from `connections.yaml` (marked `yaml`) and
@@ -969,7 +993,8 @@ in only the ingress controller (ingress-nginx here: adjust the labels to
 yours). Server mode writes nothing, so there is no volume. `args` start with
 `server`, because arguments replace the image's default. The Ingress, with
 its affinity cookie, is under [Behind a reverse
-proxy](#behind-a-reverse-proxy). Pin the image by digest in production.
+proxy](#behind-a-reverse-proxy). Pin the image by digest in production
+(see [Verify the image](#verify-the-image)).
 ingress-nginx logs the query string by default, so a login link
 (`/?token=...`) lands in its access log: log the path only with its
 `log-format-upstream` (`$uri` in place of `$request`), or have an
