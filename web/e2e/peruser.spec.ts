@@ -1,5 +1,5 @@
 import { connect, connectDialog, signIn } from './helpers'
-import { expect, test, type Page } from './test'
+import { expect, test, watch, type Page } from './test'
 
 // The bindDNTemplate profiles people (OpenLDAP demo data: userNNN, secretNNN) and ad-people
 // (Samba demo data: UPN userNNN@corp.example.test, Demo-Passw0rd!) in
@@ -28,6 +28,7 @@ test('two people sign in to one profile', async ({ page, browser }) => {
   await expect(password).toHaveAttribute('required', '')
 
   const other = await browser.newContext()
+  const checkOther = await watch(other)
   try {
     const page2 = await other.newPage()
     await signIn(page, 'people', { username: 'user001', password: 'secret001' })
@@ -41,6 +42,7 @@ test('two people sign in to one profile', async ({ page, browser }) => {
     await page.reload()
     await expect(page.getByRole('treeitem', { name: /^ou=people/ })).toBeVisible()
     await expect(signedIn(page, person('001'))).toBeVisible()
+    await checkOther()
   } finally {
     await other.close()
   }
