@@ -1311,7 +1311,8 @@ journald keeps the login link it logs at every start. Passwords for
 ## Development
 
 `make check` runs Go fmt, vet, lint, vuln and unit tests plus the web checks
-(`make web-check`: typecheck, ESLint, Prettier, Vitest, npm audit).
+(`make web-check`: typecheck, ESLint, Prettier, Vitest, npm audit of the
+production dependencies).
 `make test-integration` needs Docker; it runs OpenLDAP and Samba AD. `make
 web` builds the UI into `web/dist`, which the Go binary embeds (`make build`
 does both).

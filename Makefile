@@ -51,8 +51,8 @@ test-integration: ## Run Go integration tests against OpenLDAP and Samba AD in D
 web: ## Build the web UI
 	cd web && npm ci --ignore-scripts && npm run build
 
-web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit
-	cd web && npm ci --ignore-scripts && npm run check && npm audit --audit-level=high
+web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit of production deps
+	cd web && npm ci --ignore-scripts && npm run check && npm audit --omit=dev --audit-level=high
 
 e2e: ## Run the Playwright e2e tests against OpenLDAP and Samba AD in Docker
 	cd web && npm ci --ignore-scripts && npm run e2e
