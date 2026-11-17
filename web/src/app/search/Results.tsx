@@ -396,7 +396,7 @@ function Listing({ search }: { search: SearchState }) {
                   id={`result-${v.index}`}
                   role="row"
                   aria-selected={selected}
-                  title={e.dn}
+                  title={visible(e.dn)}
                   onClick={() => ws.select(e.dn)}
                   style={{ ...grid, height: v.size }}
                   className={cn(

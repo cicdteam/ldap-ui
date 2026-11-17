@@ -6,6 +6,7 @@ import { api, errorMessage } from '../../lib/api'
 import { batches } from '../../lib/batchStore'
 import { applied, entryChanges } from '../../lib/changes'
 import { looksLikeDN, parentDN, rdnDisplay, splitDN } from '../../lib/dn'
+import { visible } from '../../lib/display'
 import {
   filterRefs,
   groupFilter,
@@ -41,11 +42,11 @@ function DNButton({ dn, onSelect }: { dn: string; onSelect: (dn: string) => void
     <button
       type="button"
       onClick={() => onSelect(dn)}
-      title={dn}
+      title={visible(dn)}
       className="min-w-0 truncate text-left hover:underline"
     >
-      <span className="text-accent-text">{first ? rdnDisplay(first) : dn}</span>
-      <span className="ml-1 font-mono text-[11px] text-muted">{parentDN(dn)}</span>
+      <span className="text-accent-text">{first ? rdnDisplay(first) : visible(dn)}</span>
+      <span className="ml-1 font-mono text-[11px] text-muted">{visible(parentDN(dn))}</span>
     </button>
   )
 }
