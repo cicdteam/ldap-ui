@@ -25,7 +25,8 @@ var testAttrs = []string{
 
 var testClasses = []string{
 	"( 2.5.6.0 NAME 'top' DESC 'top of the superclass chain' ABSTRACT MUST objectClass )",
-	"( 2.5.6.6 NAME 'person' DESC 'RFC2256: a person' SUP top STRUCTURAL MUST ( sn $ cn ) MAY ( userPassword $ telephoneNumber $ seeAlso $ description ) )",
+	// person has no kind keyword: STRUCTURAL is the default.
+	"( 2.5.6.6 NAME 'person' DESC 'RFC2256: a person' SUP top MUST ( sn $ cn ) MAY ( userPassword $ telephoneNumber $ seeAlso $ description ) )",
 	"( 2.5.6.7 NAME 'organizationalPerson' DESC 'RFC2256: an organizational person' SUP person STRUCTURAL MAY ( title $ x121Address ) )",
 	"( 1.1.2 NAME 'extra' SUP top AUXILIARY MAY (cn$mail) )",
 }
@@ -53,13 +54,20 @@ func TestParseAttributeType(t *testing.T) {
 
 func TestParseObjectClass(t *testing.T) {
 	s := Parse(testAttrs, testClasses, nil)
-	got, ok := s.ObjectClass("extra")
-	if !ok {
-		t.Fatal("ObjectClass(extra) not found")
+	want := []*ObjectClass{
+		{OID: "2.5.6.0", Names: []string{"top"}, Desc: "top of the superclass chain", Kind: Abstract, Must: []string{"objectClass"}},
+		{
+			OID: "2.5.6.6", Names: []string{"person"}, Desc: "RFC2256: a person", Sup: []string{"top"}, Kind: Structural,
+			Must: []string{"sn", "cn"}, May: []string{"userPassword", "telephoneNumber", "seeAlso", "description"},
+		},
+		{
+			OID: "2.5.6.7", Names: []string{"organizationalPerson"}, Desc: "RFC2256: an organizational person",
+			Sup: []string{"person"}, Kind: Structural, May: []string{"title", "x121Address"},
+		},
+		{OID: "1.1.2", Names: []string{"extra"}, Sup: []string{"top"}, Kind: Auxiliary, May: []string{"cn", "mail"}},
 	}
-	want := &ObjectClass{OID: "1.1.2", Names: []string{"extra"}, Sup: []string{"top"}, Kind: Auxiliary, May: []string{"cn", "mail"}}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("ObjectClass(extra) mismatch (-want +got):\n%s", diff)
+	if diff := cmp.Diff(want, s.ObjectClasses); diff != "" {
+		t.Errorf("Parse() ObjectClasses mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -69,14 +77,13 @@ func TestSyntaxHelpers(t *testing.T) {
 		name       string
 		wantSyntax string
 		wantBinary bool
-		wantDN     bool
 	}{
 		{name: "cn", wantSyntax: "1.3.6.1.4.1.1466.115.121.1.15"},
-		{name: "member", wantSyntax: SyntaxDN, wantDN: true},
+		{name: "member", wantSyntax: "1.3.6.1.4.1.1466.115.121.1.12"},
 		{name: "jpegPhoto", wantSyntax: "1.3.6.1.4.1.1466.115.121.1.28", wantBinary: true},
 		{name: "userCertificate;binary", wantBinary: true},
 		{name: "sAMAccountName", wantSyntax: "1.3.6.1.4.1.1466.115.121.1.15"},
-		{name: "member;range=0-1499", wantSyntax: SyntaxDN, wantDN: true},
+		{name: "member;range=0-1499", wantSyntax: "1.3.6.1.4.1.1466.115.121.1.12"},
 		{name: "unknownAttr"},
 	}
 	for _, tc := range tests {
@@ -86,21 +93,6 @@ func TestSyntaxHelpers(t *testing.T) {
 		if got := s.IsBinary(tc.name); got != tc.wantBinary {
 			t.Errorf("IsBinary(%q) = %v, want %v", tc.name, got, tc.wantBinary)
 		}
-		if got := s.IsDN(tc.name); got != tc.wantDN {
-			t.Errorf("IsDN(%q) = %v, want %v", tc.name, got, tc.wantDN)
-		}
-	}
-}
-
-func TestAllowed(t *testing.T) {
-	s := Parse(testAttrs, testClasses, nil)
-	must, may := s.Allowed([]string{"organizationalPerson", "PERSON", "extra", "unknownClass"})
-	if diff := cmp.Diff([]string{"objectClass", "sn", "cn"}, must); diff != "" {
-		t.Errorf("Allowed() must mismatch (-want +got):\n%s", diff)
-	}
-	wantMay := []string{"userPassword", "telephoneNumber", "seeAlso", "description", "title", "x121Address", "mail"}
-	if diff := cmp.Diff(wantMay, may); diff != "" {
-		t.Errorf("Allowed() may mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -125,42 +117,22 @@ func TestParseMalformed(t *testing.T) {
 	}
 }
 
-// TestAllowedContentRules mirrors Active Directory, where entries list only
+// TestParseContentRule mirrors Active Directory, where entries list only
 // structural classes and the auxiliary classes come from dITContentRules.
-func TestAllowedContentRules(t *testing.T) {
-	attrs := []string{
-		"( 2.5.4.0 NAME 'objectClass' SYNTAX '1.3.6.1.4.1.1466.115.121.1.38' )",
-		"( 2.5.4.3 NAME 'cn' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15' SINGLE-VALUE )",
-		"( 2.5.4.12 NAME 'title' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15' SINGLE-VALUE )",
-		"( 2.5.4.24 NAME 'x121Address' SYNTAX '1.3.6.1.4.1.1466.115.121.1.36' )",
-		"( 0.9.2342.19200300.100.1.3 NAME 'mail' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15' SINGLE-VALUE )",
-		"( 1.2.840.113556.1.4.146 NAME 'objectSid' SYNTAX '1.3.6.1.4.1.1466.115.121.1.40' SINGLE-VALUE )",
-		"( 1.2.840.113556.1.4.609 NAME 'sIDHistory' SYNTAX '1.3.6.1.4.1.1466.115.121.1.40' )",
-		"( 1.2.840.113556.1.4.221 NAME 'sAMAccountName' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15' SINGLE-VALUE )",
-		"( 1.2.840.113556.1.2.81 NAME 'info' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15' SINGLE-VALUE )",
-		"( 1.2.840.113556.1.2.156 NAME 'comment' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15' SINGLE-VALUE )",
-	}
-	classes := []string{
-		"( 2.5.6.0 NAME 'top' ABSTRACT MUST (objectClass ) )",
-		"( 2.5.6.6 NAME 'person' SUP top STRUCTURAL MUST (cn ) )",
-		"( 2.5.6.7 NAME 'organizationalPerson' SUP person STRUCTURAL MAY (title $ x121Address ) )",
-		"( 1.2.840.113556.1.5.9 NAME 'user' SUP organizationalPerson STRUCTURAL )",
-		"( 1.2.840.113556.1.3.46 NAME 'mailRecipient' SUP top AUXILIARY MAY (mail ) )",
-		"( 1.2.840.113556.1.5.6 NAME 'securityPrincipal' SUP top AUXILIARY MUST (objectSid ) MAY (sIDHistory ) )",
-	}
+func TestParseContentRule(t *testing.T) {
 	rules := []string{
 		"( 1.2.840.113556.1.5.9 NAME 'user' AUX ( mailRecipient $ securityPrincipal ) MUST ( objectSid $ sAMAccountName ) MAY ( info $ comment ) NOT ( x121Address ) )",
 		"( 1.2.840.113556.1.5.8 NAME 'group' AUX ( mailRecipient",
 	}
-	s := Parse(attrs, classes, rules)
-	if len(s.ContentRules) != 1 || len(s.Skipped) != 1 {
-		t.Errorf("Parse() = %d content rules, skipped %q, want 1 rule and the broken group rule skipped", len(s.ContentRules), s.Skipped)
+	s := Parse(nil, nil, rules)
+	want := []*ContentRule{{
+		OID: "1.2.840.113556.1.5.9", Names: []string{"user"}, Aux: []string{"mailRecipient", "securityPrincipal"},
+		Must: []string{"objectSid", "sAMAccountName"}, May: []string{"info", "comment"}, Not: []string{"x121Address"},
+	}}
+	if diff := cmp.Diff(want, s.ContentRules); diff != "" {
+		t.Errorf("Parse() ContentRules mismatch (-want +got):\n%s", diff)
 	}
-	must, may := s.Allowed([]string{"top", "person", "organizationalPerson", "user"})
-	if diff := cmp.Diff([]string{"objectClass", "cn", "objectSid", "sAMAccountName"}, must); diff != "" {
-		t.Errorf("Allowed() must mismatch (-want +got):\n%s", diff)
-	}
-	if diff := cmp.Diff([]string{"title", "mail", "sIDHistory", "info", "comment"}, may); diff != "" {
-		t.Errorf("Allowed() may mismatch (-want +got):\n%s", diff)
+	if len(s.Skipped) != 1 {
+		t.Errorf("Parse() skipped %q, want the broken group rule", s.Skipped)
 	}
 }

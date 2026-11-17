@@ -35,6 +35,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/openldap"
 
 	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 const (
@@ -253,13 +254,25 @@ func TestSchemaFromServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schema() error = %v", err)
 	}
-	must, _ := s.Allowed([]string{"inetOrgPerson"})
-	if !slices.Contains(must, "cn") || !slices.Contains(must, "sn") {
-		t.Errorf("Allowed(inetOrgPerson) must = %v, want cn and sn", must)
+	if objectClass(s, "inetOrgPerson") == nil {
+		t.Error("Schema() has no inetOrgPerson class")
 	}
-	if !s.IsDN("member") {
-		t.Error("IsDN(member) = false, want true")
+	if oc := objectClass(s, "person"); oc == nil || !slices.Contains(oc.Must, "cn") || !slices.Contains(oc.Must, "sn") {
+		t.Errorf("Schema() person = %+v, want MUST cn and sn", oc)
 	}
+	if got, want := s.Syntax("member"), "1.3.6.1.4.1.1466.115.121.1.12"; got != want {
+		t.Errorf("Syntax(member) = %q, want the DN syntax %q", got, want)
+	}
+}
+
+// objectClass returns the class s publishes under name, or nil.
+func objectClass(s *schema.Schema, name string) *schema.ObjectClass {
+	for _, oc := range s.ObjectClasses {
+		if slices.Contains(oc.Names, name) {
+			return oc
+		}
+	}
+	return nil
 }
 
 // TestSearchPaging checks that a search with more matches than its size
