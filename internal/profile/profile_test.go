@@ -61,6 +61,9 @@ connections:
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("Load() mismatch (-want +got):\n%s", diff)
 	}
+	if got, err := Load(writeFile(t, "")); err != nil || len(got) != 0 {
+		t.Errorf("Load(empty file) = %v, %v, want no profiles and no error", got, err)
+	}
 }
 
 func TestLoadRejects(t *testing.T) {

@@ -189,8 +189,9 @@ func fakeConn(t *testing.T, url string) *Conn {
 	return c
 }
 
-// selfSignedCert returns a certificate for 127.0.0.1 and its PEM encoding.
-func selfSignedCert(t *testing.T) (tls.Certificate, string) {
+// selfSignedCert returns a certificate for host, an IP address or a DNS
+// name, and its PEM encoding.
+func selfSignedCert(t *testing.T, host string) (tls.Certificate, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -199,13 +200,17 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "ldaplens test"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+	} else {
+		tmpl.DNSNames = []string{host}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -215,50 +220,126 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pemText
 }
 
+// TestDialUntrustedCertificate checks the certificate verification of
+// ldaps:// and StartTLS: a certificate from an unknown CA, or from a trusted
+// CA for another host name, fails with an UntrustedCertError holding the
+// server's chain; a trusted CA, or insecureSkipVerify, connects.
 func TestDialUntrustedCertificate(t *testing.T) {
-	cert, caPEM := selfSignedCert(t)
-	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-	ldaps := func(_ int32, conn net.Conn) { _ = tls.Server(conn, serverTLS).Handshake() }
-	startTLS := func(_ int32, conn net.Conn) {
-		id, err := readRequest(conn)
-		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
-			return
+	local, localPEM := selfSignedCert(t, "127.0.0.1")
+	other, otherPEM := selfSignedCert(t, "ldap.example.org")
+	// serve upgrades the connection to TLS with cert, after a StartTLS
+	// request if startTLS is set, then answers every search with the root
+	// DSE.
+	serve := func(cert tls.Certificate, startTLS bool) func(int32, net.Conn) {
+		serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+		return func(_ int32, conn net.Conn) {
+			if startTLS {
+				id, err := readRequest(conn)
+				if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+			}
+			tc := tls.Server(conn, serverTLS)
+			if tc.Handshake() != nil {
+				return
+			}
+			for {
+				id, err := readRequest(tc)
+				if err != nil || writeEntry(tc, id, "") != nil ||
+					writeResult(tc, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+			}
 		}
-		_ = tls.Server(conn, serverTLS).Handshake()
 	}
 	tests := []struct {
-		name     string
-		startTLS bool
-		serve    func(int32, net.Conn)
+		name          string
+		cert          tls.Certificate
+		caPEM         string
+		insecure      bool
+		wantUntrusted bool
 	}{
-		{name: "ldaps", serve: ldaps},
-		{name: "StartTLS", startTLS: true, serve: startTLS},
+		{name: "unknown CA", cert: local, wantUntrusted: true},
+		{name: "trusted CA", cert: local, caPEM: localPEM},
+		{name: "trusted CA, another host name", cert: other, caPEM: otherPEM, wantUntrusted: true},
+		{name: "insecureSkipVerify", cert: local, insecure: true},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			url, accepts := fakeServer(t, tc.serve)
-			p := fakeProfile(url)
-			p.StartTLS = tc.startTLS
-			if !tc.startTLS {
-				p.URL = strings.Replace(url, "ldap://", "ldaps://", 1)
+	for _, startTLS := range []bool{false, true} {
+		for _, tc := range tests {
+			name := "ldaps: " + tc.name
+			if startTLS {
+				name = "StartTLS: " + tc.name
 			}
-			_, err := Dial(context.Background(), p, "")
-			var untrusted *UntrustedCertError
-			if !errors.As(err, &untrusted) {
-				t.Fatalf("Dial(self-signed) error = %v, want UntrustedCertError", err)
-			}
-			if len(untrusted.Certificates) != 1 || !untrusted.Certificates[0].Equal(&x509.Certificate{Raw: cert.Certificate[0]}) {
-				t.Errorf("UntrustedCertError.Certificates = %d certs, want the server's one", len(untrusted.Certificates))
-			}
-			if n := accepts.Load(); n != 1 {
-				t.Errorf("Dial(self-signed) opened %d connections, want 1", n)
-			}
+			t.Run(name, func(t *testing.T) {
+				url, accepts := fakeServer(t, serve(tc.cert, startTLS))
+				p := fakeProfile(url)
+				p.StartTLS, p.CAPEM, p.InsecureSkipVerify = startTLS, tc.caPEM, tc.insecure
+				if !startTLS {
+					p.URL = strings.Replace(url, "ldap://", "ldaps://", 1)
+				}
+				c, err := Dial(context.Background(), p, "")
+				if err == nil {
+					_ = c.Close()
+				}
+				if !tc.wantUntrusted {
+					if err != nil {
+						t.Errorf("Dial() error = %v, want a connection", err)
+					}
+					return
+				}
+				var untrusted *UntrustedCertError
+				if !errors.As(err, &untrusted) {
+					t.Fatalf("Dial() error = %v, want UntrustedCertError", err)
+				}
+				if len(untrusted.Certificates) != 1 || !untrusted.Certificates[0].Equal(&x509.Certificate{Raw: tc.cert.Certificate[0]}) {
+					t.Errorf("UntrustedCertError.Certificates = %d certs, want the server's one", len(untrusted.Certificates))
+				}
+				if n := accepts.Load(); n != 1 {
+					t.Errorf("Dial() opened %d connections, want 1", n)
+				}
+			})
+		}
+	}
+}
 
-			p.CAPEM = caPEM
-			if _, err := Dial(context.Background(), p, ""); errors.As(err, &untrusted) {
-				t.Errorf("Dial(trusted CA) error = %v, want no certificate error", err)
-			}
-		})
+// TestStartTLSRefusedSendsNothing checks that a StartTLS profile never falls
+// back to cleartext: when the server refuses the StartTLS operation, Dial
+// fails with the refusal and sends neither the bind nor a search.
+func TestStartTLSRefusedSendsNothing(t *testing.T) {
+	var after atomic.Int32 // requests the server got after the refusal
+	done := make(chan struct{})
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+		defer close(done)
+		id, err := readRequest(conn) // the StartTLS request
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultProtocolError) != nil {
+			return
+		}
+		// A request that comes is counted and hung up on; Dial closing the
+		// connection ends the read.
+		if _, err := readRequest(conn); err == nil {
+			after.Add(1)
+		}
+	})
+	p := fakeProfile(url)
+	p.StartTLS, p.BindDN = true, "cn=admin,dc=x"
+	// go-ldap stops reading at the StartTLS response and reads again only
+	// after a handshake, so a bind sent after the refusal can only time out:
+	// a short timeout makes that regression fail fast.
+	p.SearchTimeout = time.Second
+	c, err := Dial(context.Background(), p, "secret")
+	if err == nil {
+		_ = c.Close()
+	}
+	if !ldap.IsErrorWithCode(err, ldap.LDAPResultProtocolError) {
+		t.Errorf("Dial(StartTLS refused) error = %v, want the refusal, protocolError", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection still open 5s after Dial(StartTLS refused), want it closed")
+	}
+	if n := after.Load(); n != 0 {
+		t.Errorf("Dial(StartTLS refused) sent %d requests after the refusal, want none", n)
 	}
 }
 
@@ -268,7 +349,7 @@ func TestDialUntrustedCertificate(t *testing.T) {
 // without a redial.
 func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
 	t.Parallel()
-	cert, caPEM := selfSignedCert(t)
+	cert, caPEM := selfSignedCert(t, "127.0.0.1")
 	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	ldaps := func(_ int32, conn net.Conn) {
 		tc := tls.Server(conn, serverTLS)

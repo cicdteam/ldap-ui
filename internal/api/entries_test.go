@@ -61,6 +61,13 @@ func TestWriteEntries(t *testing.T) {
 			wantLog:   `msg=renamed profile=dev dn="cn=Doe\\, John,ou=x,dc=example,dc=org" newDN="cn=Doe,ou=x,dc=example,dc=org"`,
 		},
 		{
+			// Only the case changes: a new DN as far as the same-DN check goes.
+			name: "case-only rename", path: "entries/rename", body: `{"dn":"cn=john,ou=x,dc=example,dc=org","newRDN":"cn=John"}`,
+			wantDN:    "cn=John,ou=x,dc=example,dc=org",
+			wantWrite: "rename cn=john,ou=x,dc=example,dc=org cn=John  deleteOld=true",
+			wantLog:   `msg=renamed profile=dev dn="cn=john,ou=x,dc=example,dc=org" newDN="cn=John,ou=x,dc=example,dc=org"`,
+		},
+		{
 			name: "password", path: "entries/password", body: setBody, wantDN: "uid=n,dc=example,dc=org",
 			wantWrite: "password uid=n,dc=example,dc=org ssha",
 			wantLog:   `msg="password set" profile=dev dn="uid=n,dc=example,dc=org" method=ssha`,

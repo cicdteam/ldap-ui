@@ -44,7 +44,9 @@ func TestErrorResponse(t *testing.T) {
 			wantStatus: http.StatusBadGateway, wantCode: "network",
 		},
 		{name: "no such attribute", err: ldap.NewError(ldap.LDAPResultNoSuchAttribute, errors.New("modify/delete: mail: no such value")), wantStatus: http.StatusConflict, wantCode: "conflict"},
+		{name: "value exists", err: ldap.NewError(ldap.LDAPResultAttributeOrValueExists, errors.New("")), wantStatus: http.StatusConflict, wantCode: "conflict"},
 		{name: "constraint violation", err: ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("")), wantStatus: http.StatusUnprocessableEntity, wantCode: "rejected"},
+		{name: "object class violation", err: ldap.NewError(ldap.LDAPResultObjectClassViolation, errors.New("")), wantStatus: http.StatusUnprocessableEntity, wantCode: "rejected"},
 		{
 			name: "AD password policy", err: ldap.NewError(ldap.LDAPResultConstraintViolation, errors.New("0000052D: Constraint violation - check_password_restrictions: the password is too short")),
 			wantStatus: http.StatusUnprocessableEntity, wantCode: "rejected", wantReason: "password does not meet the policy",
@@ -60,6 +62,7 @@ func TestErrorResponse(t *testing.T) {
 		{name: "invalid request", err: fmt.Errorf("%w: bad scope", ldapx.ErrInvalidRequest), wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "secret filter", err: fmt.Errorf("%w: userPassword", ldapx.ErrSecretFilter), wantStatus: http.StatusBadRequest, wantCode: "secret_filter"},
 		{name: "timeout", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantCode: "timeout"},
+		{name: "canceled", err: context.Canceled, wantStatus: http.StatusServiceUnavailable, wantCode: "canceled"},
 		{name: "not connected", err: session.ErrNotConnected, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
 		{name: "no session", err: session.ErrNoSession, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
 		{name: "too many connections", err: session.ErrTooManyConns, wantStatus: http.StatusConflict, wantCode: "too_many_connections"},

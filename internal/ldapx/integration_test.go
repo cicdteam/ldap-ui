@@ -267,6 +267,9 @@ func TestSchemaFromServer(t *testing.T) {
 	if got, want := s.Syntax("member"), "1.3.6.1.4.1.1466.115.121.1.12"; got != want {
 		t.Errorf("Syntax(member) = %q, want the DN syntax %q", got, want)
 	}
+	if len(s.Skipped) != 0 {
+		t.Errorf("Schema() skipped %q, want every definition parsed", s.Skipped)
+	}
 }
 
 // objectClass returns the class s publishes under name, or nil.
@@ -504,13 +507,23 @@ func TestMembers(t *testing.T) {
 	if err != nil || len(big.Refs) != testBigGroup || big.Truncated {
 		t.Errorf("Members(big) = %d refs truncated %v, %v, want %d not truncated", len(big.Refs), big.Truncated, err, testBigGroup)
 	}
-	got, err := c.Members(context.Background(), groupDN("outer"), true)
-	if err != nil {
-		t.Fatalf("Members(outer, nested) error = %v", err)
+	tests := []struct {
+		group string
+		want  []Ref
+	}{
+		{group: "outer", want: []Ref{{DN: groupDN("inner")}, {DN: userDN(0), Via: groupDN("inner")}}},
+		// cycle-b lists cycle-a again, which is not repeated.
+		{group: "cycle-a", want: []Ref{{DN: groupDN("cycle-b")}, {DN: userDN(1)}}},
 	}
-	want := []Ref{{DN: groupDN("inner")}, {DN: userDN(0), Via: groupDN("inner")}}
-	if diff := cmp.Diff(want, got.Refs, cmpSortRefs); diff != "" || got.Truncated {
-		t.Errorf("Members(outer, nested) truncated %v, mismatch (-want +got):\n%s", got.Truncated, diff)
+	for _, tc := range tests {
+		got, err := c.Members(context.Background(), groupDN(tc.group), true)
+		if err != nil {
+			t.Errorf("Members(%s, nested) error = %v", tc.group, err)
+			continue
+		}
+		if diff := cmp.Diff(tc.want, got.Refs, cmpSortRefs); diff != "" || got.Truncated {
+			t.Errorf("Members(%s, nested) truncated %v, mismatch (-want +got):\n%s", tc.group, got.Truncated, diff)
+		}
 	}
 }
 

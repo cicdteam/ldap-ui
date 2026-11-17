@@ -202,6 +202,55 @@ func TestApplyRefusals(t *testing.T) {
 	}
 }
 
+// TestReadOnlyAppliesWithoutReconnect checks that a saved profile switched to
+// read-only refuses the next apply of a session connected before the
+// switch, and that its info shows the switch, with no reconnect.
+func TestReadOnlyAppliesWithoutReconnect(t *testing.T) {
+	env := newTestEnv(t)
+	save := func(readOnly bool) {
+		t.Helper()
+		body := `{"name":"lab","url":"ldap://lab:389","bindDN":"cn=admin,dc=example,dc=org","readOnly":` + strconv.FormatBool(readOnly) + `}`
+		if rec := env.do(t, http.MethodPost, "/api/profiles", body); rec.Code != http.StatusOK {
+			t.Fatalf("save(readOnly %v) = %d %s, want 200", readOnly, rec.Code, rec.Body)
+		}
+	}
+	infoReadOnly := func() bool {
+		t.Helper()
+		rec := env.do(t, http.MethodGet, "/api/c/lab/info", "")
+		var info struct {
+			ReadOnly bool `json:"readOnly"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &info); rec.Code != http.StatusOK || err != nil {
+			t.Fatalf("info = %d %s, want 200", rec.Code, rec.Body)
+		}
+		return info.ReadOnly
+	}
+
+	save(false)
+	connectTo(t, env, `{"profile":"lab","password":"pw"}`)
+	if rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", twoEntries); rec.Code != http.StatusOK || len(env.dir.modified) != 2 {
+		t.Fatalf("apply while writable = %d %s, modified %v, want 200 and both entries", rec.Code, rec.Body, env.dir.modified)
+	}
+	if infoReadOnly() {
+		t.Error("info while writable: readOnly = true, want false")
+	}
+
+	save(true)
+	rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", twoEntries)
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "read_only" {
+		t.Errorf("apply after the switch = %d %s, want 403 read_only", rec.Code, rec.Body)
+	}
+	if len(env.dir.modified) != 2 {
+		t.Errorf("modified after the switch = %v, want no more than the first apply", env.dir.modified)
+	}
+	if !infoReadOnly() {
+		t.Error("info after the switch: readOnly = false, want true")
+	}
+	if env.dials != 1 {
+		t.Errorf("dials = %d, want 1 (no reconnect)", env.dials)
+	}
+}
+
 // manyChanges is an entry with n changes of one value each, or one change
 // of n values when oneChange is set.
 func manyChanges(dn string, n int, oneChange bool) applyEntry {

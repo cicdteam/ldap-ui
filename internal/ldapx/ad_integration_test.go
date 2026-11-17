@@ -263,6 +263,9 @@ func TestADSchemaAndSearch(t *testing.T) {
 	if objectClass(s, "user") == nil {
 		t.Error("Schema() has no user class, want the AD schema")
 	}
+	if len(s.Skipped) != 0 {
+		t.Errorf("Schema() skipped %q, want every definition parsed", s.Skipped)
+	}
 	page, err := c.Search(context.Background(), SearchRequest{BaseDN: adBase, Filter: "(sAMAccountName=u0001)"})
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
