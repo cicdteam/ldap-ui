@@ -8,7 +8,7 @@ GOIMPORTS_VERSION := 0.52.0
 GOLANGCI_LINT_MIN := 2.15.0
 GOVULNCHECK_MIN := 1.9.0
 # Dependabot does not see GO_IMAGE: bump it with the Dockerfile's golang line.
-GO_IMAGE := golang:1.26.11@sha256:4165ee6bf3b7811fd7b40373290405c83d0167dcb87ee5f29c427cdcef45ff8f
+GO_IMAGE := golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf
 IMAGE ?= ldaplens:dev
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
