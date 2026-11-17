@@ -117,10 +117,11 @@ jobs:
           persist-credentials: false
       - name: Require a release tag on main
         run: |
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::release tags must be vX.Y.Z or vX.Y.Z-pre"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::the tagged commit is not on main"; exit 1; }
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
+          # Dependabot does not see this pin: bump it by hand.
           driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -131,16 +132,17 @@ jobs:
         run: |
           image="ghcr.io/$GITHUB_REPOSITORY"
           tags=(-t "$image:${GITHUB_REF_NAME#v}")
-          # latest only for the highest final release: not a pre-release, a backport or a re-run of an old tag.
-          newest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          # latest only for the highest final release on main: not a pre-release, a backport or a re-run of an old tag.
+          newest=$(git tag -l 'v*' --merged origin/main --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
           if [ "$GITHUB_REF_NAME" = "$newest" ]; then tags+=(-t "$image:latest"); fi
+          # Dependabot does not track the SBOM scanner pin below: bump it by hand.
           docker buildx build --platform linux/amd64,linux/arm64 \
             --build-arg VERSION="$GITHUB_REF_NAME" \
             --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
             --label org.opencontainers.image.version="${GITHUB_REF_NAME#v}" \
             --label org.opencontainers.image.licenses=Apache-2.0 \
-            --sbom=true \
+            --sbom=generator=docker/buildkit-syft-scanner:stable-1@sha256:873a7458c3c8ac8e32c7b796c10e1600b07b963d2aa000a72a2d97aaaa2d6315 \
             --metadata-file "$RUNNER_TEMP/build.json" \
             "${tags[@]}" -f deploy/Dockerfile --push .
           echo "digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/build.json")" >>"$GITHUB_OUTPUT"
