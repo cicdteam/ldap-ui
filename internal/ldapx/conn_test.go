@@ -806,19 +806,20 @@ func checkChildren(t *testing.T, entries []Entry, n int) {
 }
 
 // TestSearchWalksPages checks that a search with more matches than its
-// size limit walks the pages up to the limit, reports more and abandons
-// the paged search: no paged state outlives the request, and the next
-// search runs on the same connection.
+// size limit, here the largest one, walks the pages up to the limit,
+// reports more and abandons the paged search: no paged state outlives the
+// request, and the next search runs on the same connection.
 func TestSearchWalksPages(t *testing.T) {
-	c, open, accepts := childrenConn(t, 1200, true)
+	const n, limit = maxResponseEntries + 200, maxResponseEntries
+	c, open, accepts := childrenConn(t, n, true)
 	for i := range 2 {
-		page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", SizeLimit: 1000})
+		page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", PageSize: 1000, SizeLimit: limit})
 		if err != nil {
-			t.Fatalf("Search(1200 children, sizeLimit 1000) %d error = %v", i+1, err)
+			t.Fatalf("Search(%d children, sizeLimit %d) %d error = %v", n, limit, i+1, err)
 		}
-		checkChildren(t, page.Entries, 1000)
+		checkChildren(t, page.Entries, limit)
 		if !page.More || page.Truncated {
-			t.Errorf("Search(1200 children, sizeLimit 1000) %d = more %v, truncated %v; want more, not truncated", i+1, page.More, page.Truncated)
+			t.Errorf("Search(%d children, sizeLimit %d) %d = more %v, truncated %v; want more, not truncated", n, limit, i+1, page.More, page.Truncated)
 		}
 		if open.Load() {
 			t.Errorf("after Search() %d the server holds paged state, want it abandoned", i+1)

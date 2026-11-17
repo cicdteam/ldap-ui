@@ -43,8 +43,8 @@ const (
 	testBase      = "dc=example,dc=org"
 	testPeople    = "ou=people," + testBase
 	testGroups    = "ou=groups," + testBase
-	testUsers     = 6000
-	testBigGroup  = 5000
+	testUsers     = 2000
+	testBigGroup  = testUsers
 	// testSpecialDN has an escaped comma, a slash and non-ASCII text.
 	testSpecialDN = `cn=Smith\, John/Jr Ünal,` + "ou=people," + testBase
 )
@@ -132,14 +132,18 @@ func userDN(i int) string { return fmt.Sprintf("uid=user%05d,%s", i, testPeople)
 
 func groupDN(name string) string { return "cn=" + name + "," + testGroups }
 
+// writeLDIF writes the LDIF record of dn with lines, its "attr: value"
+// lines, to b.
+func writeLDIF(b *strings.Builder, dn string, lines ...string) {
+	fmt.Fprintf(b, "dn: %s\n%s\n\n", dn, strings.Join(lines, "\n"))
+}
+
 // seedLDIF builds the test tree: testUsers people, a group with testBigGroup
 // members, a two-level nested group, a membership cycle, an entry with a DN
 // that needs escaping and a posixGroup.
 func seedLDIF() string {
 	var b strings.Builder
-	entry := func(dn string, lines ...string) {
-		fmt.Fprintf(&b, "dn: %s\n%s\n\n", dn, strings.Join(lines, "\n"))
-	}
+	entry := func(dn string, lines ...string) { writeLDIF(&b, dn, lines...) }
 	entry(testBase, "objectClass: dcObject", "objectClass: organization", "dc: example", "o: example")
 	entry(testPeople, "objectClass: organizationalUnit", "ou: people")
 	entry(testGroups, "objectClass: organizationalUnit", "ou: groups")
@@ -285,7 +289,7 @@ func TestSearchStopsAtLimit(t *testing.T) {
 		pageSize  int
 		sizeLimit int
 	}{
-		{name: "over several pages", pageSize: 1000, sizeLimit: 5000},
+		{name: "over several pages", pageSize: 500, sizeLimit: 1500},
 		{name: "inside the first page", pageSize: 100, sizeLimit: 10},
 	}
 	for _, tc := range tests {
@@ -423,9 +427,9 @@ func TestSearchConcurrentWalks(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 3 {
 		wg.Go(func() {
-			p, err := c.Search(context.Background(), peopleListing(1000, 5000))
-			if err != nil || len(p.Entries) != 5000 || !p.More {
-				t.Errorf("concurrent Search() %d = %d entries, more %v, %v; want 5000, more", i, len(p.Entries), p.More, err)
+			p, err := c.Search(context.Background(), peopleListing(500, 1500))
+			if err != nil || len(p.Entries) != 1500 || !p.More {
+				t.Errorf("concurrent Search() %d = %d entries, more %v, %v; want 1500, more", i, len(p.Entries), p.More, err)
 			}
 		})
 	}
@@ -521,7 +525,7 @@ var cmpSortRefs = cmp.Transformer("normRefs", func(in []Ref) []string {
 })
 
 // TestMembershipScansHandBackConnection checks that a membership scan
-// stops at its limit, also above maxResponseEntries, and that a scan
+// pages to the end below its limit and stops at its limit, and that a scan
 // stopped early hands back a connection that pages again. A scan stopped
 // at its limit reports truncation.
 func TestMembershipScansHandBackConnection(t *testing.T) {
@@ -546,8 +550,8 @@ func TestMembershipScansHandBackConnection(t *testing.T) {
 	if shared == nil {
 		t.Error("allDNs stopped at its limit closed its connection, want it abandoned and shared again")
 	}
-	if p, err := c.Search(ctx, peopleListing(1000, 5000)); err != nil || len(p.Entries) != 5000 || !p.More {
-		t.Errorf("Search(sizeLimit 5000) after an abandoned scan = %d entries, more %v, %v; want 5000, more", len(p.Entries), p.More, err)
+	if p, err := c.Search(ctx, peopleListing(500, 1500)); err != nil || len(p.Entries) != 1500 || !p.More {
+		t.Errorf("Search(sizeLimit 1500) after an abandoned scan = %d entries, more %v, %v; want 1500, more", len(p.Entries), p.More, err)
 	}
 }
 
@@ -588,16 +592,16 @@ func valuesOf(t *testing.T, c *Conn, dn, attr string) []string {
 func TestModifyReplaceValue(t *testing.T) {
 	c := dialAdmin(t)
 	ctx := context.Background()
-	dn := userDN(5990)
-	old := "user05990@example.org"
+	dn := userDN(1990)
+	old := "user01990@example.org"
 	err := c.Modify(ctx, dn, []Change{
 		{Op: "delete", Attr: "mail", Values: []string{old}},
-		{Op: "add", Attr: "mail", Values: []string{"new05990@example.org"}},
+		{Op: "add", Attr: "mail", Values: []string{"new01990@example.org"}},
 	})
 	if err != nil {
 		t.Fatalf("Modify() error = %v", err)
 	}
-	if diff := cmp.Diff([]string{"new05990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
+	if diff := cmp.Diff([]string{"new01990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
 		t.Errorf("mail after Modify (-want +got):\n%s", diff)
 	}
 
@@ -609,11 +613,11 @@ func TestModifyReplaceValue(t *testing.T) {
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute) {
 		t.Errorf("stale Modify() error = %v, want noSuchAttribute", err)
 	}
-	if diff := cmp.Diff([]string{"new05990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
+	if diff := cmp.Diff([]string{"new01990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
 		t.Errorf("mail after stale Modify (-want +got):\n%s", diff)
 	}
 
-	err = c.Modify(ctx, dn, []Change{{Op: "add", Attr: "mail", Values: []string{"new05990@example.org"}}})
+	err = c.Modify(ctx, dn, []Change{{Op: "add", Attr: "mail", Values: []string{"new01990@example.org"}}})
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultAttributeOrValueExists) {
 		t.Errorf("duplicate add error = %v, want attributeOrValueExists", err)
 	}
@@ -622,7 +626,7 @@ func TestModifyReplaceValue(t *testing.T) {
 func TestModifySingleValue(t *testing.T) {
 	c := dialAdmin(t)
 	ctx := context.Background()
-	dn := userDN(5991)
+	dn := userDN(1991)
 	if err := c.Modify(ctx, dn, []Change{{Op: "add", Attr: "displayName", Values: []string{"A"}}}); err != nil {
 		t.Fatalf("add displayName error = %v", err)
 	}

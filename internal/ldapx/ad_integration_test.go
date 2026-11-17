@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/go-cmp/cmp"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/cicdteam/ldaplens/internal/ad"
@@ -82,69 +84,60 @@ func startSamba(ctx context.Context) (_ testcontainers.Container, err error) {
 	if adLDAP, err = url("ldap", "389/tcp"); err != nil {
 		return ctr, err
 	}
-	c, err := waitForBind(ctx)
-	if err != nil {
+	if err := waitForBind(ctx); err != nil {
 		return ctr, err
 	}
-	defer c.Close()
-	return ctr, seedAD(ctx, c)
+	return ctr, seedAD(ctx, ctr)
 }
 
 // waitForBind dials Samba until the Administrator bind works: the "samba
 // version" log line can precede the LDAP listener. Invalid credentials fail
 // at once, as waiting does not fix them.
-func waitForBind(ctx context.Context) (*Conn, error) {
+func waitForBind(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	for {
 		c, err := Dial(ctx, adProfile(adLDAPS, false), adAdminPass)
 		if err == nil {
-			return c, nil
+			return c.Close()
 		}
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			return nil, fmt.Errorf("bind to samba: %w", err)
+			return fmt.Errorf("bind to samba: %w", err)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("bind to samba: %w", err)
+			return fmt.Errorf("bind to samba: %w", err)
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
 }
 
 // seedAD adds adOU with adUsers users, the group big with all of them as
-// members, and inner (u0001) nested in outer.
-func seedAD(ctx context.Context, c *Conn) error {
-	add := func(dn string, attrs ...TextAttribute) error {
-		if err := c.Add(ctx, dn, attrs); err != nil {
-			return fmt.Errorf("seed samba: add %s: %w", dn, err)
-		}
-		return nil
-	}
-	attr := func(name string, values ...string) TextAttribute { return TextAttribute{Name: name, Values: values} }
-	if err := add(adOU, attr("objectClass", "organizationalUnit"), attr("ou", "ldaplens")); err != nil {
-		return err
-	}
-	var members []string
+// members, and inner (u0001) nested in outer. ldbadd imports them in one
+// transaction on Samba's database, many times faster than one LDAP add per
+// entry.
+func seedAD(ctx context.Context, ctr testcontainers.Container) error {
+	var b strings.Builder
+	big := []string{"objectClass: group", "sAMAccountName: big"}
+	writeLDIF(&b, adOU, "objectClass: organizationalUnit", "ou: ldaplens")
 	for i := 1; i <= adUsers; i++ {
-		if err := add(adUserDN(i), attr("objectClass", "user"), attr("sAMAccountName", fmt.Sprintf("u%04d", i))); err != nil {
-			return err
-		}
-		members = append(members, adUserDN(i))
+		writeLDIF(&b, adUserDN(i), "objectClass: user", fmt.Sprintf("sAMAccountName: u%04d", i))
+		big = append(big, "member: "+adUserDN(i))
 	}
-	groups := []struct {
-		name    string
-		members []string
-	}{
-		{name: "big", members: members}, // one Add request with every member
-		{name: "inner", members: []string{adUserDN(1)}},
-		{name: "outer", members: []string{adGroupDN("inner")}},
+	writeLDIF(&b, adGroupDN("big"), big...)
+	writeLDIF(&b, adGroupDN("inner"), "objectClass: group", "sAMAccountName: inner", "member: "+adUserDN(1))
+	writeLDIF(&b, adGroupDN("outer"), "objectClass: group", "sAMAccountName: outer", "member: "+adGroupDN("inner"))
+	const file = "/tmp/seed.ldif"
+	if err := ctr.CopyToContainer(ctx, []byte(b.String()), file, 0o644); err != nil {
+		return fmt.Errorf("seed samba: %w", err)
 	}
-	for _, g := range groups {
-		err := add(adGroupDN(g.name), attr("objectClass", "group"), attr("sAMAccountName", g.name), attr("member", g.members...))
-		if err != nil {
-			return err
-		}
+	code, out, err := ctr.Exec(ctx, []string{"ldbadd", "-H", "/var/lib/samba/private/sam.ldb", file}, tcexec.Multiplexed())
+	if err != nil {
+		return fmt.Errorf("seed samba: %w", err)
+	}
+	if code != 0 {
+		msg, _ := io.ReadAll(out) // ponytail: the exit code alone still fails the seed
+		return fmt.Errorf("seed samba: ldbadd exit code %d: %s", code, msg)
 	}
 	return nil
 }
