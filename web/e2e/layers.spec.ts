@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
-import { blur, connect } from './helpers'
+import { blur, connect, palette } from './helpers'
+import { expect, test, type Page } from './test'
 
 type Point = { x: number; y: number }
 
@@ -31,8 +31,7 @@ test('dialogs and the palette cover the sticky results header', async ({ page })
   const header = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   expect(await covered(page, header)).toBe(false)
 
-  await page.keyboard.press('ControlOrMeta+K')
-  await expect(page.locator('[cmdk-input]')).toBeVisible()
+  await palette(page)
   expect(await covered(page, header)).toBe(true)
   await page.keyboard.press('Escape')
 

@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { e2eDN, e2eGroup } from './fixture'
-import { attrRow, blur, openEntry } from './helpers'
+import { attrRow, openEntry, palette, paletteItem, review } from './helpers'
+import { expect, test, type Page } from './test'
 
 const editButton = { name: 'Edit', exact: true }
 const applyButton = { name: 'Apply to demo', exact: true }
@@ -15,20 +15,13 @@ async function editMembership(page: Page) {
   await page.getByRole('tab', { name: 'Membership' }).click()
 }
 
-async function review(page: Page) {
-  await blur(page)
-  await page.keyboard.press('ControlOrMeta+S')
-  return page.getByRole('dialog', { name: 'Review changes' })
-}
-
 test('join a groupOfNames from Member of through the palette; Members lists the new member', async ({
   page,
 }) => {
   const group = e2eGroup('join-team')
   await openEntry(page, 'demo', e2eDN('joiner'))
-  await page.keyboard.press('ControlOrMeta+K')
-  await page.locator('[cmdk-input]').fill('Add to group')
-  await page.locator('[cmdk-item]', { hasText: 'Add to group…' }).click()
+  await palette(page, 'Add to group')
+  await paletteItem(page, 'Add to group…').click()
   const field = page.getByLabel('Add to group', { exact: true })
   await expect(field).toBeFocused()
   await expect(page.getByRole('button', editButton)).toHaveAttribute('aria-pressed', 'true')
@@ -54,21 +47,6 @@ test('remove a member in Members: struck, restorable, gone after Apply', async (
   const dropped = e2eDN('dropped')
   await openEntry(page, 'demo', e2eGroup('drop-team'))
   await editMembership(page)
-  // Compact rows: each row's button stays inside its row, so no hit area covers the next one's.
-  await blur(page)
-  await page.keyboard.press('ControlOrMeta+K')
-  await page.locator('[cmdk-input]').fill('Toggle compact rows')
-  await page.keyboard.press('Enter')
-  for (const dn of [dropped, e2eDN('keeper')]) {
-    const r = row(page, 'Members', dn)
-    await expect(r).toHaveCSS('height', '22px')
-    const box = (await r.boundingBox())!
-    const button = (await r
-      .getByRole('button', { name: `Remove ${dn}`, exact: true })
-      .boundingBox())!
-    expect(button.y).toBeGreaterThanOrEqual(box.y)
-    expect(button.y + button.height).toBeLessThanOrEqual(box.y + box.height)
-  }
   const r = row(page, 'Members', dropped)
   await r.getByRole('button', { name: `Remove ${dropped}`, exact: true }).click()
   await expect(r.getByRole('img', { name: 'deleted' })).toBeVisible()

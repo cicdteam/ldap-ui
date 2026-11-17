@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, blur, ldapmodify, openEntry, pendingBar, reviewButton } from './helpers'
+import { expect, test, type Page } from './test'
 
 // exact: names match as case-insensitive substrings, and breadcrumbs or
 // "Copy LDIF for uid=apply1,..." would match too.

@@ -1,8 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { BASE, e2eDN } from './fixture'
-import { blur, connect, exact, queryBar } from './helpers'
-
-const results = (page: Page) => page.getByRole('grid', exact('Search results'))
+import { blur, connect, exact, palette, queryBar, results } from './helpers'
+import { expect, test } from './test'
 
 test('plain text runs a name search', async ({ page }) => {
   await connect(page, 'demo')
@@ -118,4 +116,55 @@ test('Recent and saved searches: save the current search, run it again', async (
   await expect(results(page).getByRole('row', { name: /Jane Doe/ })).toBeVisible()
   await expect(page).toHaveURL(/filter=%28%7C%28cn%3D\*doe\*%29/)
   await expect(queryBar(page)).toHaveText('doe')
+})
+
+test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async ({ page }) => {
+  await connect(page, 'demo')
+  const editor = queryBar(page)
+  const long =
+    '(&(cn=huge)(objectClass=groupOfNames)(description=some long description value here))'
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.type(long)
+  await palette(page, 'Format the filter')
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('.cm-line')).toHaveCount(5)
+  let searches = 0
+  page.on('request', (r) => {
+    if (r.url().endsWith('/search')) searches++
+  })
+  await palette(page, 'Run search')
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/filter=/)
+  // The search request follows the URL change.
+  await expect.poll(() => searches).toBeGreaterThan(0)
+  // Unfocused, the bar shows the first of the five lines: click there.
+  await editor.click({ position: { x: 5, y: 5 } })
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.type('(cn=')
+  await page.keyboard.press('Shift+Alt+KeyF')
+  await expect(page.getByText(/Fix the filter first/)).toBeVisible()
+})
+
+test('Clear empties the bar; the builder starts from the text and writes it', async ({ page }) => {
+  await connect(page, 'demo')
+  const bar = queryBar(page)
+  const clear = page.getByRole('button', { name: 'Clear the search', exact: true })
+  const builder = page.getByRole('button', { name: 'Filter builder', exact: true })
+  const attr = page.getByLabel('Attribute', { exact: true })
+  await expect(clear).toHaveCount(0)
+  await bar.click()
+  await page.keyboard.type('(cn=x)')
+  await builder.click()
+  await expect(attr).toHaveValue('cn')
+  await page.getByLabel('Value', { exact: true }).fill('y')
+  await expect(bar).toHaveText('(cn=y)')
+  await page.keyboard.press('Escape')
+  await clear.click()
+  // An empty bar shows only its placeholder.
+  await expect(bar.locator('.cm-placeholder')).toBeVisible()
+  await expect(bar).toBeFocused()
+  await expect(clear).toHaveCount(0)
+  await builder.click()
+  await expect(attr).toHaveCount(0)
 })

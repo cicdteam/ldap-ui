@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { E2E_OU, e2eDN, e2eGroup } from './fixture'
-import { attrRow, blur, openEntry, postJSON } from './helpers'
+import { attrRow, blur, openEntry, palette, paletteItem, postJSON, review } from './helpers'
+import { expect, test } from './test'
 
 const actions = { name: 'More', exact: true }
 const HINT = 'Apply or discard 1 staged change first'
@@ -33,18 +33,12 @@ test('rename and delete wait while the entry or one below it has staged changes'
   await expect(menu).toContainText(HINT)
   await expect(page.getByRole('dialog', { name: 'Rename or move' })).toHaveCount(0)
   await page.keyboard.press('Escape')
-  await page.keyboard.press('ControlOrMeta+K')
-  await page.locator('[cmdk-input]').fill('Rename')
-  await expect(page.locator('[cmdk-item]', { hasText: 'Rename/Move entry' })).toHaveAttribute(
-    'aria-disabled',
-    'true',
-  )
+  await palette(page, 'Rename')
+  await expect(paletteItem(page, 'Rename/Move entry')).toHaveAttribute('aria-disabled', 'true')
   await page.keyboard.press('Escape')
 
   // Undo history does not survive the reload above; discarding in Review frees the actions.
-  await page.keyboard.press('ControlOrMeta+S')
-  const review = page.getByRole('dialog', { name: 'Review changes' })
-  await review.getByRole('button', { name: 'Discard all' }).click()
+  await (await review(page)).getByRole('button', { name: 'Discard all' }).click()
   await page.keyboard.press('Escape')
   await page.getByRole('button', actions).click()
   await expect(menu.getByRole('button', { name: 'Rename/Move', exact: true })).toBeEnabled()
@@ -65,11 +59,11 @@ test('read-only profile: no entry actions, no entry commands, and every write is
     'Reload entry',
   ])
   await page.keyboard.press('Escape')
-  await page.keyboard.press('ControlOrMeta+K')
   // Neither entry commands nor batch ones.
+  const input = await palette(page)
   for (const name of ['Clone entry', 'Set password…', 'Add to group…', 'Review changes']) {
-    await page.locator('[cmdk-input]').fill(name)
-    await expect(page.locator('[cmdk-item]', { hasText: name })).toHaveCount(0)
+    await input.fill(name)
+    await expect(paletteItem(page, name)).toHaveCount(0)
   }
   await page.keyboard.press('Escape')
   const dn = e2eDN('read')

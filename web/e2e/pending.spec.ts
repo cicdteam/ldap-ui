@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, blur, exact, openEntry, pendingBar, reviewButton } from './helpers'
+import { expect, test } from './test'
 
 test('the pending bar names the connection; Review applies to it', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('pending'))

@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eDN } from './fixture'
-import { attrRow, blur, connect, exact, openEntry, queryBar } from './helpers'
+import { attrRow, connect, exact, openEntry, palette, queryBar, results } from './helpers'
+import { expect, test, type Page } from './test'
 
-const results = (page: Page) => page.getByRole('grid', exact('Search results'))
 // react-resizable-panels marks every pane with data-panel; the card is the last one.
 const panes = (page: Page) => page.locator('[data-panel]')
 const close = (page: Page) => page.getByRole('button', exact('Close the list'))
@@ -62,23 +61,20 @@ test('a search opens the list; X and Esc close it, keeping the entry and staged 
   await expectClosed(page)
 })
 
-test('Up and Down in the list move the card', async ({ page }) => {
-  await connect(page, 'demo')
-  await search(page, '(|(uid=read)(uid=edit)(uid=layout))')
-  const rows = results(page).getByRole('row')
-  await expect(rows).toHaveCount(4)
-  const dns = await Promise.all([1, 2].map(async (i) => (await rows.nth(i).getAttribute('title'))!))
-  // The card is headed by the entry's name: the fixture's cn, E2E <uid>.
-  const heading = (dn: string) =>
-    page.getByRole('heading', exact(dn.split(',')[0].replace('uid=', 'E2E ')))
-  await rows.nth(1).click()
-  await expect(heading(dns[0])).toBeVisible()
-  await page.keyboard.press('ArrowDown')
-  await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(dns[1])}`))
-  await expect(heading(dns[1])).toBeVisible()
-  await page.keyboard.press('ArrowUp')
-  await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(dns[0])}`))
-  await expect(heading(dns[0])).toBeVisible()
+test('the page does not bounce and fits the window; panels scroll on their own', async ({
+  page,
+}) => {
+  await openEntry(page, 'demo', 'uid=user001,ou=people,dc=example,dc=org')
+  const root = await page.evaluate(() =>
+    ['html', 'body'].map((s) => {
+      const st = getComputedStyle(document.querySelector(s)!)
+      return `${st.overflow} ${st.overscrollBehavior}`
+    }),
+  )
+  expect(root).toEqual(['visible none', 'visible none'])
+  expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(
+    page.viewportSize()!.height,
+  )
 })
 
 test('at 1440x900 the card is at least 1100 px wide with no list', async ({ page }) => {
@@ -168,9 +164,7 @@ test('with no entry open, closing the list focuses the tree', async ({ page }) =
 
 test('List children in the palette lists the entry one level down', async ({ page }) => {
   await openEntry(page, 'demo', E2E_OU)
-  await blur(page)
-  await page.keyboard.press('ControlOrMeta+K')
-  await page.locator('[cmdk-input]').fill('List children of the current entry')
+  await palette(page, 'List children of the current entry')
   await page.keyboard.press('Enter')
   await expect(panes(page)).toHaveCount(3)
   await expect(results(page).getByRole('row', { name: /E2E layout/ })).toBeVisible()

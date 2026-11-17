@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, blur, openEntry, pendingBar } from './helpers'
+import { expect, test } from './test'
 
 test('Mod+S reviews, Mod+Z undoes, Mod+Shift+Z redoes, disconnect asks', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('keys'))

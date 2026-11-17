@@ -1,5 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
 import { connect, exact, queryBar } from './helpers'
+import { expect, test, type Locator, type Page } from './test'
 
 /** Focuses loc, then presses a key, so the focus counts as keyboard focus (:focus-visible). */
 async function keyFocus(page: Page, loc: Locator): Promise<void> {

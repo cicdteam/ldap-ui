@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { E2E_OU, e2eDN, e2eOU } from './fixture'
 import { blur, openEntry } from './helpers'
+import { expect, test } from './test'
 
 const deleteButton = { name: 'Delete', exact: true }
 

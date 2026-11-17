@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './test'
 
 // The e2e server runs in local mode: these specs stub what the UI reads to
 // tell the modes apart and the profile list, and answer the connect with an

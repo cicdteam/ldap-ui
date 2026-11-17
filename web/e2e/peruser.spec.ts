@@ -1,29 +1,19 @@
-import { expect, test, type Page } from '@playwright/test'
-import { connect } from './helpers'
+import { connect, connectDialog, signIn } from './helpers'
+import { expect, test, type Page } from './test'
 
 // The bindDNTemplate profiles people (OpenLDAP demo data: userNNN, secretNNN) and ad-people
 // (Samba demo data: UPN userNNN@corp.example.test, Demo-Passw0rd!) in
 // deploy/e2e/connections.yaml.
 const person = (n: string) => `uid=user${n},ou=people,dc=example,dc=org`
 
-/** Opens the connect dialog of profile. */
+/** The connect dialog of a profile that asks who signs in, and its two fields. */
 async function openDialog(page: Page, profile: string) {
-  await page.goto('./')
-  await page.getByRole('button', { name: new RegExp(`^${profile}(?![\\w-])`) }).click()
-  const dialog = page.getByRole('dialog')
+  const dialog = await connectDialog(page, profile)
   return {
     dialog,
     username: dialog.getByLabel('Username'),
     password: dialog.getByLabel('Password', { exact: true }),
   }
-}
-
-async function signIn(page: Page, profile: string, username: string, password: string) {
-  const d = await openDialog(page, profile)
-  await d.username.fill(username)
-  await d.password.fill(password)
-  await d.password.press('Enter')
-  await expect(page).toHaveURL(new RegExp(`/c/${profile}(?:[/?#]|$)`))
 }
 
 const signedIn = (page: Page, who: string) =>
@@ -40,8 +30,8 @@ test('two people sign in to one profile', async ({ page, browser }) => {
   const other = await browser.newContext()
   try {
     const page2 = await other.newPage()
-    await signIn(page, 'people', 'user001', 'secret001')
-    await signIn(page2, 'people', 'user002', 'secret002')
+    await signIn(page, 'people', { username: 'user001', password: 'secret001' })
+    await signIn(page2, 'people', { username: 'user002', password: 'secret002' })
     await expect(signedIn(page, person('001'))).toBeVisible()
     await expect(signedIn(page2, person('002'))).toBeVisible()
 
@@ -82,6 +72,6 @@ test('wrong password and throttling', async ({ page }) => {
 })
 
 test('AD UPN sign-in', async ({ page }) => {
-  await signIn(page, 'ad-people', 'user001', 'Demo-Passw0rd!')
+  await signIn(page, 'ad-people', { username: 'user001', password: 'Demo-Passw0rd!' })
   await expect(signedIn(page, 'user001@corp.example.test')).toBeVisible()
 })

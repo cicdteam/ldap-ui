@@ -17,7 +17,7 @@ import { SchemaIndex } from './schema'
 import { directorySchema } from './schema.fixture'
 import type { Entry } from './types'
 
-// The Task 3 schema and entry (changes.test.ts) plus locked types for lockReason.
+// The schema and entry of changes.test.ts plus locked types for lockReason.
 const schema = new SchemaIndex({
   attributeTypes: [
     { oid: '2.5.4.3', names: ['cn'] },

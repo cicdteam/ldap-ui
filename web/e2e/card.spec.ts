@@ -1,8 +1,7 @@
-import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eDN } from './fixture'
-import { attrRow, connect, exact, openEntry, queryBar, valueItems } from './helpers'
+import { attrRow, connect, exact, openEntry, queryBar, results, valueItems } from './helpers'
+import { expect, test, type Page } from './test'
 
-const results = (page: Page) => page.getByRole('grid', exact('Search results'))
 const section = (page: Page, name: string) =>
   page.getByRole('button', { name: new RegExp(`^${name} \\(\\d+\\)$`) })
 const attrs = (page: Page, region: string) =>
@@ -11,7 +10,9 @@ const attrs = (page: Page, region: string) =>
     .locator('[data-attr]')
     .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-attr')))
 
-test('uid=jdoe: the card leads with who it is, then the Pinned section', async ({ page }) => {
+test('uid=jdoe: the card leads with who it is and its actions; Add to group opens Membership', async ({
+  page,
+}) => {
   await openEntry(page, 'demo', e2eDN('jdoe'))
   // The name (displayName), the RDN, initials, the DN as breadcrumbs, the class, who changed it.
   await expect(page.getByRole('heading', exact('John Doe'))).toBeVisible()
@@ -27,6 +28,17 @@ test('uid=jdoe: the card leads with who it is, then the Pinned section', async (
   for (const name of ['Edit', 'Add to group', 'Copy DN', 'More', 'Copy DN from the path'])
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
 
+  // Add to group: Edit on, the Membership tab, its add field focused.
+  await page.getByRole('button', exact('Add to group')).click()
+  await expect(page.getByRole('button', exact('Edit'))).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('tab', exact('Membership'))).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByLabel('Add to group', { exact: true })).toBeFocused()
+})
+
+test("uid=jdoe: Pinned first, in the person's order, then the other sections; values copy and link", async ({
+  page,
+}) => {
+  await openEntry(page, 'demo', e2eDN('jdoe'))
   // Pinned first, in the person's order, and not repeated below; Operational starts closed.
   await expect(page.locator('[role=tabpanel] button[aria-expanded]')).toHaveText([
     /^Pinned \(6\)/,
@@ -56,15 +68,11 @@ test('uid=jdoe: the card leads with who it is, then the Pinned section', async (
     .getByRole('button', exact(`uid=jane.doe,${E2E_OU}`))
     .click()
   await expect(page.getByRole('heading', exact('Jane Doe'))).toBeVisible()
-
-  // Add to group: Edit on, the Membership tab, its add field focused.
-  await page.getByRole('button', exact('Add to group')).click()
-  await expect(page.getByRole('button', exact('Edit'))).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('tab', exact('Membership'))).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByLabel('Add to group', { exact: true })).toBeFocused()
 })
 
-test('stepping through results on Attributes asks for no membership', async ({ page }) => {
+test('Up and Down in the list move the card, and on Attributes ask for no membership', async ({
+  page,
+}) => {
   const membership: string[] = []
   page.on('request', (r) => {
     if (/\/api\/c\/demo\/(memberof|members)\?/.test(r.url())) membership.push(r.url())
@@ -78,13 +86,22 @@ test('stepping through results on Attributes asks for no membership', async ({ p
   const dns = await Promise.all(
     [1, 2, 3].map(async (i) => (await rows.nth(i).getAttribute('title'))!),
   )
-  await rows.nth(1).click()
-  for (const [i, dn] of dns.entries()) {
-    if (i) await page.keyboard.press('ArrowDown')
+  // The card follows: the URL names the entry, and the card is headed by its name, the fixture's
+  // cn, E2E <uid>.
+  const at = async (dn: string) => {
+    await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(dn)}(&|$)`))
     await expect(
       page.getByRole('heading', exact(dn.split(',')[0].replace('uid=', 'E2E '))),
     ).toBeVisible()
   }
+  await rows.nth(1).click()
+  await at(dns[0])
+  await page.keyboard.press('ArrowDown')
+  await at(dns[1])
+  await page.keyboard.press('ArrowDown')
+  await at(dns[2])
+  await page.keyboard.press('ArrowUp')
+  await at(dns[1])
   expect(membership).toEqual([])
   // The Membership tab does ask, so the requests above would have been seen.
   await page.getByRole('tab', exact('Membership')).click()

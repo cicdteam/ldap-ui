@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, openEntry } from './helpers'
+import { expect, test } from './test'
 
 // exact: the breadcrumb "uid=edit" is a button whose name contains "edit".
 const editButton = { name: 'Edit', exact: true }

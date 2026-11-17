@@ -65,7 +65,7 @@ export function withBinaryOption(name: string): string {
 /** The largest file a value takes, as the server checks it once decoded. */
 export const MAX_FILE = 1 << 20
 
-// Deviation (D2): an empty file is refused too: LDAP takes no empty value, and the batch drops one.
+// An empty file is refused too: LDAP takes no empty value, and the batch drops one.
 
 /** A file's bytes as standard base64; an empty file and one over MAX_FILE are refused. */
 export async function readFile(file: Blob): Promise<string> {

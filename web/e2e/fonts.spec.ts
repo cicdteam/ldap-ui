@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
 import { connect } from './helpers'
+import { expect, test, type Page } from './test'
 
 const FONTS = ['Inter Variable', 'JetBrains Mono Variable']
 

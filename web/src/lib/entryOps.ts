@@ -25,7 +25,7 @@ export interface EntryForm {
   attrs: FormAttr[]
 }
 
-// Values that identify one entry: a clone leaves them out (spec 4.3; lowercased). Certificates
+// Values that identify one entry: a clone leaves them out (lowercased). Certificates
 // (one person's key) and AD's mS-DS-ConsistencyGuid (one cloud identity) go too: by certificate
 // syntax, and by name where the syntax is octet string or binary (AD, userSMIMECertificate). So
 // do authentication bindings (SSH keys, certificate and key credential mappings, Kerberos
@@ -225,8 +225,8 @@ export function addAttributes(f: EntryForm): TextAttribute[] {
   const r = rdnAttr ? find(rdnAttr) : undefined
   if (r && rdnValue && !r.values.some((v) => v.toLowerCase() === rdnValue.toLowerCase()))
     r.values.push(rdnValue)
-  // Deviation (D6): an attribute with a binary value goes all in base64, its text values as
-  // UTF-8: one attribute, one encoding, and the server refuses an attribute listed twice.
+  // An attribute with a binary value goes all in base64, its text values as UTF-8: one attribute,
+  // one encoding, and the server refuses an attribute listed twice.
   for (const row of f.attrs) {
     const a = find(row.name)
     if (!a || !row.binary?.length) continue

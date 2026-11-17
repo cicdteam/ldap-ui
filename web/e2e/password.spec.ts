@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, blur, canBind, openEntry } from './helpers'
+import { expect, test, type Page } from './test'
 
 const setButton = { name: 'Set', exact: true }
 

@@ -1,7 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
-import { connect, exact } from './helpers'
-
-const results = (page: Page) => page.getByRole('grid', exact('Search results'))
+import { connect, exact, results } from './helpers'
+import { expect, test } from './test'
 
 for (const [width, height] of [
   [1280, 720],

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
-import { expect, test, type Locator, type Page } from '@playwright/test'
 import { CERT, E2E_OU, e2eDN, PHOTO } from './fixture'
-import { attrRow, blur, exact, openEntry, pendingBar } from './helpers'
+import { attrRow, blur, exact, openEntry, pendingBar, review } from './helpers'
+import { expect, test, type Locator, type Page } from './test'
 
 const PHOTO_B64 = readFileSync(PHOTO).toString('base64')
 const PHOTO_SUMMARY = `jpegPhoto:: (binary, ${readFileSync(PHOTO).length} bytes)`
@@ -36,15 +36,6 @@ test('a read-only profile downloads a photo byte for byte and has no upload', as
   await expect(attrRow(page, 'jpegPhoto')).not.toContainText(PHOTO_B64.slice(0, 40))
   await raw()
 })
-
-/** Mod+S with nothing focused: the review dialog. */
-async function review(page: Page) {
-  await blur(page)
-  await page.keyboard.press('ControlOrMeta+S')
-  const dialog = page.getByRole('dialog', { name: 'Review changes' })
-  await expect(dialog).toBeVisible()
-  return dialog
-}
 
 async function apply(dialog: Locator) {
   await dialog.getByRole('button', exact('Apply to demo')).click()
