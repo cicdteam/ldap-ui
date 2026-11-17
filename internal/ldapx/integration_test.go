@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	openLDAPImage = "bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985"
+	openLDAPImage = "bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed"
 	testBase      = "dc=example,dc=org"
 	testPeople    = "ou=people," + testBase
 	testGroups    = "ou=groups," + testBase
@@ -88,7 +88,10 @@ func runWithServers(m *testing.M) int {
 // container for termination even when it fails later, and an error carries
 // the tail of the container log.
 func startOpenLDAP(ctx context.Context) (_ testcontainers.Container, err error) {
-	ctr, err := openldap.Run(ctx, openLDAPImage)
+	// The seed owns the whole tree: since 2.6.10 the image's default tree has
+	// an ou=groups of its own.
+	ctr, err := openldap.Run(ctx, openLDAPImage,
+		testcontainers.WithEnv(map[string]string{"LDAP_SKIP_DEFAULT_TREE": "yes"}))
 	if ctr != nil {
 		defer func() { err = withLogTail(ctx, ctr, err) }()
 	}
@@ -136,6 +139,7 @@ func seedLDIF() string {
 	entry := func(dn string, lines ...string) {
 		fmt.Fprintf(&b, "dn: %s\n%s\n\n", dn, strings.Join(lines, "\n"))
 	}
+	entry(testBase, "objectClass: dcObject", "objectClass: organization", "dc: example", "o: example")
 	entry(testPeople, "objectClass: organizationalUnit", "ou: people")
 	entry(testGroups, "objectClass: organizationalUnit", "ou: groups")
 	for i := range testUsers {

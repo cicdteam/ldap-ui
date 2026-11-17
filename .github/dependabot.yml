@@ -13,12 +13,20 @@ updates:
     groups:
       npm-prod: {dependency-type: production}
       npm-dev: {dependency-type: development}
+    ignore:
+      # typescript-eslint pins typescript below 6.1; lift this when it allows more.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major, version-update:semver-minor]
   - package-ecosystem: docker
     directory: /deploy
     schedule: {interval: weekly}
   - package-ecosystem: docker-compose
     directories: [/deploy, /deploy/e2e]
     schedule: {interval: weekly}
+    # One PR for both files. internal/ldapx/integration_test.go pins the same
+    # openldap image and Dependabot does not see it: bump it in the same PR.
+    groups:
+      compose: {patterns: ["*"]}
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
