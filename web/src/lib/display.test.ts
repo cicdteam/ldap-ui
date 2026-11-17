@@ -8,6 +8,7 @@ import {
   safeColor,
   shownValues,
   statusChips,
+  visible,
 } from './display'
 
 describe('safeColor', () => {
@@ -134,5 +135,18 @@ describe('statusChips', () => {
     expect(statusChips({ dn: 'uid=a,dc=x' }, { readOnly: true })).toEqual([
       { label: 'Read-only connection', tone: 'neutral' },
     ])
+  })
+})
+
+describe('visible', () => {
+  it.each([
+    ['cn=\u202Enimda', 'cn=<U+202E>nimda'],
+    ['Administrator\uFE0F', 'Administrator<U+FE0F>'],
+    ['a\u{E0100}b', 'a<U+E0100>b'],
+    ['tab\there', 'tab<U+0009>here'],
+    ['Иван Müller 山田 X', 'Иван Müller 山田 X'],
+    ['Иван\u00A0Петров 😀', 'Иван\u00A0Петров 😀'],
+  ])('%j', (s, want) => {
+    expect(visible(s)).toBe(want)
   })
 })

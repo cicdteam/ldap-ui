@@ -34,6 +34,16 @@ describe('csvField', () => {
     ['+1', "'+1"],
     ['-1', "'-1"],
     ['@x', "'@x"],
+    // Every value of the "; " join, and every tab-separated segment, starts defused.
+    ['x;=1+1', "x;'=1+1"],
+    ["x;=cmd|' /C calc'!A0", "x;'=cmd|' /C calc'!A0"],
+    ['x;+1+1', "x;'+1+1"],
+    ['x;@SUM(1+1)', "x;'@SUM(1+1)"],
+    ['ok; =1+1', "ok; '=1+1"],
+    ['a-b', 'a-b'],
+    ['Doe, John', '"Doe, John"'],
+    ['a\n- b', '"a\n- b"'],
+    ['1,-2', '"1,-2"'],
   ])('%j', (s, want) => {
     expect(csvField(s)).toBe(want)
   })
@@ -42,5 +52,12 @@ describe('csvField', () => {
 describe('toCSV', () => {
   it('puts dn first and uses CRLF', () => {
     expect(toCSV([e], ['cn', 'DN', 'mail'])).toBe('dn,cn,mail\r\n"cn=a,dc=org",a,a@x; b@x\r\n')
+  })
+  it('defuses a formula in any value of a multi-valued cell', () => {
+    const f: Entry = {
+      dn: 'cn=f,dc=org',
+      attributes: [{ name: 'description', values: [{ text: 'ok' }, { text: '=1+1' }] }],
+    }
+    expect(toCSV([f], ['description'])).toBe(`dn,description\r\n"cn=f,dc=org",ok; '=1+1\r\n`)
   })
 })

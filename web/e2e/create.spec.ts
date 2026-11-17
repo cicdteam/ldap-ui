@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eDN } from './fixture'
-import { attrRow, blur, openEntry } from './helpers'
+import { attrRow, blur, exact, ldapmodify, openEntry, pendingBar, reviewButton } from './helpers'
 
 const createButton = { name: 'Create', exact: true }
 
@@ -52,6 +52,49 @@ test('create an OU, a person in it, and refuse the same person twice', async ({ 
   await createPerson()
   await expect(dialog.getByRole('alert')).toContainText(/already exists/i)
   await expect(dialog).toBeVisible()
+})
+
+test('a bidi control in a name shows as <U+202E>; Copy DN keeps the real one', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  const dn = `ou=\u202Enimda,${E2E_OU}`
+  const shown = 'ou=<U+202E>nimda'
+  await openEntry(page, 'demo', E2E_OU)
+  const dialog = await openNewChild(page)
+  await dialog.getByLabel('Structural class').selectOption('organizationalUnit')
+  await dialog.getByLabel('RDN value').fill('\u202Enimda')
+  await expect(dialog).toContainText(`${shown},${E2E_OU}`)
+  await dialog.getByRole('button', createButton).click()
+  await expect(dialog).toBeHidden()
+  try {
+    await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(dn)}`))
+    await expect(page.getByRole('treeitem', { name: shown })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await expect(page.getByRole('heading', exact('<U+202E>nimda'))).toBeVisible()
+    await expect(
+      page.getByRole('navigation', exact('DN path')).getByRole('button').last(),
+    ).toHaveText(shown)
+    await page.getByRole('button', exact('Copy DN from the path')).click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(dn)
+
+    await page.getByRole('button', exact('Edit')).click()
+    await page.getByLabel('Add attribute', { exact: true }).fill('description')
+    const desc = page.getByLabel('description value', { exact: true })
+    await desc.fill('staged')
+    await desc.press('Enter')
+    await reviewButton(page).click()
+    const review = page.getByRole('dialog', { name: 'Review changes' })
+    await expect(review).toContainText(`${shown},${E2E_OU}`)
+    await review.getByRole('button', exact('Discard all')).click()
+    await expect(pendingBar(page)).toBeHidden()
+  } finally {
+    // Gone again, so the specs after this one list ou=e2e as seeded.
+    ldapmodify(`dn:: ${Buffer.from(dn).toString('base64')}\nchangetype: delete\n`)
+  }
 })
 
 test('clone leaves the RDN, uid and mail out, and holds while it writes', async ({ page }) => {

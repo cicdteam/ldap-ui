@@ -16,6 +16,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEven
 import { api, errorMessage } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
 import { ancestorsWithin, isUnder, normDN } from '../../lib/dn'
+import { visible } from '../../lib/display'
 import { rowHeight, usePrefs } from '../../lib/prefs'
 import { keys, load, save } from '../../lib/storage'
 import {
@@ -308,20 +309,22 @@ export function Tree() {
                   <span className="w-3.5 shrink-0" />
                 )}
                 <RowIcon row={r} />
-                <span className="truncate" title={r.type === 'entry' ? r.dn : undefined}>
+                <span className="truncate" title={r.type === 'entry' ? visible(r.dn) : undefined}>
                   {r.prefix && <span className="font-mono text-xs text-muted">{r.prefix}</span>}
-                  {r.label}
+                  {visible(r.label)}
                 </span>
                 {/* In a narrow pane the hint gives way first, then the label truncates. */}
                 {r.hint && (
-                  <span className="ml-1 min-w-0 shrink-[1000] truncate text-muted">{r.hint}</span>
+                  <span className="ml-1 min-w-0 shrink-[1000] truncate text-muted">
+                    {visible(r.hint)}
+                  </span>
                 )}
                 {r.type === 'entry' && entryChanges(batch, r.dn) && <ChangeDot />}
                 {r.type === 'entry' && r.expandable && (
                   // Like the chevron, not a button; shown on hover and on the focused row.
                   <span
                     aria-hidden
-                    title={`List children of ${r.prefix}${r.label} in the list pane (Shift+Enter)`}
+                    title={`List children of ${r.prefix}${visible(r.label)} in the list pane (Shift+Enter)`}
                     onClick={(e) => {
                       e.stopPropagation()
                       ws.listChildren(r.dn)

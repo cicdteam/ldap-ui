@@ -1,3 +1,4 @@
+import { HIDDEN } from './ldif'
 import type { EntryKind } from './tree'
 import type { Attribute, Entry, Info, Profile, Value } from './types'
 
@@ -88,4 +89,15 @@ export function shownValues(
     all = all.filter(({ value }) => valueMatches(value, needle))
   }
   return { shown: all.slice(0, limit), total: all.length }
+}
+
+/** s for display, with each hidden or reordering character (HIDDEN) shown as <U+XXXX>. */
+export function visible(s: string): string {
+  let out = ''
+  for (const ch of s) {
+    out += HIDDEN.test(ch)
+      ? `<U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}>`
+      : ch
+  }
+  return out
 }

@@ -7,6 +7,7 @@ import { api } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
 import { cellValue, toCSV } from '../../lib/csv'
 import { sameDN } from '../../lib/dn'
+import { visible } from '../../lib/display'
 import { entriesToLDIF } from '../../lib/ldif'
 import { defaultColumns } from '../../lib/nav'
 import { rowHeight, usePrefs } from '../../lib/prefs'
@@ -395,7 +396,7 @@ function Listing({ search }: { search: SearchState }) {
                   id={`result-${v.index}`}
                   role="row"
                   aria-selected={selected}
-                  title={e.dn}
+                  title={visible(e.dn)}
                   onClick={() => ws.select(e.dn)}
                   style={{ ...grid, height: v.size }}
                   className={cn(
@@ -409,7 +410,7 @@ function Listing({ search }: { search: SearchState }) {
                         <ChangeDot />
                       </span>
                     )}
-                    {nameOf(asText(e))}
+                    {visible(nameOf(asText(e)))}
                   </div>
                   {attrs.map((c) => (
                     <div

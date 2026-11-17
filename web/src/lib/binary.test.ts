@@ -52,6 +52,11 @@ describe('fileName', () => {
     expect(fileSafe('a<b>c|d*e"f\u0001')).toBe('a_b_c_d_e_f_')
     expect(fileName('', 'jpegPhoto', 0, '/9j/', schema)).toBe('entry-jpegPhoto.jpg')
   })
+  it('replaces bidi and other control or format characters', () => {
+    const name = fileName('cn=\u202egpj.exe,dc=x', 'jpegPhoto', 0, '/9j/', schema)
+    expect(name).toBe('cn=_gpj.exe-jpegPhoto.jpg')
+    expect(fileSafe('a\u007fb\u0085c\u009fd\u200be\u2066f')).toBe('a_b_c_d_e_f')
+  })
 })
 
 describe('base64ToBytes', () => {

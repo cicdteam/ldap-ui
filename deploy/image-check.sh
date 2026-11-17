@@ -1,8 +1,9 @@
 #!/bin/sh
 # Checks one ldaplens image built for one platform: image and binary
 # architecture, unpacked size, version, /healthz and /api/server of server
-# mode (the default command) on a read-only root filesystem, and the login
-# link and token check of local mode with a volume.
+# mode (the default command), and the login link and token check of local mode
+# with a volume. Both run with a read-only root filesystem, no capabilities and
+# no-new-privileges.
 # Usage: image-check.sh <image> <platform> <version>.
 # Exits non-zero on the first failure and always removes its containers (with
 # their anonymous volumes) and temporary files.
@@ -46,7 +47,8 @@ got=$(docker run --rm --platform "$platform" "$image" --version)
 printf 'connections:\n  - name: anon\n    url: ldap://127.0.0.1:1389\n' >"$tmp/connections.yaml"
 chmod 644 "$tmp/connections.yaml"
 docker rm -fv "$name" >/dev/null 2>&1 || true
-docker run -d --name "$name" --platform "$platform" --read-only -p 127.0.0.1::8080 \
+docker run -d --name "$name" --platform "$platform" -p 127.0.0.1::8080 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   -v "$tmp/connections.yaml:/etc/ldaplens/connections.yaml:ro" \
   -e LDAPLENS_CONFIG=/etc/ldaplens/connections.yaml \
   -e LDAPLENS_AUTH_TOKEN=image-check-token-0000 "$image" >/dev/null
@@ -64,9 +66,12 @@ case $got in
   *) echo "$image: /api/server answered '$got', want mode server" >&2; docker logs "$name" >&2; exit 1 ;;
 esac
 
-# Local mode keeps a token in the volume at /data and logs the login link.
+# Local mode keeps a token in the volume at /data, its only write, and logs the
+# login link.
 docker rm -fv "$local_name" >/dev/null 2>&1 || true
-docker run -d --name "$local_name" --platform "$platform" -p 127.0.0.1::8080 -v /data "$image" local >/dev/null
+docker run -d --name "$local_name" --platform "$platform" -p 127.0.0.1::8080 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v /data "$image" local >/dev/null
 i=0
 until docker logs "$local_name" 2>&1 | grep -q '/?token='; do
   i=$((i + 1))

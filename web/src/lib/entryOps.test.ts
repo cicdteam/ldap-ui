@@ -384,6 +384,30 @@ describe('cloneForm', () => {
       { name: 'jpegPhoto', values: [], binary: ['/9j/AAEC'] },
     ])
   })
+  it('leaves authentication bindings out', () => {
+    const svc: Entry = {
+      dn: `uid=svc,${OU}`,
+      attributes: [
+        { name: 'objectClass', values: [{ text: 'inetOrgPerson' }] },
+        { name: 'cn', values: [{ text: 'Svc' }] },
+        { name: 'sn', values: [{ text: 'svc' }] },
+        { name: 'description', values: [{ text: 'service' }] },
+        { name: 'sshPublicKey', values: [{ text: 'ssh-ed25519 AAAA' }] },
+        { name: 'ipaSshPubKey', values: [{ text: 'ssh-ed25519 AAAB' }] },
+        { name: 'altSecurityIdentities', values: [{ text: 'X509:<I>CN=CA<S>CN=svc' }] },
+        { name: 'msDS-KeyCredentialLink', values: [{ text: 'B:8:0001:CN=svc' }] },
+        { name: 'servicePrincipalName', values: [{ text: 'HTTP/svc.example.org' }] },
+        { name: 'krbPrincipalName', values: [{ text: 'svc@EXAMPLE.ORG' }] },
+        { name: 'krbCanonicalName', values: [{ text: 'svc@EXAMPLE.ORG' }] },
+        { name: 'ipaUniqueID', values: [{ text: '0a1b2c3d' }] },
+      ],
+    }
+    expect(cloneForm(svc, idx).attrs).toEqual([
+      { name: 'cn', values: ['Svc'] },
+      { name: 'sn', values: ['svc'] },
+      { name: 'description', values: ['service'] },
+    ])
+  })
 })
 
 describe('addAttributes', () => {

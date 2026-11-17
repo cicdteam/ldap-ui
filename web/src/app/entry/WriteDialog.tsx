@@ -1,7 +1,9 @@
+import { ArrowRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { CopyButton } from '../../ui/CopyButton'
+import { visible } from '../../lib/display'
 import { COPY_LDIF_HINT } from '../../lib/ldif'
 import { LdifView } from '../../ui/LdifView'
 import { Dialog } from '../../ui/Dialog'
@@ -14,6 +16,7 @@ import { Spinner } from '../../ui/Spinner'
 export function WriteDialog({
   title,
   target,
+  to,
   ldif,
   action,
   danger,
@@ -25,7 +28,9 @@ export function WriteDialog({
   children,
 }: {
   title: string
-  target: ReactNode
+  target: string
+  /** Where a rename moves target. */
+  to?: string
   ldif?: string
   action: string
   danger?: boolean
@@ -54,7 +59,15 @@ export function WriteDialog({
           if (ok) onSubmit()
         }}
       >
-        <div className="font-mono text-xs break-all">{target}</div>
+        <div className="font-mono text-xs break-all">
+          {visible(target)}
+          {to !== undefined && (
+            <>
+              {' '}
+              <ArrowRight className="inline h-3 w-3" aria-label="to" /> {visible(to)}
+            </>
+          )}
+        </div>
         {children}
         {ldif !== undefined && (
           <details>

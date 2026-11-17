@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ShieldAlert } from 'lucide-react'
 import { api, toProfileInput } from '../../lib/api'
+import { visible } from '../../lib/display'
 import type { CertInfo, Profile } from '../../lib/types'
 import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
@@ -35,9 +36,9 @@ export function CertChain({
             <div className="text-xs text-muted">
               {i === 0 ? 'Server certificate' : `Issuer ${i}`}
             </div>
-            <div className="font-mono text-xs break-all">{c.subject}</div>
+            <div className="font-mono text-xs break-all">{visible(c.subject)}</div>
             <div className="text-xs text-muted">
-              issued by <span className="font-mono">{c.issuer}</span>, expires{' '}
+              issued by <span className="font-mono">{visible(c.issuer)}</span>, expires{' '}
               {new Date(c.notAfter).toLocaleDateString()}
             </div>
             <div className="font-mono text-[11px] break-all text-muted">

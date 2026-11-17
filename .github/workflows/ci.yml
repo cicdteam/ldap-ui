@@ -88,7 +88,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: make image-multiarch PLATFORMS=linux/${{ matrix.arch }}
+      - run: make image-multiarch PLATFORMS="linux/$ARCH"
+        env:
+          ARCH: ${{ matrix.arch }}
 
   # A v* tag on main publishes one multi-arch image, with an SBOM and a signed
   # provenance attestation, after every check passes. The Go and Node stages
@@ -151,3 +153,28 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # Runs the image check on the pushed image itself, pulled by digest without a
+  # login, as a user would.
+  verify:
+    needs: publish
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-26.04-arm
+    name: verify-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          docker pull --platform "linux/$ARCH" "$IMAGE"
+          deploy/image-check.sh "$IMAGE" "linux/$ARCH" "$GITHUB_REF_NAME"
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ needs.publish.outputs.digest }}
+          ARCH: ${{ matrix.arch }}

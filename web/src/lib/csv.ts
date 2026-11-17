@@ -10,9 +10,13 @@ export function cellValue(e: Entry, column: string): string {
   return (a.values ?? []).map((v) => v.display ?? v.text).join('; ')
 }
 
-/** Quotes per RFC 4180 and defuses spreadsheet formulas (OWASP CSV injection). */
+/**
+ * Quotes per RFC 4180 and defuses spreadsheet formulas (OWASP CSV injection): at the start, after
+ * every ";" (values join with "; ") and after every tab. A comma or line break inside a quoted
+ * field does not split it, so neither starts a new formula.
+ */
 export function csvField(s: string): string {
-  const v = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s
+  const v = (/^[\t\r]/.test(s) ? `'${s}` : s).replace(/(^|[;\t])(\s*)([=+\-@])/g, "$1$2'$3")
   return /[",\r\n]/.test(v) || v !== v.trim() ? `"${v.replace(/"/g, '""')}"` : v
 }
 

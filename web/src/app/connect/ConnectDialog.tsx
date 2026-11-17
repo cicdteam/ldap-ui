@@ -32,6 +32,9 @@ export function ConnectDialog({
   const [hint, setHint] = useState<string>()
   const hintId = useId()
   const connect = useMutation({
+    // The password reaches the request through this closure, not the mutation's variables. The
+    // mutation cache keeps both until gcTime after the dialog lets go: 0 drops them at once.
+    gcTime: 0,
     mutationFn: (p: Profile) => api.connect(p.name, password, p.userLogin ? username : undefined),
     onSuccess: async (_info, p) => {
       setPassword('')

@@ -4,6 +4,7 @@ import {
   entriesToLDIF,
   entryToLDIF,
   fold,
+  HIDDEN,
   isAttrDescription,
   isSafe,
   ldifPreview,
@@ -155,11 +156,37 @@ describe('ldifPreview', () => {
     const line = `description:: ${base64UTF8(value)}`
     expect(ldifPreview(line)).toEqual([{ text: line }])
   })
+  it.each([
+    ['a variation selector', 'cn=Administrator\uFE0F,cn=Users,dc=corp,dc=example'],
+    ['a combining grapheme joiner', 'Андрей\u034Fx'],
+    ['a Hangul filler', 'admin\u3164'],
+    ['a supplementary variation selector', 'Андрей\u{E0100}x'],
+    ['a private use character', 'Андрей\uE000x'],
+    ['an unassigned code point', 'Андрей\u0378x'],
+  ])('keeps base64 for a dn with %s', (_, value) => {
+    const line = `dn:: ${base64UTF8(value)}`
+    expect(ldifPreview(line)).toEqual([{ text: line }])
+  })
+  it.each(['cn=Иван,dc=x', 'cn=Müller,dc=x', 'cn=Иван\u00A0Петров,dc=x'])(
+    'still decodes %j',
+    (value) => {
+      expect(ldifPreview(`dn:: ${base64UTF8(value)}`)).toEqual([{ attr: 'dn', utf8: value }])
+    },
+  )
   it('keeps a blank line between blocks', () => {
     expect(ldifPreview('a: 1\n\nb: 2\n')).toEqual([
       { text: 'a: 1' },
       { text: '' },
       { text: 'b: 2' },
     ])
+  })
+})
+
+describe('HIDDEN', () => {
+  it('covers default-ignorable, private use and unassigned code points', () => {
+    expect(HIDDEN.source).toBe(
+      '[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_Code_Point}\\p{Co}\\P{Assigned}]',
+    )
+    expect(HIDDEN.flags).toBe('u')
   })
 })

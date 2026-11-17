@@ -103,7 +103,9 @@ docker run --rm -p 127.0.0.1:8080:8080 -v ldaplens:/data ghcr.io/cicdteam/ldaple
 Open the login link from the log, then add your directories with **New
 connection**. The volume keeps them and the token; without it, both are lost
 when the container is removed. Set `LDAPLENS_AUTH_TOKEN` to choose the token
-(at least 16 characters from `A-Z a-z 0-9 . _ ~ -`).
+(at least 16 characters from `A-Z a-z 0-9 . _ ~ -`). The image runs as UID
+65532, so a bind mount used in place of the volume must be owned by it
+(`chown 65532:65532 <dir>`), and `--user` needs a directory that user owns.
 
 Connections come from two places, and you can use either or both: the ones
 you create in the UI (kept in the data dir, passwords never stored) and the
@@ -123,6 +125,10 @@ With no arguments, the image runs `server`, which needs `LDAPLENS_CONFIG`
 filesystem and no volume. Arguments replace that default, so start them with
 `server` or `local`: `--config=...` alone runs local mode.
 
+Both modes also work hardened, with these flags added to `docker run`:
+`--read-only --cap-drop ALL --security-opt no-new-privileges:true` (local
+mode writes only to `/data`).
+
 To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
 
@@ -130,9 +136,9 @@ The UI's hashed assets are served gzipped and cached for a year, so no ingress c
 `/api` responses are never cached (`Cache-Control: no-store`), and the UI refuses to be framed by other pages.
 
 `make image-multiarch` builds `ldaplens:dev-amd64` and `ldaplens:dev-arm64` with
-buildx and checks each (architecture, `--version`, `/healthz` of server mode
-on a read-only root filesystem, the login link of local mode with a volume,
-unpacked size under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
+buildx and checks each (architecture, unpacked size under 40 MiB, `--version`,
+and, with the flags above, `/healthz` of server mode and the login link of
+local mode with a volume); set `IMAGE` to tag them for a registry. On a host without amd64
 (or arm64) emulation, pass `PLATFORMS=linux/arm64` (or `linux/amd64`) to check
 one platform.
 
@@ -189,7 +195,9 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   the entry, and focus moves to the card's heading (to the tree with no entry
   open). Pane sizes are
   remembered separately with the list and without it. With no entry
-  selected, the card says so.
+  selected, the card says so. Invisible and direction-changing characters in
+  names and DNs (a right-to-left override, a zero-width space) show as
+  `<U+XXXX>`, such as `<U+202E>`; Copy DN, LDIF and writes use the real value.
 - **List children** (the list icon on a container in the tree, or "List
   children of the current entry" in the command palette): lists the entries
   one level under it, with the default columns. The search bar keeps its own
@@ -296,9 +304,9 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   Raw values in More shows them as stored. Membership lists direct and nested
   groups with the "via" group; LDIF shows the
   entry as LDIF (non-ASCII text such as Cyrillic names is shown decoded, marked
-  `utf-8`, here and in the Review and entry action dialogs; values with edge spaces,
-  line breaks, control or invisible characters stay base64; Copy LDIF and
-  downloads keep base64, as RFC 2849 requires).
+  `utf-8`, here and in the Review and entry action dialogs; values with edge
+  spaces, line breaks, control, invisible, private-use or unassigned characters
+  stay base64; Copy LDIF and downloads keep base64, as RFC 2849 requires).
   The Members list appears for groups that use `member` or
   `uniqueMember` (not for a posixGroup's `memberUid`); Member of also lists
   the posixGroups whose `memberUid` holds the entry's `uid`. Values of
@@ -374,10 +382,13 @@ on non-Latin keyboard layouts.
   (photos) and attributes with options too, without the RDN value, operational
   and secret attributes, the attributes that identify one entry (`uid`, `mail`,
   `uidNumber`, `employeeNumber`, `sAMAccountName`, `userPrincipalName`,
-  `objectGUID`, `objectSid`, `mS-DS-ConsistencyGuid`) and certificates
+  `objectGUID`, `objectSid`, `mS-DS-ConsistencyGuid`), certificates
   (`userCertificate`, `userSMIMECertificate`, any attribute of certificate
-  syntax). Binary fields in both list their values with a delete button and
-  take files through "+ Upload file…".
+  syntax), authentication bindings (`sshPublicKey`, `ipaSshPubKey`,
+  `altSecurityIdentities`, `msDS-KeyCredentialLink`, `servicePrincipalName`,
+  `krbPrincipalName`, `krbCanonicalName`) and `ipaUniqueID`. Binary fields in
+  both list their values with a delete button and take files through
+  "+ Upload file…".
 - **Rename/Move** changes the RDN, the parent, or both; "Keep old RDN value as
   an attribute" is off by default and not offered on Active Directory.
   **Delete** removes an entry without children after you type its RDN. Both
@@ -1308,7 +1319,8 @@ journald keeps the login link it logs at every start. Passwords for
 ## Development
 
 `make check` runs Go fmt, vet, lint, vuln and unit tests plus the web checks
-(`make web-check`: typecheck, ESLint, Prettier, Vitest, npm audit).
+(`make web-check`: typecheck, ESLint, Prettier, Vitest, npm audit of the
+production dependencies).
 `make test-integration` needs Docker; it runs OpenLDAP and Samba AD. `make
 web` builds the UI into `web/dist`, which the Go binary embeds (`make build`
 does both).

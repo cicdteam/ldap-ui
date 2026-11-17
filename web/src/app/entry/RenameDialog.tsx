@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../../lib/api'
 import { parentDN, sameDN, splitDN } from '../../lib/dn'
@@ -41,11 +40,8 @@ export function RenameDialog({ dn, close }: { dn: string; close: () => void }) {
   return (
     <WriteDialog
       title="Rename or move"
-      target={
-        <>
-          {dn} <ArrowRight className="inline h-3 w-3" aria-label="to" /> {renameTarget(rdn, parent)}
-        </>
-      }
+      target={dn}
+      to={renameTarget(rdn, parent)}
       ldif={renameLDIF(dn, rdn.trim(), newParent, !keep)}
       action="Apply"
       ready={problem === ''}

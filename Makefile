@@ -11,16 +11,16 @@ GOVULNCHECK_MIN := 1.9.0
 GO_IMAGE := golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf
 IMAGE ?= ldaplens:dev
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
 
-export GOFUMPT_MIN GOIMPORTS_VERSION GOLANGCI_LINT_MIN GOVULNCHECK_MIN GO_IMAGE
+# VERSION is exported so recipes quote it as "$$VERSION": the shell never parses a tag name.
+export GOFUMPT_MIN GOIMPORTS_VERSION GOLANGCI_LINT_MIN GOVULNCHECK_MIN GO_IMAGE VERSION
 
 .PHONY: help fmt vet lint vuln test test-integration build image image-multiarch check web web-check e2e demo-start demo-stop
 
 .DEFAULT_GOAL := help
 
 DEMO_PORT ?= 8080
-DEMO_COMPOSE := VERSION=$(VERSION) DEMO_PORT=$(DEMO_PORT) docker compose -f deploy/docker-compose.yml
+DEMO_COMPOSE := DEMO_PORT=$(DEMO_PORT) docker compose -f deploy/docker-compose.yml
 # 127.0.0.1, not localhost: the port is published on IPv4 only, and localhost
 # may resolve to ::1 first, where another program can hold the same port.
 DEMO_URL := http://127.0.0.1:$(DEMO_PORT)/?token=demo-token-not-secret
@@ -51,26 +51,26 @@ test-integration: ## Run Go integration tests against OpenLDAP and Samba AD in D
 web: ## Build the web UI
 	cd web && npm ci --ignore-scripts && npm run build
 
-web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit
-	cd web && npm ci --ignore-scripts && npm run check && npm audit --audit-level=high
+web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit of production deps
+	cd web && npm ci --ignore-scripts && npm run check && npm audit --omit=dev --audit-level=high
 
 e2e: ## Run the Playwright e2e tests against OpenLDAP and Samba AD in Docker
 	cd web && npm ci --ignore-scripts && npm run e2e
 
 build: web ## Build bin/ldaplens with the embedded UI
-	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/ldaplens ./cmd/ldaplens
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$$VERSION" -o bin/ldaplens ./cmd/ldaplens
 
 image: ## Build the Docker image (IMAGE=ldaplens:dev by default)
-	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t $(IMAGE) .
+	docker build -f deploy/Dockerfile --build-arg VERSION="$$VERSION" -t $(IMAGE) .
 
 PLATFORMS ?= linux/amd64 linux/arm64
 
 image-multiarch: ## Build and check the image for amd64 and arm64 (IMAGE-amd64, IMAGE-arm64)
 	@set -e; for p in $(PLATFORMS); do \
 	  a=$${p#linux/}; \
-	  docker buildx build --platform $$p --load --build-arg VERSION=$(VERSION) \
-	    -f deploy/Dockerfile -t $(IMAGE)-$$a . ; \
-	  deploy/image-check.sh $(IMAGE)-$$a $$p $(VERSION); \
+	  docker buildx build --platform $$p --load --build-arg VERSION="$$VERSION" \
+	    -f deploy/Dockerfile -t "$(IMAGE)-$$a" . ; \
+	  deploy/image-check.sh "$(IMAGE)-$$a" $$p "$$VERSION"; \
 	done
 
 check: fmt vet lint vuln test web-check ## Run every check: fmt vet lint vuln test web-check

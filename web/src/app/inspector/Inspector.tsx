@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { isApiError } from '../../lib/api'
 import { fileSafe } from '../../lib/binary'
 import { parentDN, rdnDisplay, splitDN } from '../../lib/dn'
-import { formatDisplay, statusChips } from '../../lib/display'
+import { formatDisplay, statusChips, visible } from '../../lib/display'
 import { canSetPassword } from '../../lib/entryOps'
 import { COPY_LDIF_HINT, entryToLDIF } from '../../lib/ldif'
 import { asText, nameOf } from '../../lib/results'
@@ -266,10 +266,10 @@ function CardHeader({
         <h2
           id="card-heading"
           tabIndex={-1}
-          title={name}
+          title={visible(name)}
           className="min-w-0 truncate text-[17px] leading-6 font-semibold"
         >
-          {name}
+          {visible(name)}
         </h2>
         {name !== bare && first && (
           <span className="shrink-0 font-mono text-xs text-muted">{rdnDisplay(first)}</span>
@@ -325,7 +325,9 @@ function EntryError({ dn, error, retry }: { dn: string; error: unknown; retry: (
         }
       >
         No entry at this DN.
-        {target && <span className="block font-mono text-[11px] text-muted">{target}</span>}
+        {target && (
+          <span className="block font-mono text-[11px] text-muted">{visible(target)}</span>
+        )}
       </Banner>
     )
   }

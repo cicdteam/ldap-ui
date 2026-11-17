@@ -27,7 +27,9 @@ export interface EntryForm {
 
 // Values that identify one entry: a clone leaves them out (spec 4.3; lowercased). Certificates
 // (one person's key) and AD's mS-DS-ConsistencyGuid (one cloud identity) go too: by certificate
-// syntax, and by name where the syntax is octet string or binary (AD, userSMIMECertificate).
+// syntax, and by name where the syntax is octet string or binary (AD, userSMIMECertificate). So
+// do authentication bindings (SSH keys, certificate and key credential mappings, Kerberos
+// principals), which would let the clone sign in as the source, and FreeIPA's ipaUniqueID.
 const CLONE_SKIP = new Set([
   'uid',
   'mail',
@@ -40,6 +42,14 @@ const CLONE_SKIP = new Set([
   'usercertificate',
   'usersmimecertificate',
   'ms-ds-consistencyguid',
+  'sshpublickey',
+  'ipasshpubkey',
+  'altsecurityidentities',
+  'msds-keycredentiallink',
+  'serviceprincipalname',
+  'krbprincipalname',
+  'krbcanonicalname',
+  'ipauniqueid',
 ])
 
 const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' })

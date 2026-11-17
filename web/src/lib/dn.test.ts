@@ -47,6 +47,13 @@ describe('values', () => {
     expect(rdnDisplay('cn=Doe\\, John')).toBe('cn=Doe, John')
     expect(rdnValue('cn=a\\=b')).toBe('a=b')
   })
+
+  it('shows hidden characters in rdnDisplay only', () => {
+    const rdn = 'cn=\\E2\\80\\AEnimda'
+    expect(rdnDisplay(rdn)).toBe('cn=<U+202E>nimda')
+    expect(rdnValue(rdn)).toBe('\u202Enimda')
+    expect(normDN(rdn)).toBe('cn=\u202Enimda')
+  })
 })
 
 describe('relations', () => {
@@ -103,6 +110,13 @@ describe('breadcrumbs', () => {
     expect(breadcrumbs('cn=x,dc=other', 'dc=example,dc=org')).toEqual([
       { label: 'dc=other', dn: 'dc=other' },
       { label: 'cn=x', dn: 'cn=x,dc=other' },
+    ])
+  })
+
+  it('shows hidden characters in the base crumb label, not its dn', () => {
+    expect(breadcrumbs('cn=x,dc=\u202Eorg', 'dc=\u202Eorg')).toEqual([
+      { label: 'dc=<U+202E>org', dn: 'dc=\u202Eorg' },
+      { label: 'cn=x', dn: 'cn=x,dc=\u202Eorg' },
     ])
   })
 })
