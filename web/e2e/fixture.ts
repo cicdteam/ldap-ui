@@ -64,6 +64,9 @@ export const E2E_PEOPLE: string[] = [
   'photoup',
   'langer',
   'certholder',
+  'layout',
+  'pending',
+  'pendingdrop',
 ]
 
 /** Groups under ou=e2e for the membership scenarios and the journey: their class and the uids in them. */
@@ -115,5 +118,38 @@ export function fixtureLDIF(): string {
       person(p, E2E_OU, [`jpegPhoto:: ${readFileSync(PHOTO).toString('base64')}`]),
     ),
     ...Object.entries(E2E_GROUPS).map(([name, g]) => group(name, g)),
+    // An auxiliary class with a MAY value: removing the class flags loginShell, under Optional.
+    person('sections', E2E_OU, [
+      'objectClass: posixAccount',
+      'uidNumber: 7100',
+      'gidNumber: 7100',
+      'homeDirectory: /home/sections',
+      'loginShell: /bin/sh',
+    ]),
+    // With the demo's "Doe, John", what a name search for "doe" finds.
+    [
+      `dn: uid=jane.doe,${E2E_OU}`,
+      'objectClass: inetOrgPerson',
+      'uid: jane.doe',
+      'cn: Jane Doe',
+      'sn: Doe',
+      'mail: jane.doe@example.org',
+      '',
+    ].join('\n'),
+    // The tree shows its displayName beside the RDN: uid=jdoe John Doe. The card pins a
+    // person's cn, uid, mail, title, manager and telephoneNumber.
+    [
+      `dn: uid=jdoe,${E2E_OU}`,
+      'objectClass: inetOrgPerson',
+      'uid: jdoe',
+      'cn: J. Doe',
+      'displayName: John Doe',
+      'sn: Doe',
+      'mail: jdoe@example.org',
+      'title: Site Reliability Engineer',
+      `manager: uid=jane.doe,${E2E_OU}`,
+      'telephoneNumber: +49 30 5550 0142',
+      '',
+    ].join('\n'),
   ].join('\n')
 }

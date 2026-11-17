@@ -1,15 +1,28 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDown, ArrowUp, Download, Search, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import * as Popover from '@radix-ui/react-popover'
+import { ArrowDown, ArrowUp, Columns3, Download, X } from 'lucide-react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
 import { cellValue, toCSV } from '../../lib/csv'
-import { parentDN, rdnDisplay, sameDN, splitDN } from '../../lib/dn'
+import { sameDN } from '../../lib/dn'
 import { entriesToLDIF } from '../../lib/ldif'
 import { defaultColumns } from '../../lib/nav'
 import { rowHeight, usePrefs } from '../../lib/prefs'
-import { RESULT_LIMITS, nextLimit, nextSort, sortEntries, type Sort } from '../../lib/results'
+import {
+  NAME_ATTRS,
+  NAME_COLUMN,
+  RESULT_LIMITS,
+  asText,
+  nameOf,
+  nextLimit,
+  nextSort,
+  sortEntries,
+  withColumns,
+  type Sort,
+} from '../../lib/results'
+import { isModKey } from '../../lib/shortcuts'
 import type { SearchState } from '../../lib/storage'
 import { ChangeDot } from '../../ui/Badge'
 import { Banner, ErrorBanner } from '../../ui/Banner'
@@ -19,7 +32,9 @@ import { download } from '../../ui/download'
 import { Spinner } from '../../ui/Spinner'
 import { useBatch } from '../batch'
 import { useWorkspace } from '../context'
+import { FOCUS_LIST } from '../events'
 import { searchKey } from '../queries'
+import { ColumnPicker } from './ColumnPicker'
 
 // The sticky header row (h-7 buttons plus a 1px bottom border) sits in the scroll element
 // above the rows. The virtualizer does not know about it, so scrolling to a row reserves
@@ -27,56 +42,20 @@ import { searchKey } from '../queries'
 // based on; measure the header if the root font size ever changes.
 const HEADER_HEIGHT = 29
 
-function Examples() {
-  const ws = useWorkspace()
-  const examples = ws.info.activeDirectory
-    ? [
-        ['People', '(&(objectCategory=person)(objectClass=user))'],
-        ['Groups', '(objectClass=group)'],
-        [
-          'Disabled accounts',
-          '(&(objectCategory=person)(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=2))',
-        ],
-      ]
-    : [
-        ['People', '(objectClass=person)'],
-        [
-          'Groups',
-          '(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))',
-        ],
-        ['Organizational units', '(objectClass=organizationalUnit)'],
-      ]
-  return (
-    <div className="space-y-2 p-4 text-muted">
-      <p className="flex items-center gap-2">
-        <Search className="h-4 w-4" /> Type a filter and press Run, or pick an entry in the tree.
-        Try:
-      </p>
-      <ul className="space-y-1">
-        {examples.map(([label, filter]) => (
-          <li key={label}>
-            <button
-              type="button"
-              className="text-left hover:text-fg"
-              onClick={() =>
-                ws.runSearch({ base: '', scope: 'sub', filter, attrs: defaultColumns(ws.info) })
-              }
-            >
-              <span className="text-fg">{label}</span>{' '}
-              <span className="font-mono text-xs">{filter}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
+// The smallest widths of the Name column and of each other column. Name, uid and mail fit a
+// 22rem pane; more columns scroll sideways, header and rows together.
+const NAME_REM = 10
+const COLUMN_REM = 6
 
-export function Results() {
+const popover = 'z-50 elevated rounded-[10px] border border-border bg-bg'
+const menuItem =
+  'flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1 text-left hover:bg-hover'
+
+/** The list pane: the results of ws.search, or of List children. */
+export function Results({ search }: { search: SearchState }) {
   const ws = useWorkspace()
-  if (!ws.search) return <Examples />
   // Keyed per run so the limit, the sort and the scroll position start over.
-  return <Listing key={[...searchKey(ws.conn, ws.search), ws.runs].join('\0')} search={ws.search} />
+  return <Listing key={[...searchKey(ws.conn, search), ws.runs].join('\0')} search={search} />
 }
 
 function Listing({ search }: { search: SearchState }) {
@@ -99,7 +78,8 @@ function Listing({ search }: { search: SearchState }) {
           base: search.base || ws.info.baseDN,
           scope: search.scope,
           filter: search.filter,
-          attributes: attrs,
+          // Duplicates are harmless: the server returns each attribute once.
+          attributes: [...NAME_ATTRS, ...attrs],
           sizeLimit: limit,
         },
         signal,
@@ -111,6 +91,8 @@ function Listing({ search }: { search: SearchState }) {
   const more = !!q.data?.more
   const next = nextLimit(limit)
   const [sort, setSort] = useState<Sort>(null)
+  // Columns picked in the Columns popover; closing it runs the search with them.
+  const [picked, setPicked] = useState(attrs)
   const entries = q.data?.entries
   const rows = useMemo(() => sortEntries(entries ?? [], sort), [entries, sort])
   // The active row is the selected entry, so it stays right after sorting, paging or a
@@ -143,6 +125,17 @@ function Listing({ search }: { search: SearchState }) {
     // Replace, so arrowing through rows does not leave one history entry per row.
     ws.select(rows[i].dn, { replace: true })
   }
+  // Down in the query bar: the list takes focus on its selected row, else on the first.
+  const onFocusList = useEffectEvent(() => {
+    scrollRef.current?.focus()
+    move(Math.max(active, 0))
+  })
+  useEffect(() => {
+    const fn = () => onFocusList()
+    window.addEventListener(FOCUS_LIST, fn)
+    return () => window.removeEventListener(FOCUS_LIST, fn)
+  }, [])
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10 }
     if (e.key in step) {
@@ -151,25 +144,50 @@ function Listing({ search }: { search: SearchState }) {
     } else if (e.key === 'Home' || e.key === 'End') {
       e.preventDefault()
       move(e.key === 'Home' ? 0 : rows.length - 1)
+    } else if (isModKey(e, 'c') && active >= 0 && !getSelection()?.toString()) {
+      // The row shows the name; Mod+C copies its DN unless text is selected.
+      void navigator.clipboard?.writeText(rows[active].dn)
     }
   }
 
-  const columns = ['dn', ...attrs]
+  const columns = [NAME_COLUMN, ...attrs]
+  // One template for the header and every row, all inside one box at least as wide as the
+  // columns' minimums, so the cells line up and the row backgrounds reach the last column.
   const grid = {
-    gridTemplateColumns: `minmax(16rem, 2fr) repeat(${attrs.length}, minmax(7rem, 1fr))`,
+    gridTemplateColumns: `minmax(${NAME_REM}rem, 2fr) repeat(${attrs.length}, minmax(${COLUMN_REM}rem, 1fr))`,
   }
+  const minWidth = `${NAME_REM + attrs.length * COLUMN_REM}rem`
+  const items = virt.getVirtualItems()
   const canceled = q.isPending && q.fetchStatus === 'idle'
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2 text-xs">
-        <span className="text-muted">
+    <div
+      className="flex h-full flex-col"
+      onKeyDown={(e) => {
+        // Esc with focus in the pane closes the list. A popover is portaled outside the pane:
+        // Esc there closes only the popover.
+        if (e.key === 'Escape' && e.currentTarget.contains(e.target as Node)) {
+          e.preventDefault()
+          ws.closeList()
+        }
+      }}
+    >
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-2 text-xs">
+        <span className="min-w-0 truncate font-semibold">
           {q.isPending ? 'Searching…' : `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`}
-          {more && ', more on the server'}
-          {sort && more && ' (sorting loaded rows)'}
+          <span className="font-normal text-muted">
+            {more && ', more on the server'}
+            {sort && more && ' (sorting loaded rows)'}
+          </span>
         </span>
         {q.isFetching && <Spinner />}
-        <div className="ml-auto flex items-center gap-1">
+        <span
+          className="min-w-0 flex-1 truncate px-1 font-mono text-[11px]"
+          title={`The filter that ran: ${search.filter} (${search.scope} under ${search.base || ws.info.baseDN})`}
+        >
+          {search.filter}
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
           {q.isFetching && (
             <Button size="sm" onClick={cancel}>
               Cancel
@@ -185,30 +203,87 @@ function Listing({ search }: { search: SearchState }) {
               Load more
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!rows.length}
-            title="Export loaded rows as CSV"
-            onClick={() => download(`${ws.conn}-search.csv`, toCSV(rows, attrs), 'text/csv')}
+          <Popover.Root
+            onOpenChange={(open) => {
+              if (!open && picked.join() !== attrs.join())
+                ws.runSearch({ ...search, attrs: picked })
+            }}
           >
-            <Download className="h-3.5 w-3.5" /> CSV
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!rows.length}
-            title="Export loaded rows as LDIF (the selected columns only)"
-            onClick={() => download(`${ws.conn}-search.ldif`, entriesToLDIF(rows), 'text/plain')}
-          >
-            <Download className="h-3.5 w-3.5" /> LDIF
-          </Button>
+            <Popover.Trigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Columns"
+                title={`Columns: ${['Name', ...attrs].join(', ')}. Pick others from the schema`}
+              >
+                <Columns3 className="h-3.5 w-3.5" />
+              </Button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="end"
+                sideOffset={4}
+                aria-label="Columns"
+                className={cn(popover, 'flex w-80 p-2')}
+              >
+                <ColumnPicker columns={picked} onChange={setPicked} />
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+          <Popover.Root>
+            <Popover.Trigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Export"
+                title="Export the loaded rows as CSV or LDIF"
+                disabled={!rows.length}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="end"
+                sideOffset={4}
+                aria-label="Export"
+                className={cn(popover, 'w-64 p-1')}
+              >
+                <Popover.Close asChild>
+                  <button
+                    type="button"
+                    className={menuItem}
+                    onClick={() =>
+                      download(`${ws.conn}-search.csv`, toCSV(rows, attrs), 'text/csv')
+                    }
+                  >
+                    CSV <span className="text-xs text-muted">the DN and the columns</span>
+                  </button>
+                </Popover.Close>
+                <Popover.Close asChild>
+                  <button
+                    type="button"
+                    className={menuItem}
+                    onClick={() =>
+                      download(
+                        `${ws.conn}-search.ldif`,
+                        entriesToLDIF(withColumns(rows, attrs)),
+                        'text/plain',
+                      )
+                    }
+                  >
+                    LDIF <span className="text-xs text-muted">the selected columns only</span>
+                  </button>
+                </Popover.Close>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
           <Button
             size="icon"
             variant="ghost"
-            aria-label="Clear results"
-            title="Clear the results and go back to the examples"
-            onClick={() => ws.runSearch(null)}
+            aria-label="Close the list"
+            title="Close the list (Esc)"
+            onClick={ws.closeList}
           >
             <X className="h-3.5 w-3.5" />
           </Button>
@@ -275,77 +350,81 @@ function Listing({ search }: { search: SearchState }) {
         onKeyDown={onKeyDown}
         className="min-h-0 flex-1 overflow-auto outline-none"
       >
-        <div
-          role="row"
-          style={grid}
-          className="sticky top-0 z-10 grid min-w-max border-b border-border bg-panel text-xs"
-        >
-          {columns.map((c) => {
-            const sorted = sort?.column === c
-            return (
-              <div
-                key={c}
-                role="columnheader"
-                aria-sort={sorted ? (sort.desc ? 'descending' : 'ascending') : 'none'}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSort(nextSort(sort, c))}
-                  className="flex h-7 w-full items-center gap-1 px-2 text-left font-semibold hover:bg-hover"
+        <div style={{ minWidth }}>
+          <div
+            role="row"
+            style={grid}
+            className="sticky top-0 z-10 grid border-b border-border bg-panel text-xs"
+          >
+            {columns.map((c) => {
+              const sorted = sort?.column === c
+              return (
+                <div
+                  key={c}
+                  role="columnheader"
+                  aria-sort={sorted ? (sort.desc ? 'descending' : 'ascending') : 'none'}
+                  className="min-w-0"
                 >
-                  {c === 'dn' ? 'Entry' : c}
-                  {sorted &&
-                    (sort.desc ? (
-                      <ArrowDown className="h-3 w-3" />
-                    ) : (
-                      <ArrowUp className="h-3 w-3" />
-                    ))}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-        {q.isSuccess && rows.length === 0 && <p className="p-4 text-muted">No entries match.</p>}
-        <div style={{ height: virt.getTotalSize(), position: 'relative' }} className="min-w-max">
-          {virt.getVirtualItems().map((v) => {
-            const e = rows[v.index]
-            const rdns = splitDN(e.dn)
-            const selected = v.index === active
-            return (
-              <div
-                key={e.dn}
-                id={`result-${v.index}`}
-                role="row"
-                aria-selected={selected}
-                onClick={() => ws.select(e.dn)}
-                style={{ ...grid, height: v.size, transform: `translateY(${v.start}px)` }}
-                className={cn(
-                  'absolute top-0 left-0 grid w-full cursor-default items-center border-b border-border/50 hover:bg-hover',
-                  selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
-                )}
-              >
-                <div role="gridcell" className="truncate px-2" title={e.dn}>
-                  {entryChanges(batch, e.dn) && (
-                    <span className="mr-1 align-middle">
-                      <ChangeDot />
-                    </span>
-                  )}
-                  <span className="font-medium">{rdns[0] ? rdnDisplay(rdns[0]) : e.dn}</span>
-                  <span className="ml-1 font-mono text-[11px] text-muted">{parentDN(e.dn)}</span>
-                </div>
-                {attrs.map((c) => (
-                  <div
-                    key={c}
-                    role="gridcell"
-                    className="truncate px-2 font-mono text-xs"
-                    title={cellValue(e, c)}
+                  <button
+                    type="button"
+                    onClick={() => setSort(nextSort(sort, c))}
+                    className="flex h-7 w-full items-center gap-1 px-2 text-left font-semibold hover:bg-hover"
                   >
-                    {cellValue(e, c)}
+                    <span className="truncate">{c === NAME_COLUMN ? 'Name' : c}</span>
+                    {sorted &&
+                      (sort.desc ? (
+                        <ArrowDown className="h-3 w-3 shrink-0" />
+                      ) : (
+                        <ArrowUp className="h-3 w-3 shrink-0" />
+                      ))}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          {q.isSuccess && rows.length === 0 && <p className="p-4 text-muted">No entries match.</p>}
+          {/* Rows stay in normal flow under the header; the padding stands in for the rows
+              scrolled past, the height for all of them. */}
+          <div style={{ height: virt.getTotalSize(), paddingTop: items[0]?.start ?? 0 }}>
+            {items.map((v) => {
+              const e = rows[v.index]
+              const selected = v.index === active
+              return (
+                <div
+                  key={e.dn}
+                  id={`result-${v.index}`}
+                  role="row"
+                  aria-selected={selected}
+                  title={e.dn}
+                  onClick={() => ws.select(e.dn)}
+                  style={{ ...grid, height: v.size }}
+                  className={cn(
+                    'grid cursor-default items-center border-b border-border/50 hover:bg-hover',
+                    selected && 'bg-selected shadow-[inset_2px_0_0_var(--accent)]',
+                  )}
+                >
+                  <div role="gridcell" className="truncate px-2 font-medium">
+                    {entryChanges(batch, e.dn) && (
+                      <span className="mr-1 align-middle">
+                        <ChangeDot />
+                      </span>
+                    )}
+                    {nameOf(asText(e))}
                   </div>
-                ))}
-              </div>
-            )
-          })}
+                  {attrs.map((c) => (
+                    <div
+                      key={c}
+                      role="gridcell"
+                      className="truncate px-2 font-mono text-xs"
+                      title={cellValue(e, c)}
+                    >
+                      {cellValue(e, c)}
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>

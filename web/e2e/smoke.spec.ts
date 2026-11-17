@@ -15,7 +15,7 @@ test('connect, find, change, check LDIF, apply', async ({ page }) => {
   const dialog = page.getByRole('dialog', { name: 'Review changes' })
   await expect(dialog).toContainText('mail: smoke@example.org')
   await expect(dialog).toContainText('mail: smoke-new@example.org')
-  await dialog.getByRole('button', { name: 'Apply', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Apply to demo', exact: true }).click()
   await expect(dialog).toBeHidden()
   await page.getByRole('tab', { name: 'LDIF' }).click()
   await expect(page.getByText('mail: smoke-new@example.org')).toBeVisible()

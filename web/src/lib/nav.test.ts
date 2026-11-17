@@ -37,8 +37,8 @@ describe('columns', () => {
     insecureSkipVerify: false,
   })
   it('defaults per server', () => {
-    expect(defaultColumns(info(true))).toEqual(['cn', 'sAMAccountName', 'mail', 'objectClass'])
-    expect(defaultColumns(info(false))).toEqual(['cn', 'uid', 'mail', 'objectClass'])
+    expect(defaultColumns(info(true))).toEqual(['sAMAccountName', 'mail'])
+    expect(defaultColumns(info(false))).toEqual(['uid', 'mail'])
   })
   it('parses comma or space separated, dedupes case-insensitively', () => {
     expect(parseColumns(' cn, mail  uid,,CN ')).toEqual(['cn', 'mail', 'uid'])

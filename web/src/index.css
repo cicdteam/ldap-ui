@@ -98,8 +98,8 @@
     'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
     monospace;
   --row: 28px;
-  /* Vertical padding of inspector rows; compact density tightens it. */
-  --pad: 4px;
+  /* Top padding of attribute rows (1px less below): 30 px rows; compact density tightens it. */
+  --pad: 6px;
   /* Height of inputs, selects and buttons, and the gap around a form. */
   --ctl: 32px;
   --gap: 8px;
@@ -166,7 +166,7 @@
 
 :root[data-density='compact'] {
   --row: 22px;
-  --pad: 1px;
+  --pad: 2px;
   --ctl: 26px;
   --gap: 4px;
 }
@@ -198,6 +198,13 @@ body {
 :focus-visible:not(:where(.input-look, .cm-content)) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* The query bar's editor: a filter longer than one line opens down over the
+   panels while focused (FilterEditor sets data-tall), framed like a popover. */
+[data-tall] > .cm-editor.cm-focused {
+  outline: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
 }
 
 /* Dialogs, popovers (the filter's completion and lint tooltips too) and the

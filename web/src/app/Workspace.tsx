@@ -11,7 +11,7 @@ import {
 } from 'react-resizable-panels'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api, errorKind } from '../lib/api'
-import { readSearch, workspaceURL } from '../lib/nav'
+import { defaultColumns, readSearch, workspaceURL } from '../lib/nav'
 import { SchemaIndex } from '../lib/schema'
 import { isEditableTarget, isModKey, keyLabel } from '../lib/shortcuts'
 import { load, save, type SearchState } from '../lib/storage'
@@ -30,9 +30,10 @@ import { ENTRY_ACTION, FOCUS_FILTER, OPEN_REVIEW } from './events'
 import { Header } from './Header'
 import { Inspector } from './inspector/Inspector'
 import { CommandPalette } from './palette/CommandPalette'
+import { PendingBar } from './PendingBar'
 import { searchKey } from './queries'
 import { ReviewDialog } from './review/ReviewDialog'
-import { SearchPanel } from './search/SearchPanel'
+import { Results } from './search/Results'
 import { StatusBar } from './StatusBar'
 import { Tree } from './tree/Tree'
 
@@ -68,7 +69,9 @@ export function Workspace() {
   const qc = useQueryClient()
   const treeRef = useRef<PanelImperativeHandle>(null)
   const inspectorRef = useRef<PanelImperativeHandle>(null)
-  const layout = useDefaultLayout({ id: 'ldaplens:panels', storage: layoutStorage })
+  // Sizes persist per configuration: tree and card, or tree, list and card.
+  const layout2 = useDefaultLayout({ id: 'ldaplens:panels:2', storage: layoutStorage })
+  const layout3 = useDefaultLayout({ id: 'ldaplens:panels:3', storage: layoutStorage })
 
   const info = useQuery({
     queryKey: ['c', conn, 'info'],
@@ -111,7 +114,7 @@ export function Workspace() {
         qc.removeQueries({ queryKey: searchKey(conn, s) })
         setRuns((n) => n + 1)
       }
-      navigate(workspaceURL(conn, { dn, search: s }, 'search'))
+      navigate(workspaceURL(conn, { dn, search: s }, s ? 'search' : 'entry'))
     },
     [conn, dn, search, navigate, qc],
   )
@@ -211,6 +214,22 @@ export function Workspace() {
     search,
     select,
     runSearch,
+    closeList: () => {
+      // Before the list unmounts, so focus does not fall to the page: the card's heading, or
+      // the tree with no entry open.
+      const to =
+        document.getElementById('card-heading') ??
+        document.querySelector<HTMLElement>('[role="tree"]')
+      to?.focus()
+      runSearch(null)
+    },
+    listChildren: (base) =>
+      runSearch({
+        base,
+        scope: 'one',
+        filter: '(objectClass=*)',
+        attrs: defaultColumns(info.data),
+      }),
     runs,
     toggleTree: () => toggle(treeRef.current),
     toggleInspector: () => toggle(inspectorRef.current),
@@ -242,24 +261,31 @@ export function Workspace() {
             The schema could not be read: attribute groups and completion are off.
           </Banner>
         )}
+        {/* One group, so the tree and the card stay mounted while the list opens and closes.
+            The card has no default size: it takes what the tree and the list leave. */}
         <Group
           orientation="horizontal"
-          defaultLayout={layout.defaultLayout}
-          onLayoutChanged={layout.onLayoutChanged}
+          defaultLayout={(search ? layout3 : layout2).defaultLayout}
+          onLayoutChanged={(l, meta) => ('list' in l ? layout3 : layout2).onLayoutChanged(l, meta)}
           className="min-h-0 flex-1"
         >
-          <Panel panelRef={treeRef} id="tree" defaultSize="22%" minSize="12%" collapsible>
+          <Panel panelRef={treeRef} id="tree" defaultSize="18%" minSize="12%" collapsible>
             <Tree />
           </Panel>
           <Separator className={handle} />
-          <Panel id="center" defaultSize="43%" minSize="25%">
-            <SearchPanel />
-          </Panel>
-          <Separator className={handle} />
-          <Panel panelRef={inspectorRef} id="inspector" defaultSize="35%" minSize="20%" collapsible>
+          {search && (
+            <>
+              <Panel id="list" defaultSize="31%" minSize="20%">
+                <Results search={search} />
+              </Panel>
+              <Separator className={handle} />
+            </>
+          )}
+          <Panel panelRef={inspectorRef} id="inspector" minSize="20%" collapsible>
             <Inspector />
           </Panel>
         </Group>
+        <PendingBar />
         <StatusBar />
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} />

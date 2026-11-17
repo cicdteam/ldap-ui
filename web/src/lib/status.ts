@@ -7,7 +7,6 @@ export interface ConnectionStatus {
   address: string
   transport: { text: string; tone: StatusTone }
   server: string
-  changes: string
 }
 
 /** "1 change", "2 changes": n and the noun for it. */
@@ -15,18 +14,21 @@ export function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
-/** The status bar's staged changes. */
-export function changeCount(n: number): string {
-  return n === 0 ? 'no staged changes' : plural(n, 'change', 'changes')
+/** "2 changes in 1 entry": a staged batch's size. */
+export function changesIn(changes: number, entries: number): string {
+  return `${plural(changes, 'change', 'changes')} in ${plural(entries, 'entry', 'entries')}`
 }
 
-/** changes: the staged count the Review badge shows. */
+/** The pending-changes bar: "2 changes in 1 entry staged for demo". */
+export function pendingText(changes: number, entries: number, profile: string): string {
+  return `${changesIn(changes, entries)} staged for ${profile}`
+}
+
 export function connectionStatus(
   info: Pick<
     Info,
     'url' | 'startTLS' | 'encrypted' | 'insecureSkipVerify' | 'activeDirectory' | 'vendor'
   >,
-  changes: number,
 ): ConnectionStatus {
   const tls = info.startTLS ? 'StartTLS' : 'TLS'
   const transport: ConnectionStatus['transport'] = !info.encrypted
@@ -38,6 +40,5 @@ export function connectionStatus(
     address: info.url,
     transport,
     server: info.activeDirectory ? 'Active Directory' : info.vendor?.trim() || 'LDAP',
-    changes: changeCount(changes),
   }
 }

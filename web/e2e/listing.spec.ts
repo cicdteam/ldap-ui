@@ -6,8 +6,23 @@ const count = (page: Page) => page.getByText(/^\d+ entr(y|ies)\b/)
 const search = (filter: string, scope: string, base = '') =>
   `search?${new URLSearchParams({ filter, scope, ...(base && { base }) })}`
 
-// ou=people holds the 250 demo people, more than one 200-row tree page.
+// No fixture holds more than one tree page (2000 children), so the tree's answer for ou=people
+// (250 demo people) is marked more, as a bigger container's would be.
 test('a container past one tree page ends with More entries, which lists it', async ({ page }) => {
+  const limits: number[] = []
+  await page.route('**/api/c/demo/search', async (route) => {
+    const body = route.request().postDataJSON() as {
+      base: string
+      attributes?: string[]
+      sizeLimit: number
+    }
+    // The tree's children search, not the list's.
+    if (body.base !== `ou=people,${BASE}` || !body.attributes?.includes('hasSubordinates'))
+      return route.fallback()
+    limits.push(body.sizeLimit)
+    const response = await route.fetch()
+    return route.fulfill({ response, json: { ...(await response.json()), more: true } })
+  })
   await openEntry(page, 'demo', `uid=user001,ou=people,${BASE}`)
   const tree = page.getByRole('tree')
   const more = page.getByRole('treeitem', { name: /^More entries/ })
@@ -19,6 +34,7 @@ test('a container past one tree page ends with More entries, which lists it', as
   await more.click()
   await expect(count(page)).toHaveText('250 entries')
   await expect(page.getByRole('button', exact('Load more'))).toHaveCount(0)
+  expect(limits[0]).toBe(2000)
 })
 
 // OU=Bulk in the AD demo (deploy/demo-ldif/ad-demo.ldif) holds 1600 users.
@@ -94,7 +110,7 @@ test('a failed Load more gives the first rows back; running the search again sta
   )
   await connect(page, 'demo')
   // The demo's default columns, so Run below repeats this very search.
-  await page.goto(`c/demo/${search('(uid=flaky)', 'sub')}&attrs=cn,uid,mail,objectClass`)
+  await page.goto(`c/demo/${search('(uid=flaky)', 'sub')}&attrs=uid,mail`)
   const more = page.getByRole('button', exact('Load more'))
   await expect(count(page)).toHaveText('1 entry, more on the server')
   await more.click()

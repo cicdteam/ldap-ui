@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { adBind, attrRow, blur, connect, exact } from './helpers'
+import { adBind, attrRow, blur, connect, exact, queryBar } from './helpers'
 
 // Samba AD from deploy/e2e/docker-compose.yml, seeded by global setup from ad-seed.ldif.
 const base = 'DC=corp,DC=example,DC=test'
@@ -14,7 +14,7 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   await connect(page, 'ad')
   // exact: the other naming contexts (CN=Configuration,...) end with the base.
   await expect(page.getByRole('treeitem', exact(base))).toBeVisible()
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
+  const editor = queryBar(page)
   await editor.click()
   await page.keyboard.type('(sAMAccountName=alice)')
   await page.getByRole('button', exact('Run')).click()
@@ -25,6 +25,8 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   // 3. AD values come decoded: the SID, the account flags, a local time for whenCreated.
   await expect(attrRow(page, 'objectSid')).toContainText(/S-1-5-21-/)
   await expect(attrRow(page, 'userAccountControl')).toContainText('ACCOUNTDISABLE')
+  // The card says so up top, from the decoded flags.
+  await expect(page.getByText('Disabled', { exact: true })).toBeVisible()
   // The stored generalized time is the value's title; the UI shows it in local time.
   const created = attrRow(page, 'whenCreated').getByTitle(/^\d{14}(\.\d+)?Z$/)
   const stored = (await created.getAttribute('title'))!
@@ -60,7 +62,7 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   await page.keyboard.press('ControlOrMeta+S')
   const review = page.getByRole('dialog', { name: 'Review changes' })
   await expect(review).toContainText('description: set by e2e')
-  await review.getByRole('button', exact('Apply')).click()
+  await review.getByRole('button', exact('Apply to ad')).click()
   await expect(review).toBeHidden()
   // E again: out of Edit the value is text, not an input.
   await blur(page)
@@ -69,7 +71,7 @@ test('Active Directory (Samba): LDAPS, decoded values, nested groups, edit, pass
   await expect(attrRow(page, 'description')).toContainText('set by e2e')
 
   // 6. Set password: AD's policy refuses 'x' and the dialog says why; a strong one is set.
-  await page.getByRole('button', exact('Actions')).click()
+  await page.getByRole('button', exact('More')).click()
   await page.getByRole('button', exact('Set password…')).click()
   const dialog = page.getByRole('dialog', { name: 'Set password' })
   const setTwice = async (pw: string) => {

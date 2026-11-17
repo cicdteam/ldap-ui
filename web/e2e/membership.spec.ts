@@ -3,7 +3,7 @@ import { e2eDN, e2eGroup } from './fixture'
 import { attrRow, blur, openEntry } from './helpers'
 
 const editButton = { name: 'Edit', exact: true }
-const applyButton = { name: 'Apply', exact: true }
+const applyButton = { name: 'Apply to demo', exact: true }
 type List = 'Member of' | 'Members'
 
 const list = (page: Page, name: List) => page.getByRole('region', { name, exact: true })

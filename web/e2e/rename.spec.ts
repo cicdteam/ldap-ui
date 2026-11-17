@@ -4,7 +4,7 @@ import { attrRow, blur, openEntry } from './helpers'
 
 test('rename within the parent, then move to another OU', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('renamer'))
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await page.getByRole('button', { name: 'Rename/Move', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Rename or move' })
   const apply = dialog.getByRole('button', { name: 'Apply', exact: true })

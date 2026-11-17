@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { CERT, E2E_OU, e2eDN, PHOTO } from './fixture'
-import { attrRow, blur, exact, openEntry } from './helpers'
+import { attrRow, blur, exact, openEntry, pendingBar } from './helpers'
 
 const PHOTO_B64 = readFileSync(PHOTO).toString('base64')
 const PHOTO_SUMMARY = `jpegPhoto:: (binary, ${readFileSync(PHOTO).length} bytes)`
@@ -25,12 +25,16 @@ test('a read-only profile downloads a photo byte for byte and has no upload', as
   expect(file.bytes.equals(readFileSync(PHOTO))).toBe(true)
   await expect(page.getByRole('button', exact('Edit'))).toHaveCount(0)
   await expect(page.getByText('Upload file…')).toHaveCount(0)
-  // Raw values show a binary value's size, not its base64.
-  await page.getByRole('button', exact('Raw values')).click()
+  // Raw values (in More) show a binary value's size, not its base64.
+  const raw = async () => {
+    await page.getByRole('button', exact('More')).click()
+    await page.getByRole('button', exact('Raw values')).click()
+  }
+  await raw()
   const size = readFileSync(PHOTO).length
   await expect(attrRow(page, 'jpegPhoto')).toContainText(`base64, ${size} bytes`)
   await expect(attrRow(page, 'jpegPhoto')).not.toContainText(PHOTO_B64.slice(0, 40))
-  await page.getByRole('button', exact('Raw values')).click()
+  await raw()
 })
 
 /** Mod+S with nothing focused: the review dialog. */
@@ -43,7 +47,7 @@ async function review(page: Page) {
 }
 
 async function apply(dialog: Locator) {
-  await dialog.getByRole('button', exact('Apply')).click()
+  await dialog.getByRole('button', exact('Apply to demo')).click()
   await expect(dialog).toBeHidden()
 }
 
@@ -134,7 +138,7 @@ test('a file over 1 MiB is refused at its field and stages nothing', async ({ pa
     buffer: Buffer.alloc(1024 * 1024 + 1),
   })
   await expect(row.getByRole('alert')).toHaveText('File is larger than 1 MiB')
-  await expect(page.getByRole('button', { name: /^Review \d+ change/ })).toHaveCount(0)
+  await expect(pendingBar(page)).toHaveCount(0)
   // Edit off: no upload, so no error about one.
   await page.getByRole('button', exact('Edit')).click()
   await expect(row.getByLabel('Upload jpegPhoto file', { exact: true })).toHaveCount(0)
@@ -187,7 +191,7 @@ test('a certificate goes in as userCertificate;binary', async ({ page }) => {
 
 test('Clone carries the photo into the new entry', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('clonephoto'))
-  await page.getByRole('button', exact('Actions')).click()
+  await page.getByRole('button', exact('More')).click()
   await page.getByRole('button', exact('Clone')).click()
   const dialog = page.getByRole('dialog', { name: 'Clone entry' })
   await expect(dialog.locator('[data-attr="jpegPhoto"] img')).toBeVisible()
@@ -247,5 +251,5 @@ test('edit, delete a photo, upload another: the page stays put under the header'
     height: document.scrollingElement!.scrollHeight,
   }))
   expect(page_).toEqual({ top: 0, height: page.viewportSize()!.height })
-  await expect(page.getByRole('button', { name: /^Review \d+ change/ })).toBeInViewport()
+  await expect(pendingBar(page)).toBeInViewport()
 })

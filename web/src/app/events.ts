@@ -1,6 +1,9 @@
 /** Window event asking the query bar to focus the filter editor. */
 export const FOCUS_FILTER = 'ldaplens:focus-filter'
 
+/** Window event asking the list pane to take focus, on its selected row or else the first. */
+export const FOCUS_LIST = 'ldaplens:focus-list'
+
 /** Window event asking the query bar to run its search, as the Run button does. */
 export const RUN_SEARCH = 'ldaplens:run-search'
 

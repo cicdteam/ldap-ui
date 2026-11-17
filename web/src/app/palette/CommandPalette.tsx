@@ -19,7 +19,7 @@ import { openEntryAction, visibleActions } from '../entry/actions'
 import { ADD_TO_GROUP, FOCUS_FILTER, FORMAT_FILTER, OPEN_REVIEW, RUN_SEARCH } from '../events'
 import { useDisconnect } from '../Header'
 import { entryKey, useDebounced, useFind } from '../queries'
-import { isSaved, list } from '../search/QueryBar'
+import { isSaved, list } from '../search/Omnibox'
 
 const kindIcon: Record<EntryKind, typeof User> = {
   user: User,
@@ -46,8 +46,8 @@ const fire = (type: string) => () => window.dispatchEvent(new Event(type))
 
 /** Actions the query bar carries out: it listens for their events. */
 export const filterActions: Action[] = [
-  { id: 'filter', label: 'Focus the filter editor', shortcut: '/', run: fire(FOCUS_FILTER) },
-  { id: 'run', label: 'Run search', shortcut: 'Mod+Enter', run: fire(RUN_SEARCH) },
+  { id: 'filter', label: 'Focus the search bar', shortcut: '/', run: fire(FOCUS_FILTER) },
+  { id: 'run', label: 'Run search', shortcut: 'Enter', run: fire(RUN_SEARCH) },
   { id: 'format', label: 'Format the filter', shortcut: 'Shift+Alt+F', run: fire(FORMAT_FILTER) },
 ]
 
@@ -152,6 +152,11 @@ export function CommandPalette({
     { id: 'schema', label: 'Reload the schema', run: () => void ws.reloadSchema().catch(() => {}) },
     ...(ws.dn
       ? [
+          {
+            id: 'children',
+            label: 'List children of the current entry',
+            run: () => ws.listChildren(ws.dn),
+          },
           {
             id: 'copy',
             label: 'Copy the current DN',

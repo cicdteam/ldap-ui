@@ -5,7 +5,7 @@ import { attrRow, blur, canBind, openEntry } from './helpers'
 const setButton = { name: 'Set', exact: true }
 
 async function openSetPassword(page: Page) {
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
+  await page.getByRole('button', { name: 'More', exact: true }).click()
   await page.getByRole('button', { name: 'Set password…', exact: true }).click()
   return page.getByRole('dialog', { name: 'Set password' })
 }
@@ -46,7 +46,7 @@ test('set a password with SSHA and with Password Modify; the entry can bind with
   // P opens the same dialog; Password Modify is the default. P counts only once the schema says
   // the entry can hold a password: its MUST section shows then.
   await page.goto(`c/demo/entry?dn=${encodeURIComponent(e2eDN('pwserver'))}`)
-  await expect(page.getByText('REQUIRED (MUST)')).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Required/ })).toBeVisible()
   await blur(page)
   await page.keyboard.press('p')
   await pw.fill(typed)

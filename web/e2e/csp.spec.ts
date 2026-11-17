@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { attrRow, blur, connect, exact } from './helpers'
+import { attrRow, blur, connect, exact, queryBar } from './helpers'
 
 // The policy the server sends (internal/api/middleware.go).
 const CSP =
@@ -38,7 +38,7 @@ test('the CSP blocks nothing: photo, filter completion, palette, staged edit, Re
 
   // CodeMirror's injected <style> applies: its base theme makes the editor a flex box.
   await expect(page.locator('.cm-editor').first()).toHaveCSS('display', 'flex')
-  await page.locator('.cm-content[aria-label="LDAP filter"]').click()
+  await queryBar(page).click()
   await page.keyboard.type('(jpegPh')
   await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('jpegPhoto')
   await page.keyboard.press('Escape')

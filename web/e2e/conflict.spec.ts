@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
-import { attrRow, ldapmodify, openEntry } from './helpers'
+import { attrRow, ldapmodify, openEntry, pendingBar, reviewButton } from './helpers'
 
 // exact: names match as case-insensitive substrings ("Copy LDIF for uid=...").
 const editButton = { name: 'Edit', exact: true }
-const applyButton = { name: 'Apply', exact: true }
+const applyButton = { name: 'Apply to demo', exact: true }
 
 test('a value changed behind our back: conflict, reload, drop stale', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('conflict'))
@@ -17,7 +17,8 @@ test('a value changed behind our back: conflict, reload, drop stale', async ({ p
   ldapmodify(
     `dn: ${e2eDN('conflict')}\nchangetype: modify\nreplace: description\ndescription: their edit\n`,
   )
-  await page.getByRole('button', { name: 'Review 1 change' }).click()
+  await expect(pendingBar(page)).toContainText('1 change in')
+  await reviewButton(page).click()
   const dialog = page.getByRole('dialog', { name: 'Review changes' })
   await dialog.getByRole('button', applyButton).click()
   await expect(dialog).toContainText('The entry changed since you read it.')
@@ -41,7 +42,8 @@ test('server rejection shows at the field', async ({ page }) => {
   const fresh = attrRow(page, 'mail').locator('input').last()
   await fresh.fill('bad-ü@example.org')
   await fresh.press('Enter')
-  await page.getByRole('button', { name: 'Review 1 change' }).click()
+  await expect(pendingBar(page)).toContainText('1 change in')
+  await reviewButton(page).click()
   const dialog = page.getByRole('dialog', { name: 'Review changes' })
   await dialog.getByRole('button', applyButton).click()
   await expect(dialog).toContainText(/invalid/i)

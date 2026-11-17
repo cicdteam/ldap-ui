@@ -11,6 +11,7 @@ import { EditorView, keymap, placeholder } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from 'react'
 import { completeFilter, parse } from '../../lib/filter'
+import { classifyQuery } from '../../lib/query'
 import type { SchemaIndex } from '../../lib/schema'
 
 export interface FilterEditorHandle {
@@ -46,8 +47,9 @@ export const filterLanguage = StreamLanguage.define<{ inValue: boolean }>({
       state.inValue = true
       return 'operator'
     }
-    // Attribute descriptions, including extensible "cn:dn:2.5.13.5:" forms.
-    if (stream.match(/^[^=~<>()\s]+/)) return 'propertyName'
+    // Attribute descriptions, including extensible "cn:dn:2.5.13.5:" forms; on a line with no
+    // "(" or "=", words of a name.
+    if (stream.match(/^[^=~<>()\s]+/)) return /[(=]/.test(stream.string) ? 'propertyName' : null
     stream.next()
     return null
   },
@@ -64,25 +66,16 @@ export const highlight = HighlightStyle.define([
   { tag: tags.paren, color: 'var(--muted)' },
 ])
 
+// One line in the header bar, whose box draws the border and the focus ring. While focused, a
+// longer filter opens down over the panels (data-tall on the host, set below).
 const theme = EditorView.theme({
-  '&': {
-    fontSize: '12.5px',
-    border: '1px solid var(--border-strong)',
-    borderRadius: '6px',
-    background: 'var(--bg)',
-    color: 'var(--fg)',
-  },
-  // The look of Input: an accent border and a 3px ring of the accent at 30%. The transparent
-  // outline shows only in forced-colors mode, which drops the ring (Tailwind's outline-hidden).
-  '&.cm-focused': {
-    outline: '2px solid transparent',
-    outlineOffset: '2px',
-    borderColor: 'var(--accent)',
-    boxShadow: '0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent)',
-  },
-  '.cm-content': { fontFamily: 'var(--mono)', padding: '5px 0', caretColor: 'var(--fg)' },
-  '.cm-scroller': { maxHeight: '12rem', overflow: 'auto' },
-  '.cm-placeholder': { color: 'var(--muted)' },
+  '&': { fontSize: '12.5px', color: 'var(--fg)', borderRadius: '6px' },
+  '&.cm-focused': { outline: 'none', background: 'var(--bg)' },
+  // The top padding and one 18px line.
+  '.cm-scroller': { maxHeight: '21px', overflow: 'hidden', lineHeight: '18px' },
+  '&.cm-focused .cm-scroller': { maxHeight: '12rem', overflow: 'auto' },
+  '.cm-content': { fontFamily: 'var(--mono)', padding: '3px 0', caretColor: 'var(--fg)' },
+  '.cm-placeholder': { color: 'var(--muted)', fontFamily: 'var(--sans)', fontSize: '13px' },
   // Popovers like the others: --bg, 10px corners, 6px items; the shadow is .elevated's, in index.css.
   '.cm-tooltip': {
     background: 'var(--bg)',
@@ -101,8 +94,9 @@ const theme = EditorView.theme({
   '.cm-diagnostic-error': { borderLeft: '3px solid var(--danger)' },
 })
 
-function lint(text: string): Diagnostic[] {
-  if (text.trim() === '') return []
+/** Only a filter is checked: a name or a DN is not one. */
+function lint(text: string, baseDN: string): Diagnostic[] {
+  if (classifyQuery(text, baseDN).kind !== 'filter') return []
   const r = parse(text)
   if (r.ok) return []
   return [
@@ -119,31 +113,41 @@ export function FilterEditor({
   value,
   onChange,
   onRun,
+  onDown,
   onFormat,
   schema,
+  baseDN,
   ref,
 }: {
   value: string
   onChange: (v: string) => void
+  /** Enter and Mod-Enter, unless the completion list takes Enter. */
   onRun: () => void
+  /** Down on the last line, unless the completion list takes it; false moves the caret. */
+  onDown: () => boolean
   /** Shift-Alt-F: the owner formats value, as the palette's Format action does. */
   onFormat: () => void
   schema: SchemaIndex
+  /** The connection's base DN, which tells a DN from a filter. */
+  baseDN: string
   ref?: Ref<FilterEditorHandle>
 }) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   // The editor is created once; current props reach it through this ref.
-  const latest = useRef({ onChange, onRun, onFormat, schema })
+  const latest = useRef({ onChange, onRun, onDown, onFormat, schema, baseDN })
   useLayoutEffect(() => {
-    latest.current = { onChange, onRun, onFormat, schema }
+    latest.current = { onChange, onRun, onDown, onFormat, schema, baseDN }
   })
   useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), [])
 
   useEffect(() => {
     const complete = (ctx: CompletionContext): CompletionResult | null => {
       const { schema: s } = latest.current
-      const r = completeFilter(ctx.state.sliceDoc(0, ctx.pos), s.attrNames, s.classNames)
+      const before = ctx.state.sliceDoc(0, ctx.pos)
+      // Plain text is usually a name: a list opening on "user" would take its Enter.
+      if (!ctx.explicit && !before.includes('(')) return null
+      const r = completeFilter(before, s.attrNames, s.classNames)
       if (!r || (r.options.length === 0 && !ctx.explicit)) return null
       // Values (objectClass names) start right after an operator.
       const value = ctx.state.sliceDoc(r.from - 1, r.from) === '='
@@ -172,11 +176,20 @@ export function FilterEditor({
         extensions: [
           history(),
           keymap.of([
-            {
-              key: 'Mod-Enter',
+            ...['Enter', 'Mod-Enter'].map((key) => ({
+              key,
               run: () => {
                 latest.current.onRun()
                 return true
+              },
+            })),
+            {
+              // On the last line as drawn: a long filter wraps, and Down above it moves the caret.
+              key: 'ArrowDown',
+              run: (ed) => {
+                const at = ed.coordsAtPos(ed.state.selection.main.head)
+                const end = ed.coordsAtPos(ed.state.doc.length)
+                return (!at || !end || at.bottom >= end.bottom) && latest.current.onDown()
               },
             },
             ...defaultKeymap,
@@ -187,14 +200,21 @@ export function FilterEditor({
           syntaxHighlighting(highlight),
           theme,
           EditorView.lineWrapping,
-          placeholder('(&(objectClass=person)(uid=jdoe))   empty matches everything'),
-          linter((ed) => lint(ed.state.doc.toString()), { delay: 250 }),
+          placeholder('Search name, uid, mail, (filter) or DN'),
+          linter((ed) => lint(ed.state.doc.toString(), latest.current.baseDN), { delay: 250 }),
           // A picked attribute or operator reopens the list with what can follow it.
           autocompletion({ override: [complete], activateOnCompletion: (c) => c.type !== 'class' }),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) latest.current.onChange(u.state.doc.toString())
+            if (u.geometryChanged) {
+              const { top, bottom } = u.view.documentPadding
+              const text = u.view.contentHeight - top - bottom
+              host.current?.toggleAttribute('data-tall', text > u.view.defaultLineHeight * 1.5)
+            }
           }),
-          EditorView.contentAttributes.of({ 'aria-label': 'LDAP filter' }),
+          EditorView.contentAttributes.of({
+            'aria-label': 'Search by name, uid or mail, an LDAP filter, or a DN',
+          }),
         ],
       }),
     })
@@ -211,5 +231,5 @@ export function FilterEditor({
     }
   }, [value])
 
-  return <div ref={host} className="min-w-0 flex-1" />
+  return <div ref={host} className="absolute inset-x-0 top-[3px] z-30" />
 }

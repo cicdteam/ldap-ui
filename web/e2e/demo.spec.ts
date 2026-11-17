@@ -49,6 +49,7 @@ test('AD demo: nested groups, a group above 1500 members, decoded account flags'
   const group = (name: string) => `CN=${name},OU=Groups,OU=Demo,${ad}`
   await openEntry(page, 'ad', user001)
   await expect(attrRow(page, 'userAccountControl')).toContainText('NORMAL_ACCOUNT')
+  await expect(page.getByText('Disabled', { exact: true })).toHaveCount(0)
   await expect(attrRow(page, 'objectSid')).toContainText(/S-1-5-21-/)
   // Everyone through Staff, which holds Engineering, which holds user001.
   await page.getByRole('tab', { name: 'Membership' }).click()

@@ -1,4 +1,5 @@
-import type { Attribute, Profile, Value } from './types'
+import type { EntryKind } from './tree'
+import type { Attribute, Entry, Info, Profile, Value } from './types'
 
 /** Accepts #rgb(a)/#rrggbb(aa) or a bare color keyword; anything else is dropped. */
 export function safeColor(c?: string): string | undefined {
@@ -16,6 +17,30 @@ export function profileBadges(
   const out: { label: string; tone: Tone }[] = []
   if (p.readOnly) out.push({ label: 'READ-ONLY', tone: 'neutral' })
   if (p.insecureSkipVerify) out.push({ label: 'INSECURE TLS', tone: 'danger' })
+  return out
+}
+
+/** The attributes the card pins above the others, in this order, for an entry of kind. */
+export function pinnedAttributes(kind: EntryKind, ad: boolean): string[] {
+  if (kind === 'user')
+    return ['cn', ad ? 'sAMAccountName' : 'uid', 'mail', 'title', 'manager', 'telephoneNumber']
+  return ['cn', 'description']
+}
+
+/**
+ * The card's status chips, from reliable signals only: the profile is read-only, or the account
+ * flags hold ACCOUNTDISABLE (bit 0x2). The server names the flags in userAccountControl's display,
+ * and only on Active Directory (internal/ad UACFlags).
+ */
+export function statusChips(
+  entry: Entry,
+  profile: Pick<Info, 'readOnly'>,
+): { label: string; tone: Tone }[] {
+  const out: { label: string; tone: Tone }[] = []
+  const uac = entry.attributes?.find((a) => a.name.toLowerCase() === 'useraccountcontrol')
+  if (uac?.values?.[0]?.display?.split(' ').includes('ACCOUNTDISABLE'))
+    out.push({ label: 'Disabled', tone: 'danger' })
+  if (profile.readOnly) out.push({ label: 'Read-only connection', tone: 'neutral' })
   return out
 }
 

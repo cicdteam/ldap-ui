@@ -28,8 +28,8 @@ it('lists the query bar actions and fires the events the bar listens for', () =>
     win.addEventListener(type, (e) => fired.push(e.type))
   }
   expect(filterActions.map((a) => [a.label, a.shortcut])).toEqual([
-    ['Focus the filter editor', '/'],
-    ['Run search', 'Mod+Enter'],
+    ['Focus the search bar', '/'],
+    ['Run search', 'Enter'],
     ['Format the filter', 'Shift+Alt+F'],
   ])
   for (const a of filterActions) a.run()

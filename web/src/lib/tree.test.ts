@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { normDN } from './dn'
 import {
+  TREE_PAGE,
   buildRows,
   childrenFromPage,
   entryKind,
   visibleExpanded,
   type ChildState,
   type Children,
+  type EntryKind,
 } from './tree'
 import type { Entry } from './types'
 
@@ -64,6 +66,31 @@ describe('childrenFromPage', () => {
     ])
     expect(childrenFromPage({ entries: [], truncated: true }).more).toBe(true)
     expect(childrenFromPage({}).items).toEqual([])
+  })
+
+  it('names a uid or sAMAccountName child by its displayName or cn; a cn RDN gets no hint', () => {
+    const c = childrenFromPage({
+      entries: [
+        entry('uid=jdoe,ou=p,dc=x', { cn: ['J. Doe'], displayName: ['John Doe'] }),
+        entry('uid=adavis,ou=p,dc=x', { CN: ['Alice Davis'] }),
+        entry('sAMAccountName=bchen,ou=p,dc=x', { cn: ['Bo Chen'] }),
+        entry('cn=Doe\\, John,ou=p,dc=x', { cn: ['Doe, John'], displayName: ['John Doe'] }),
+        entry('uid=svc,ou=p,dc=x'),
+      ],
+    })
+    expect(Object.fromEntries(c.items.map((i) => [i.rdn, i.hint ?? null]))).toEqual({
+      'uid=jdoe': 'John Doe',
+      'uid=adavis': 'Alice Davis',
+      'sAMAccountName=bchen': 'Bo Chen',
+      'cn=Doe\\, John': null,
+      'uid=svc': null,
+    })
+  })
+})
+
+describe('TREE_PAGE', () => {
+  it('asks for 2000 children per container', () => {
+    expect(TREE_PAGE).toBe(2000)
   })
 })
 
@@ -123,6 +150,69 @@ describe('buildRows', () => {
       ['more', 'More entries… open as a list', '', 2],
     ])
     expect(rows[3].dn).toBe('ou=people,dc=example,dc=org')
+  })
+
+  it('keeps the rows whose label or hint holds the filter, with their ancestors', () => {
+    const item = (rdn: string, parent: string, hint?: string, leaf = true) => ({
+      dn: `${rdn},${parent}`,
+      rdn,
+      leaf,
+      kind: (leaf ? 'user' : 'ou') as EntryKind,
+      hint,
+    })
+    const base = 'dc=example,dc=org'
+    const people = `ou=people,${base}`
+    const groups = `ou=groups,${base}`
+    const tree: Record<string, Children> = {
+      [base]: {
+        items: [
+          item('ou=groups', base, undefined, false),
+          item('ou=people', base, undefined, false),
+          item('ou=services', base, undefined, false),
+        ],
+        more: false,
+      },
+      [people]: {
+        items: [
+          item('uid=adavis', people, 'Alice Davis'),
+          item('uid=jdoe', people, 'John Doe'),
+          item('uid=rwhite', people, 'Richard Doe'),
+        ],
+        more: true,
+      },
+      [groups]: { items: [item('cn=doers', groups), item('cn=devs', groups)], more: false },
+      [`ou=services,${base}`]: { items: [item('uid=svc', `ou=services,${base}`)], more: false },
+    }
+    const expanded = new Set(Object.keys(tree))
+    const rows = buildRows(roots, expanded, (dn) => ok(tree[dn]), 'DOE')
+    expect(rows.map((r) => [r.label, r.hint, r.depth])).toEqual([
+      [base, undefined, 0],
+      ['groups', undefined, 1],
+      ['doers', undefined, 2],
+      ['people', undefined, 1],
+      ['jdoe', 'John Doe', 2],
+      ['rwhite', 'Richard Doe', 2],
+    ])
+    // No filter: every loaded row, the hint included.
+    const all = buildRows(roots, expanded, (dn) => ok(tree[dn]))
+    expect(all).toHaveLength(11)
+    expect(all.find((r) => r.label === 'adavis')?.hint).toBe('Alice Davis')
+  })
+
+  it('keeps the selected entry and its parents under a filter that matches nothing there', () => {
+    const base = 'dc=example,dc=org'
+    const e2e = `ou=e2e,${base}`
+    const children = (dn: string): ChildState =>
+      dn === base
+        ? ok({ items: [{ dn: e2e, rdn: 'ou=e2e', leaf: false, kind: 'ou' }], more: false })
+        : ok({
+            items: [{ dn: `uid=jdoe,${e2e}`, rdn: 'uid=jdoe', leaf: true, kind: 'user' }],
+            more: false,
+          })
+    // ou=e2e was kept only as the parent of uid=jdoe; selecting it collapses it.
+    const rows = buildRows(roots, new Set([base]), children, 'doe', 'OU=E2E,DC=Example,DC=Org')
+    expect(rows.map((r) => r.label)).toEqual([base, 'e2e'])
+    expect(buildRows(roots, new Set([base]), children, 'doe')).toEqual([])
   })
 
   it('turns an expanded node without children into a leaf', () => {

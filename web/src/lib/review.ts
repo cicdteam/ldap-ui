@@ -47,6 +47,15 @@ export function fieldMessage(
   return undefined
 }
 
+/** Whether one of the rows shows a message (fieldMessage): their section then stays open. */
+export function flagged(
+  rows: { name: string }[],
+  problems: Map<string, string>,
+  error: ApiErrorBody | undefined,
+): boolean {
+  return rows.some((r) => fieldMessage(r.name, problems, error) !== undefined)
+}
+
 /**
  * Whether the entry banner shows its apply error: a conflict always (its actions live there),
  * any other error only when no shown row carries it (see fieldMessage).

@@ -31,7 +31,7 @@ const groupRow = (page: Page, dn: string) =>
   page.getByRole('region', exact('Member of')).locator(`[data-ref="${dn}"]`)
 
 async function action(page: Page, item: string) {
-  await page.getByRole('button', exact('Actions')).click()
+  await page.getByRole('button', exact('More')).click()
   await page.getByRole('button', exact(item)).click()
 }
 
@@ -41,7 +41,7 @@ async function reviewAndApply(page: Page, ...ldif: string[]) {
   await page.keyboard.press('ControlOrMeta+S')
   const dialog = page.getByRole('dialog', { name: 'Review changes' })
   for (const line of ldif) await expect(dialog).toContainText(line)
-  await dialog.getByRole('button', exact('Apply')).click()
+  await dialog.getByRole('button', exact('Apply to demo')).click()
   await expect(dialog).toBeHidden()
 }
 

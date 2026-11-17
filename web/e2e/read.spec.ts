@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { HUGE_GROUP } from './fixture'
-import { attrRow, blur, connect, openEntry, valueItems } from './helpers'
+import { attrRow, blur, connect, openEntry, queryBar, valueItems } from './helpers'
 
 test('stored password rejected: field, hint, focus, typed password connects', async ({ page }) => {
   await page.goto('./')
@@ -69,7 +69,7 @@ test('huge attribute: 100 values, +1000, filter narrows, new filter resets', asy
 
 test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async ({ page }) => {
   await connect(page, 'demo')
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
+  const editor = queryBar(page)
   const long =
     '(&(cn=huge)(objectClass=groupOfNames)(description=some long description value here))'
   await editor.click()
@@ -91,45 +91,35 @@ test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async 
   await expect(page).toHaveURL(/filter=/)
   // The search request follows the URL change.
   await expect.poll(() => searches).toBeGreaterThan(0)
-  await editor.click()
+  // Unfocused, the bar shows the first of the five lines: click there.
+  await editor.click({ position: { x: 5, y: 5 } })
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type('(cn=')
   await page.keyboard.press('Shift+Alt+KeyF')
   await expect(page.getByText(/Fix the filter first/)).toBeVisible()
 })
 
-test('Clear results drops the search from the URL and brings back the examples', async ({
-  page,
-}) => {
+test('Clear empties the bar; the builder starts from the text and writes it', async ({ page }) => {
   await connect(page, 'demo')
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
-  await editor.click()
-  await page.keyboard.type('(uid=jdoe)')
-  await page.getByRole('button', { name: 'Run', exact: true }).click()
-  await expect(page).toHaveURL(/filter=/)
-  await page.getByRole('button', { name: 'Clear results', exact: true }).click()
-  await expect(page).not.toHaveURL(/filter=/)
-  await expect(page.getByText(/Type a filter and press Run/)).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Clear results', exact: true })).toHaveCount(0)
-})
-
-test('Clear filter empties the editor and the builder, then hides', async ({ page }) => {
-  await connect(page, 'demo')
-  const editor = page.locator('.cm-content[aria-label="LDAP filter"]')
-  const clear = page.getByRole('button', { name: 'Clear filter', exact: true })
+  const bar = queryBar(page)
+  const clear = page.getByRole('button', { name: 'Clear the search', exact: true })
+  const builder = page.getByRole('button', { name: 'Filter builder', exact: true })
+  const attr = page.getByLabel('Attribute', { exact: true })
   await expect(clear).toHaveCount(0)
-  await editor.click()
-  await page.keyboard.type('(uid=jdoe)')
-  await clear.click()
-  // An empty editor shows only its placeholder.
-  await expect(editor.locator('.cm-placeholder')).toBeVisible()
-  await expect(editor).toBeFocused()
-  await expect(clear).toHaveCount(0)
+  await bar.click()
   await page.keyboard.type('(cn=x)')
-  await page.getByRole('radio', { name: 'builder', exact: true }).click()
+  await builder.click()
+  await expect(attr).toHaveValue('cn')
+  await page.getByLabel('Value', { exact: true }).fill('y')
+  await expect(bar).toHaveText('(cn=y)')
+  await page.keyboard.press('Escape')
   await clear.click()
-  await page.getByRole('radio', { name: 'text', exact: true }).click()
-  await expect(editor.locator('.cm-placeholder')).toBeVisible()
+  // An empty bar shows only its placeholder.
+  await expect(bar.locator('.cm-placeholder')).toBeVisible()
+  await expect(bar).toBeFocused()
+  await expect(clear).toHaveCount(0)
+  await builder.click()
+  await expect(attr).toHaveCount(0)
 })
 
 test('smoke: tree, search results, Cmd+K jump, LDIF tab', async ({ page }) => {
@@ -151,15 +141,14 @@ test('compact density tightens the inspector rows, not only the tree', async ({ 
   await page.getByRole('button', { name: 'Toggle density', exact: true }).click()
   await expect.poll(height).toBeLessThan(comfortable)
   // Icon buttons follow the row height too.
-  const button = page.getByRole('button', { name: 'Raw values', exact: true })
+  const button = page.getByRole('button', { name: 'Refresh tree', exact: true })
   await expect.poll(async () => (await button.boundingBox())?.height).toBe(22)
-  // The search panel's controls shrink too.
+  // Fields shrink too, the query bar's included.
+  await page.getByTitle('Search base, scope and columns').click()
   await expect
-    .poll(
-      async () =>
-        (await page.getByRole('button', { name: 'Run', exact: true }).boundingBox())?.height,
-    )
+    .poll(async () => (await page.getByLabel('Base', { exact: true }).boundingBox())?.height)
     .toBe(26)
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'Toggle density', exact: true }).click()
 })
 
@@ -193,17 +182,17 @@ test('the connections page scrolls on its own when it is taller than the window'
 
 test('a button tip shows right away on hover and on keyboard focus', async ({ page }) => {
   await openEntry(page, 'demo', 'uid=user001,ou=people,dc=example,dc=org')
-  const raw = page.getByRole('button', { name: 'Raw values', exact: true })
+  const more = page.getByRole('button', { name: 'More', exact: true })
   // The quick tip replaces the browser's slow title.
-  await expect(raw).not.toHaveAttribute('title')
-  await raw.hover()
+  await expect(more).not.toHaveAttribute('title')
+  await more.hover()
   const tip = page.getByRole('tooltip')
-  await expect(tip).toContainText('Show values as stored', { timeout: 1000 })
-  await expect(raw).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!)
+  await expect(tip).toContainText('More: raw values, reload', { timeout: 1000 })
+  await expect(more).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!)
   await page.mouse.move(0, 0)
   await expect(tip).toHaveCount(0)
   // Keyboard focus shows it too; a click hides it.
-  await raw.focus()
+  await more.focus()
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Tab')
   await expect(tip).toBeVisible({ timeout: 1000 })

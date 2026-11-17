@@ -2,8 +2,9 @@ import { useIsMutating, useMutation, useQueries, useQueryClient } from '@tanstac
 import { useEffect, useRef } from 'react'
 import { api } from '../../lib/api'
 import { batches } from '../../lib/batchStore'
-import { dropEntry, toLDIF, type EntryChanges } from '../../lib/changes'
+import { dropEntry, toLDIF, touchedAttributes, type EntryChanges } from '../../lib/changes'
 import { afterApply, canApply, errorText, invalidCount } from '../../lib/review'
+import { changesIn } from '../../lib/status'
 import type { ApplyRequest } from '../../lib/types'
 import { Banner, ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
@@ -24,7 +25,8 @@ export function ReviewDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { conn } = useWorkspace()
+  const { conn, info } = useWorkspace()
+  const batch = useBatch(conn)
   // An apply in flight owns the batch: the dialog (modal, so nothing else can stage) stays open
   // until its result lands. Read from the cache, so a reopened dialog sees it too.
   const applying = useIsMutating({ mutationKey: applyKey(conn) }) > 0
@@ -35,6 +37,12 @@ export function ReviewDialog({
         if (o || !applying) onOpenChange(o)
       }}
       title="Review changes"
+      // Where the write goes: the profile and its server.
+      description={
+        batch.length
+          ? `${changesIn(touchedAttributes(batch), batch.length)} will be written to ${conn} at ${info.url}.`
+          : undefined
+      }
       wide
     >
       {/* Mounted only while open: entries load per opening. */}
@@ -110,7 +118,7 @@ function Review({ applying, close }: { applying: boolean; close: () => void }) {
         </Button>
         <span className="ml-auto">{(loading || applying) && <Spinner />}</span>
         <Button type="submit" variant="primary" disabled={!ready}>
-          Apply
+          Apply to {conn}
         </Button>
       </div>
     </form>

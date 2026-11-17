@@ -20,6 +20,17 @@ export async function openEntry(page: Page, profile: string, dn: string): Promis
   await expect(page.locator('[data-attr]').first()).toBeVisible()
 }
 
+/** The header's query bar (a CodeMirror editor). */
+export const queryBar = (page: Page) =>
+  page.getByRole('textbox', { name: 'Search by name, uid or mail, an LDAP filter, or a DN' })
+
+/** The pending-changes bar above the status bar, shown while changes are staged. */
+export const pendingBar = (page: Page) => page.getByRole('status', { name: 'Pending changes' })
+
+/** The pending bar's Review button, which opens the review dialog. */
+export const reviewButton = (page: Page) =>
+  pendingBar(page).getByRole('button', { name: /^Review/ })
+
 /** Role options matching name exactly: getByRole('button', exact('Edit')). */
 export const exact = (name: string) => ({ name, exact: true })
 

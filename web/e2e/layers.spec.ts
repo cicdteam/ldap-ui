@@ -26,7 +26,7 @@ test('dialogs and the palette cover the sticky results header', async ({ page })
   await page.goto('c/demo/search?filter=(objectClass=inetOrgPerson)')
   await page.getByRole('row').nth(2).click()
   // Measured before a modal opens: Radix then hides the page from the accessibility tree.
-  const box = await page.getByRole('columnheader', { name: 'cn', exact: true }).boundingBox()
+  const box = await page.getByRole('columnheader', { name: 'Name', exact: true }).boundingBox()
   if (!box) throw new Error('results header not visible')
   const header = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   expect(await covered(page, header)).toBe(false)
