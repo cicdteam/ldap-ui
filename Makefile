@@ -5,8 +5,8 @@ GO_SRC := cmd internal web/embed.go deploy/demo-ldif/photos
 # missing tools fall back to Docker at exactly these versions.
 GOFUMPT_MIN := 0.7.0
 GOIMPORTS_VERSION := 0.52.0
-GOLANGCI_LINT_MIN := 2.12.2
-GOVULNCHECK_MIN := 1.3.0
+GOLANGCI_LINT_MIN := 2.15.0
+GOVULNCHECK_MIN := 1.9.0
 GO_IMAGE := golang:1.26
 IMAGE ?= ldaplens:dev
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
