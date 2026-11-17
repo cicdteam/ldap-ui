@@ -319,8 +319,10 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   also hold only the first 10 000. Edit still adds and deletes single
   values, and Apply touches only those. Member of searches `member`,
   `uniqueMember` and `memberUid`; an equality index on each keeps it fast.
-  Member of and Members list at most 10 000 groups or members: a longer list
-  is truncated there and marked incomplete.
+  Member of and Members list at most 10 000 groups or members, and Nested
+  follows groups 10 levels deep: a longer list is truncated there, a deeper
+  one stops at the tenth level, and either is marked "The list may be
+  incomplete" (a chain exactly 10 levels deep is marked too).
 - **Pending changes** (above the status bar, only while changes are staged):
   "2 changes in 1 entry staged for demo" with the server address, Discard
   and Review (⌘S / Ctrl+S). Discard asks first; ⌘Z / Ctrl+Z brings the

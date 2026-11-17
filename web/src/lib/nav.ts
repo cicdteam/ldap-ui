@@ -10,14 +10,21 @@ export function safeNext(next: string | null): string | undefined {
 
 /**
  * The route that reconnects the profile of a workspace path and comes back to it, or null
- * off the workspace. pathname keeps the --base-path prefix (router.state.location does);
- * the result is relative to the router basename, like routes and navigate().
+ * off the workspace or when the profile name holds a malformed escape (a hand-edited URL).
+ * pathname keeps the --base-path prefix (router.state.location does); the result is
+ * relative to the router basename, like routes and navigate().
  */
 export function reconnectURL(pathname: string, search: string, basename: string): string | null {
   const path = basename === '/' ? pathname : pathname.slice(basename.length)
   const m = /^\/c\/([^/]+)/.exec(path)
   if (!m) return null
-  return `/?${new URLSearchParams({ connect: decodeURIComponent(m[1]), next: path + search })}`
+  let connect: string
+  try {
+    connect = decodeURIComponent(m[1])
+  } catch {
+    return null
+  }
+  return `/?${new URLSearchParams({ connect, next: path + search })}`
 }
 
 /** The result columns after Name, which every search shows first. */

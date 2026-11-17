@@ -42,8 +42,9 @@ const groupFilter = "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames
 // MemberOf returns the groups under the base DN that list dn as member or
 // uniqueMember, and the posixGroups whose memberUid holds one of dn's uid
 // values. With nested set it follows groups that are members of groups, up
-// to maxNestingDepth levels, and survives membership cycles; memberUid names
-// users, not groups, so only the first level asks for it.
+// to maxNestingDepth levels (groups left past that mark the result
+// truncated), and survives membership cycles; memberUid names users, not
+// groups, so only the first level asks for it.
 func (c *Conn) MemberOf(ctx context.Context, dn string, nested bool) (Membership, error) {
 	e, err := c.rawEntry(ctx, dn, []string{"uid"})
 	if err != nil {
@@ -53,7 +54,11 @@ func (c *Conn) MemberOf(ctx context.Context, dn string, nested bool) (Membership
 	m := Membership{Refs: []Ref{}}
 	seen := map[string]bool{normDN(dn): true}
 	frontier := []string{dn}
-	for depth := 0; len(frontier) > 0 && depth < maxNestingDepth; depth++ {
+	for depth := 0; len(frontier) > 0; depth++ {
+		if depth == maxNestingDepth {
+			m.Truncated = true // the groups in frontier are not followed
+			break
+		}
 		var next []string
 		for _, member := range frontier {
 			escaped := ldap.EscapeFilter(member)
@@ -94,7 +99,8 @@ func (c *Conn) MemberOf(ctx context.Context, dn string, nested bool) (Membership
 }
 
 // Members returns the member and uniqueMember values of group dn. With
-// nested set, members of member groups are included too.
+// nested set, members of member groups are included too, up to
+// maxNestingDepth levels (groups left past that mark the result truncated).
 func (c *Conn) Members(ctx context.Context, dn string, nested bool) (Membership, error) {
 	m := Membership{Refs: []Ref{}}
 	isGroup := map[string]bool{}
@@ -111,8 +117,8 @@ func (c *Conn) Members(ctx context.Context, dn string, nested bool) (Membership,
 	}
 	seen := map[string]bool{normDN(dn): true}
 	frontier := []string{dn}
-	for depth := 0; len(frontier) > 0 && depth < maxNestingDepth; depth++ {
-		if len(m.Refs) >= maxRefs {
+	for depth := 0; len(frontier) > 0; depth++ {
+		if depth == maxNestingDepth || len(m.Refs) >= maxRefs {
 			m.Truncated = true // the groups in frontier are not read
 			break
 		}

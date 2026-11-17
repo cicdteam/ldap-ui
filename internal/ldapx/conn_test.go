@@ -78,6 +78,7 @@ type search struct {
 	id        int64
 	base      string
 	sizeLimit int
+	filter    string
 	paging    *ldap.ControlPaging // nil without the paging control
 }
 
@@ -87,7 +88,7 @@ func readSearch(r io.Reader) (search, error) {
 	if err != nil {
 		return search{}, err
 	}
-	if len(p.Children) < 2 || len(p.Children[1].Children) < 4 {
+	if len(p.Children) < 2 || len(p.Children[1].Children) < 7 {
 		return search{}, errors.New("not a search request")
 	}
 	var s search
@@ -95,6 +96,9 @@ func readSearch(r io.Reader) (search, error) {
 	s.base, _ = p.Children[1].Children[0].Value.(string)
 	limit, _ := p.Children[1].Children[3].Value.(int64)
 	s.sizeLimit = int(limit)
+	if s.filter, err = ldap.DecompileFilter(p.Children[1].Children[6]); err != nil {
+		return search{}, err
+	}
 	if len(p.Children) > 2 {
 		for _, cp := range p.Children[2].Children {
 			if ctl, err := ldap.DecodeControl(cp); err == nil {
@@ -1201,6 +1205,78 @@ func TestMembersHardCap(t *testing.T) {
 				t.Errorf("%s(nested) = %d refs, truncated %v; want %d, truncated", tc.name, len(m.Refs), m.Truncated, maxRefs)
 			}
 		})
+	}
+}
+
+// TestMembershipDepthLimit checks that nested membership follows groups
+// maxNestingDepth levels deep and marks the result truncated when groups are
+// left past that depth. The fake directory is a chain: uid=u is a member of
+// cn=g1, and each cn=gK is a member of cn=gK+1.
+func TestMembershipDepthLimit(t *testing.T) {
+	// member returns the one member of cn=gk.
+	member := func(k int) string {
+		if k == 1 {
+			return "uid=u"
+		}
+		return fmt.Sprintf("cn=g%d", k-1)
+	}
+	tests := []struct {
+		groups        int
+		wantRefs      int
+		wantTruncated bool
+	}{
+		{groups: 9, wantRefs: 9},
+		{groups: 12, wantRefs: maxNestingDepth, wantTruncated: true},
+	}
+	for _, tc := range tests {
+		url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+			for {
+				s, err := readSearch(conn)
+				if err != nil {
+					return
+				}
+				switch {
+				case s.base == "uid=u":
+					err = writeEntry(conn, s.id, s.base)
+				case s.base != "": // a group read by Members
+					k, _ := strconv.Atoi(strings.TrimPrefix(s.base, "cn=g"))
+					err = writeEntry(conn, s.id, s.base, attr("member", member(k)))
+				default: // the group index, or the groups that list one member
+					_, rest, byMember := strings.Cut(s.filter, "(member=")
+					for k := 1; k <= tc.groups && err == nil; k++ {
+						if !byMember || strings.HasPrefix(rest, member(k)+")") {
+							err = writeEntry(conn, s.id, fmt.Sprintf("cn=g%d", k))
+						}
+					}
+				}
+				if err != nil || writeResult(conn, s.id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+			}
+		})
+		c := fakeConn(t, url)
+		scans := []struct {
+			name string
+			scan func() (Membership, error)
+		}{
+			{name: "MemberOf", scan: func() (Membership, error) {
+				return c.MemberOf(context.Background(), "uid=u", true)
+			}},
+			{name: "Members", scan: func() (Membership, error) {
+				return c.Members(context.Background(), fmt.Sprintf("cn=g%d", tc.groups), true)
+			}},
+		}
+		for _, sc := range scans {
+			m, err := sc.scan()
+			if err != nil {
+				t.Errorf("%s(nested) in a chain of %d groups error = %v", sc.name, tc.groups, err)
+				continue
+			}
+			if len(m.Refs) != tc.wantRefs || m.Truncated != tc.wantTruncated {
+				t.Errorf("%s(nested) in a chain of %d groups = %d refs, truncated %v; want %d, truncated %v",
+					sc.name, tc.groups, len(m.Refs), m.Truncated, tc.wantRefs, tc.wantTruncated)
+			}
+		}
 	}
 }
 
