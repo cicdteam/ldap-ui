@@ -19,10 +19,21 @@ export default defineConfig({
     viewport: { width: 1400, height: 900 },
     trace: 'retain-on-failure',
   },
-  webServer: {
-    command: 'sh e2e/serve.sh',
-    url: 'http://127.0.0.1:18091/ldap/healthz',
-    reuseExistingServer: false,
-    timeout: 300_000,
-  },
+  // npm run e2e builds e2e/.tmp/ldaplens; these only start it. Two processes share no state, so
+  // each has its own failed sign-in limits: wrong passwords in servermode.spec.ts lock nobody out
+  // of the local instance.
+  webServer: [
+    {
+      command: 'sh e2e/serve.sh',
+      url: 'http://127.0.0.1:18091/ldap/healthz',
+      reuseExistingServer: false,
+    },
+    {
+      // Server mode at the root path, without a token: servermode.spec.ts.
+      command:
+        'e2e/.tmp/ldaplens server --config ../deploy/e2e/connections.server.yaml --listen 127.0.0.1:18092 >e2e/.tmp/server-mode.log 2>&1',
+      url: 'http://127.0.0.1:18092/healthz',
+      reuseExistingServer: false,
+    },
+  ],
 })

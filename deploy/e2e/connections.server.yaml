@@ -1,0 +1,15 @@
+# Profiles for the e2e run's server-mode instance (web/playwright.config.ts):
+# each asks the person for a password, as server mode without a token needs.
+connections:
+  - name: people
+    url: ldap://127.0.0.1:1390
+    baseDN: dc=example,dc=org
+    bindDNTemplate: uid={user},ou=people,dc=example,dc=org
+  - name: ad-untrusted # no caFile: Samba's certificate is not trusted here
+    url: ldaps://127.0.0.1:1637
+    baseDN: DC=corp,DC=example,DC=test
+    bindDNTemplate: "{user}@corp.example.test"
+  - name: fixed # a bind DN without a password: asks for one
+    url: ldap://127.0.0.1:1390
+    baseDN: dc=example,dc=org
+    bindDN: cn=admin,dc=example,dc=org

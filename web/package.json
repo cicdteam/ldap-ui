@@ -7,7 +7,7 @@
     "lint": "eslint .",
     "fmt": "prettier --write .",
     "check": "tsc --noEmit && eslint . && prettier --check . && vitest run",
-    "e2e": "playwright test"
+    "e2e": "npm run build && go build -C .. -o web/e2e/.tmp/ldaplens ./cmd/ldaplens && playwright test"
   },
   "type": "module",
   "private": true,

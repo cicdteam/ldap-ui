@@ -1328,8 +1328,9 @@ web` builds the UI into `web/dist`, which the Go binary embeds (`make build`
 does both).
 
 `make e2e` runs the Playwright suite against a fresh OpenLDAP and Samba AD
-(Docker) and the built binary on 127.0.0.1:18091, using the locally installed
-Google Chrome; it is not part of `make check`.
+(Docker) and the built binary, in local mode on 127.0.0.1:18091 and in server
+mode on 127.0.0.1:18092, using the locally installed Google Chrome; it is not
+part of `make check`.
 
 Both suites (`make test-integration` and `make e2e`) reach Samba AD
 (`smblds/smblds`) over LDAPS with the test CA in `deploy/ad-test/tls/` (test

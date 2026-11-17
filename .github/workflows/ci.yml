@@ -69,6 +69,7 @@ jobs:
           path: |
             web/test-results/
             web/e2e/.tmp/server.log
+            web/e2e/.tmp/server-mode.log
           retention-days: 7
 
   # Each architecture is built and run natively, so no emulation is needed.
