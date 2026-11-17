@@ -4,7 +4,7 @@
 name: ldaplens-demo
 services:
   openldap:
-    image: bitnamilegacy/openldap:2.6.6@sha256:c55d2313e34cea38f85d8eda51f3a637a7822e975677cb04cf2ffd166f3b0985
+    image: bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed
     ports:
       - "127.0.0.1:1389:1389" # for local UI development, see README
     environment:
