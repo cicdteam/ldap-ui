@@ -5,9 +5,10 @@ GO_SRC := cmd internal web/embed.go deploy/demo-ldif/photos
 # missing tools fall back to Docker at exactly these versions.
 GOFUMPT_MIN := 0.7.0
 GOIMPORTS_VERSION := 0.52.0
-GOLANGCI_LINT_MIN := 2.12.2
-GOVULNCHECK_MIN := 1.3.0
-GO_IMAGE := golang:1.26
+GOLANGCI_LINT_MIN := 2.15.0
+GOVULNCHECK_MIN := 1.9.0
+# Dependabot does not see GO_IMAGE: bump it with the Dockerfile's golang line.
+GO_IMAGE := golang:1.26.11@sha256:4165ee6bf3b7811fd7b40373290405c83d0167dcb87ee5f29c427cdcef45ff8f
 IMAGE ?= ldaplens:dev
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)

@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+    groups:
+      go: {patterns: ["*"]}
+  - package-ecosystem: npm
+    directory: /web
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+    groups:
+      npm-prod: {dependency-type: production}
+      npm-dev: {dependency-type: development}
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule: {interval: weekly}
+  - package-ecosystem: docker-compose
+    directories: [/deploy, /deploy/e2e]
+    schedule: {interval: weekly}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}

@@ -89,7 +89,9 @@ Local mode shows all of it.
 ## Run with Docker
 
 Release images for amd64 and arm64 are published as
-`ghcr.io/cicdteam/ldaplens:<version>` (for example `1.0.0`) and `:latest`.
+`ghcr.io/cicdteam/ldaplens:<version>` (for example `1.0.0`). `:latest` follows
+the newest final release; a pre-release such as `1.2.0-rc.1` gets only its
+version tag.
 The image listens on `0.0.0.0:8080` and runs `server` when given no arguments.
 
 The quickest start runs local mode with its data in a volume:
@@ -141,6 +143,30 @@ and `demo-ad` (Samba AD over LDAPS, editable, bound as Administrator; demo
 people 001-040 bind with `Demo-Passw0rd!`, 041-045 are disabled). The
 directories reset on every start. `make demo-stop` stops it; `make demo-start DEMO_PORT=8090` picks another port.
 `make help` lists all targets.
+
+### Verify the image
+
+Release images are built only from `v*` tags on `main`, and each carries a
+signed build provenance (a GitHub artifact attestation) and an SBOM. Tags can
+be moved, digests cannot, so resolve the tag to its digest once, check with
+the [GitHub CLI](https://cli.github.com) that this digest came from this
+repository's workflow and release tag, and run that digest:
+
+```sh
+digest=$(docker buildx imagetools inspect ghcr.io/cicdteam/ldaplens:<version> --format '{{print .Manifest.Digest}}')
+gh attestation verify "oci://ghcr.io/cicdteam/ldaplens@$digest" \
+  --repo cicdteam/ldaplens \
+  --signer-workflow cicdteam/ldaplens/.github/workflows/ci.yml \
+  --source-ref refs/tags/v<version> &&
+  docker run --rm -p 127.0.0.1:8080:8080 -v ldaplens:/data "ghcr.io/cicdteam/ldaplens@$digest" local
+```
+
+In Kubernetes manifests, pin the same `ghcr.io/cicdteam/ldaplens@sha256:...`
+in place of the tag. The SBOM (SPDX) is attached to the image:
+
+```sh
+docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{{json .SBOM}}'
+```
 
 ## Using the UI
 
@@ -969,7 +995,8 @@ in only the ingress controller (ingress-nginx here: adjust the labels to
 yours). Server mode writes nothing, so there is no volume. `args` start with
 `server`, because arguments replace the image's default. The Ingress, with
 its affinity cookie, is under [Behind a reverse
-proxy](#behind-a-reverse-proxy). Pin the image by digest in production.
+proxy](#behind-a-reverse-proxy). Pin the image by digest in production
+(see [Verify the image](#verify-the-image)).
 ingress-nginx logs the query string by default, so a login link
 (`/?token=...`) lands in its access log: log the path only with its
 `log-format-upstream` (`$uri` in place of `$request`), or have an

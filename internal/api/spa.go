@@ -56,7 +56,7 @@ func spaHandler(fsys fs.FS, basePath string) http.Handler {
 					serveAsset(w, r, fsys, p, gzipped[p])
 					return
 				}
-				http.ServeFileFS(w, r, fsys, p)
+				http.ServeFileFS(w, r, fsys, p) //nolint:gosec // p is a cleaned rooted path, so it has no ".." elements, and fs.FS rejects them anyway
 				return
 			}
 			// A stale hashed asset after an upgrade must fail loudly, not
@@ -83,12 +83,12 @@ func spaHandler(fsys fs.FS, basePath string) http.Handler {
 func serveAsset(w http.ResponseWriter, r *http.Request, fsys fs.FS, p string, gz []byte) {
 	w.Header().Set("Cache-Control", immutable)
 	if gz == nil {
-		http.ServeFileFS(w, r, fsys, p)
+		http.ServeFileFS(w, r, fsys, p) //nolint:gosec // spaHandler cleaned p and found it in fsys
 		return
 	}
 	w.Header().Add("Vary", "Accept-Encoding")
 	if !acceptsGzip(r.Header.Get("Accept-Encoding")) {
-		http.ServeFileFS(w, r, fsys, p)
+		http.ServeFileFS(w, r, fsys, p) //nolint:gosec // spaHandler cleaned p and found it in fsys
 		return
 	}
 	ct := mime.TypeByExtension(path.Ext(p))
