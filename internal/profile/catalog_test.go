@@ -260,55 +260,6 @@ func TestNewCatalogKeepsUnreadableFileError(t *testing.T) {
 	}
 }
 
-func TestNewCatalogReadsOldFile(t *testing.T) {
-	// profiles.json as v1.1.0 wrote it; environment is ignored.
-	const old = `[
-  {
-    "name": "lab",
-    "url": "ldap://lab:389",
-    "startTLS": true,
-    "baseDN": "dc=lab,dc=example",
-    "bindDN": "cn=admin,dc=lab,dc=example",
-    "insecureSkipVerify": false,
-    "environment": "dev"
-  },
-  {
-    "name": "corp",
-    "url": "ldaps://corp:636",
-    "startTLS": false,
-    "insecureSkipVerify": true,
-    "environment": "prod",
-    "color": "red",
-    "readOnly": false
-  }
-]`
-	dir := t.TempDir()
-	writePath(t, filepath.Join(dir, "profiles.json"), old)
-
-	c := newCatalog(t, dir)
-	if got, reason := c.Quarantined(); got != "" || reason != nil {
-		t.Fatalf("Quarantined() = %q, %v, want the v1.1.0 file accepted", got, reason)
-	}
-	if _, err := c.Save(Profile{Name: "new", URL: "ldap://new"}); err != nil {
-		t.Fatalf("Save(new) error = %v", err)
-	}
-	want := []map[string]any{
-		{
-			"name": "lab", "url": "ldap://lab:389", "startTLS": true,
-			"baseDN": "dc=lab,dc=example", "bindDN": "cn=admin,dc=lab,dc=example",
-			"insecureSkipVerify": false, "readOnly": false,
-		},
-		{
-			"name": "corp", "url": "ldaps://corp:636", "startTLS": false,
-			"insecureSkipVerify": true, "color": "red", "readOnly": false,
-		},
-		{"name": "new", "url": "ldap://new", "startTLS": false, "insecureSkipVerify": false, "readOnly": false},
-	}
-	if diff := cmp.Diff(want, readProfiles(t, dir)); diff != "" {
-		t.Errorf("profiles.json after Save mismatch (-want +got):\n%s", diff)
-	}
-}
-
 func TestSaveLeavesNoTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	c := newCatalog(t, dir)

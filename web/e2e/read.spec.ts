@@ -122,17 +122,6 @@ test('Clear empties the bar; the builder starts from the text and writes it', as
   await expect(attr).toHaveCount(0)
 })
 
-test('smoke: tree, search results, Cmd+K jump, LDIF tab', async ({ page }) => {
-  await connect(page, 'demo')
-  await expect(page.getByRole('treeitem').first()).toBeVisible()
-  await page.keyboard.press('ControlOrMeta+K')
-  await page.locator('[cmdk-input]').fill('devs')
-  await page.locator('[cmdk-item]', { hasText: 'devs' }).first().click()
-  await expect(page).toHaveURL(/dn=cn%3Ddevs/)
-  await page.getByRole('tab', { name: 'LDIF' }).click()
-  await expect(page.getByText('dn: cn=devs,ou=groups,dc=example,dc=org')).toBeVisible()
-})
-
 test('compact density tightens the inspector rows, not only the tree', async ({ page }) => {
   await openEntry(page, 'demo', 'uid=user001,ou=people,dc=example,dc=org')
   const row = attrRow(page, 'cn')

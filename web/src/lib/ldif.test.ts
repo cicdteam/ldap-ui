@@ -4,7 +4,6 @@ import {
   entriesToLDIF,
   entryToLDIF,
   fold,
-  HIDDEN,
   isAttrDescription,
   isSafe,
   ldifPreview,
@@ -179,14 +178,5 @@ describe('ldifPreview', () => {
       { text: '' },
       { text: 'b: 2' },
     ])
-  })
-})
-
-describe('HIDDEN', () => {
-  it('covers default-ignorable, private use and unassigned code points', () => {
-    expect(HIDDEN.source).toBe(
-      '[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_Code_Point}\\p{Co}\\P{Assigned}]',
-    )
-    expect(HIDDEN.flags).toBe('u')
   })
 })

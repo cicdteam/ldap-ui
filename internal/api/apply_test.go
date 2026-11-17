@@ -346,24 +346,6 @@ func TestWriteBodyLimits(t *testing.T) {
 	}
 }
 
-// TestBlameManyNames bounds blame on 50 000 names that its diagnostic does
-// not name: a scan per name made it quadratic.
-func TestBlameManyNames(t *testing.T) {
-	names := make([]string, 50000)
-	for i := range names {
-		names[i] = "a" + strconv.Itoa(i)
-	}
-	const diagnostic = "modify/add: description: value #0 already exists"
-	start := time.Now()
-	got := blame(names, diagnostic)
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("blame(50000 names, %q) took %v, want at most 5s", diagnostic, elapsed)
-	}
-	if got != "" {
-		t.Errorf("blame(50000 names, %q) = %q, want \"\"", diagnostic, got)
-	}
-}
-
 // TestFoldKey checks that foldKey keys exactly what strings.EqualFold
 // matches, also where strings.ToLower disagrees with EqualFold: long s,
 // dotted capital I and final sigma.

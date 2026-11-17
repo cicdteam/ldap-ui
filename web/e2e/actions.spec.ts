@@ -75,6 +75,10 @@ test('read-only profile: no entry actions, no entry commands, and every write is
   const dn = e2eDN('read')
   const writes: [string, unknown][] = [
     [
+      'changes/apply',
+      { entries: [{ dn, changes: [{ op: 'add', attr: 'description', values: ['x'] }] }] },
+    ],
+    [
       'entries/add',
       { dn: `uid=ro,${E2E_OU}`, attributes: [{ name: 'objectClass', values: ['inetOrgPerson'] }] },
     ],

@@ -275,15 +275,30 @@ func objectClass(s *schema.Schema, name string) *schema.ObjectClass {
 	return nil
 }
 
-// TestSearchPaging checks that a search with more matches than its size
-// limit walks the pages up to the limit and reports more.
-func TestSearchPaging(t *testing.T) {
-	p, err := dialAdmin(t).Search(context.Background(), peopleListing(1000, 5000))
-	if err != nil {
-		t.Fatalf("Search(sizeLimit 5000) error = %v", err)
+// TestSearchStopsAtLimit checks that a search with more matches than its
+// size limit stops at the limit and reports more, whether the limit spans
+// several pages or ends inside the first.
+func TestSearchStopsAtLimit(t *testing.T) {
+	c := dialAdmin(t)
+	tests := []struct {
+		name      string
+		pageSize  int
+		sizeLimit int
+	}{
+		{name: "over several pages", pageSize: 1000, sizeLimit: 5000},
+		{name: "inside the first page", pageSize: 100, sizeLimit: 10},
 	}
-	if len(p.Entries) != 5000 || !p.More || p.Truncated {
-		t.Errorf("Search(sizeLimit 5000) = %d entries, more %v, truncated %v; want 5000, more, not truncated", len(p.Entries), p.More, p.Truncated)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := c.Search(context.Background(), peopleListing(tc.pageSize, tc.sizeLimit))
+			if err != nil {
+				t.Fatalf("Search(sizeLimit %d) error = %v", tc.sizeLimit, err)
+			}
+			if len(p.Entries) != tc.sizeLimit || !p.More || p.Truncated {
+				t.Errorf("Search(sizeLimit %d) = %d entries, more %v, truncated %v; want %d, more, not truncated",
+					tc.sizeLimit, len(p.Entries), p.More, p.Truncated, tc.sizeLimit)
+			}
+		})
 	}
 }
 
@@ -297,16 +312,6 @@ func TestSearchPagesToEnd(t *testing.T) {
 	}
 	if len(p.Entries) != 1000 || p.More || p.Truncated {
 		t.Errorf("Search(%s) = %d entries, more %v, truncated %v; want 1000, neither more nor truncated", req.Filter, len(p.Entries), p.More, p.Truncated)
-	}
-}
-
-func TestSearchSizeLimit(t *testing.T) {
-	p, err := dialAdmin(t).Search(context.Background(), peopleListing(100, 10))
-	if err != nil {
-		t.Fatalf("Search() error = %v", err)
-	}
-	if len(p.Entries) != 10 || !p.More || p.Truncated {
-		t.Errorf("Search(sizeLimit 10) = %d entries, more %v, truncated %v; want 10, more, not truncated", len(p.Entries), p.More, p.Truncated)
 	}
 }
 

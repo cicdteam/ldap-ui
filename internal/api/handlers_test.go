@@ -375,15 +375,6 @@ func TestEntryPassesDNVerbatim(t *testing.T) {
 	}
 }
 
-func TestEntryLDAPError(t *testing.T) {
-	env := connected(t)
-	env.dir.err = ldap.NewError(ldap.LDAPResultNoSuchObject, errors.New(""))
-	rec := env.do(t, http.MethodGet, "/api/c/dev/entry?dn=cn%3Dx", "")
-	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "no_such_object" {
-		t.Errorf("entry missing = %d %s, want 404 no_such_object", rec.Code, rec.Body)
-	}
-}
-
 func TestSearchDefaultsBase(t *testing.T) {
 	env := connected(t)
 	if rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)"}`); rec.Code != http.StatusOK {
@@ -394,31 +385,49 @@ func TestSearchDefaultsBase(t *testing.T) {
 	}
 }
 
-func TestSearchBadFilterIs400(t *testing.T) {
-	env := connected(t)
-	env.dir.err = ldap.NewError(ldap.ErrorFilterCompile, errors.New("unexpected end of filter"))
-	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x"}`)
-	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "bad_filter" {
-		t.Errorf("search bad filter = %d %s, want 400 bad_filter", rec.Code, rec.Body)
+// TestReadRouteErrors checks that the entry and search routes answer a
+// directory error or a refused body with its own status and code.
+func TestReadRouteErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name: "entry: no such object", method: http.MethodGet, path: "/api/c/dev/entry?dn=cn%3Dx",
+			err:        ldap.NewError(ldap.LDAPResultNoSuchObject, errors.New("")),
+			wantStatus: http.StatusNotFound, wantCode: "no_such_object",
+		},
+		{
+			name: "search: bad filter", method: http.MethodPost, path: "/api/c/dev/search", body: `{"filter":"(cn=x"}`,
+			err:        ldap.NewError(ldap.ErrorFilterCompile, errors.New("unexpected end of filter")),
+			wantStatus: http.StatusBadRequest, wantCode: "bad_filter",
+		},
+		{
+			name: "search: secret filter", method: http.MethodPost, path: "/api/c/dev/search", body: `{"filter":"(userPassword=x*)"}`,
+			err:        fmt.Errorf("%w: userPassword", ldapx.ErrSecretFilter),
+			wantStatus: http.StatusBadRequest, wantCode: "secret_filter",
+		},
+		// A search answers in one request: a paging cursor from a client is
+		// an unknown field.
+		{
+			name: "search: unknown field", method: http.MethodPost, path: "/api/c/dev/search", body: `{"filter":"(cn=x)","cursor":"SOMEID"}`,
+			wantStatus: http.StatusBadRequest, wantCode: "bad_request",
+		},
 	}
-}
-
-func TestSearchRejectsSecretFilter(t *testing.T) {
-	env := connected(t)
-	env.dir.err = fmt.Errorf("%w: userPassword", ldapx.ErrSecretFilter)
-	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(userPassword=x*)"}`)
-	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "secret_filter" {
-		t.Errorf("search secret filter = %d %s, want 400 secret_filter", rec.Code, rec.Body)
-	}
-}
-
-// TestSearchRejectsCursorField checks that a search answers in one request:
-// a paging cursor from a client is an unknown field.
-func TestSearchRejectsCursorField(t *testing.T) {
-	env := connected(t)
-	rec := env.do(t, http.MethodPost, "/api/c/dev/search", `{"filter":"(cn=x)","cursor":"SOMEID"}`)
-	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "bad_request" {
-		t.Errorf("search with cursor = %d %s, want 400 bad_request", rec.Code, rec.Body)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := connected(t)
+			env.dir.err = tc.err
+			rec := env.do(t, tc.method, tc.path, tc.body)
+			if rec.Code != tc.wantStatus || errorCode(t, rec) != tc.wantCode {
+				t.Errorf("%s %s = %d %s, want %d %s", tc.method, tc.path, rec.Code, rec.Body, tc.wantStatus, tc.wantCode)
+			}
+		})
 	}
 }
 
@@ -457,33 +466,28 @@ func TestProfilesNeverExposeSecrets(t *testing.T) {
 	if rec.Code != http.StatusOK || strings.Contains(body, "from-env") || strings.Contains(body, "LDAPLENS_TEST_PW") {
 		t.Fatalf("profiles = %d %s, want 200 without password or env name", rec.Code, body)
 	}
-	var views []struct {
-		Name        string `json:"name"`
-		ReadOnly    bool   `json:"readOnly"`
-		Editable    bool   `json:"editable"`
-		HasPassword bool   `json:"hasPassword"`
-		Connected   bool   `json:"connected"`
+	type flags struct {
+		Name          string `json:"name"`
+		ReadOnly      bool   `json:"readOnly"`
+		Editable      bool   `json:"editable"`
+		HasPassword   bool   `json:"hasPassword"`
+		Connected     bool   `json:"connected"`
+		UserLogin     bool   `json:"userLogin"`
+		NeedsPassword bool   `json:"needsPassword"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &views); err != nil {
+	var got []flags
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{}
-	for _, v := range views {
-		got[v.Name] = strings.Join([]string{boolStr(v.ReadOnly), boolStr(v.Editable), boolStr(v.HasPassword), boolStr(v.Connected)}, ",")
+	want := []flags{
+		{Name: "dev", HasPassword: true, Connected: true},
+		{Name: "manual", ReadOnly: true, NeedsPassword: true},
+		{Name: "anon"},
+		{Name: "people", UserLogin: true, NeedsPassword: true},
 	}
-	want := map[string]string{"dev": "f,f,t,t", "manual": "t,f,f,f", "anon": "f,f,f,f"}
-	for name, w := range want {
-		if got[name] != w {
-			t.Errorf("profile %s readOnly,editable,hasPassword,connected = %s, want %s", name, got[name], w)
-		}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("profiles flags mismatch (-want +got):\n%s", diff)
 	}
-}
-
-func boolStr(b bool) string {
-	if b {
-		return "t"
-	}
-	return "f"
 }
 
 func TestSaveProfile(t *testing.T) {
@@ -563,32 +567,6 @@ func TestServerModeProfileView(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("profiles mismatch (-want +got):\n%s", diff)
-	}
-}
-
-func TestNeedsPassword(t *testing.T) {
-	tests := []struct {
-		name string
-		p    profile.Profile
-		want bool
-	}{
-		{name: "template", p: profile.Profile{BindDNTemplate: "uid={user},dc=x"}, want: true},
-		{name: "bindDN without a configured password", p: profile.Profile{BindDN: "cn=a,dc=x"}, want: true},
-		{name: "passwordFile", p: profile.Profile{BindDN: "cn=a,dc=x", PasswordFile: "/run/pw"}, want: false},
-		{name: "anonymous", want: false},
-	}
-	for _, tc := range tests {
-		b, err := json.Marshal(new(server).view(tc.p, false, nil))
-		if err != nil {
-			t.Fatalf("%s: marshal: %v", tc.name, err)
-		}
-		var got map[string]any
-		if err := json.Unmarshal(b, &got); err != nil {
-			t.Fatalf("%s: decode %s: %v", tc.name, b, err)
-		}
-		if got["needsPassword"] != tc.want {
-			t.Errorf("%s: view needsPassword = %v, want %v", tc.name, got["needsPassword"], tc.want)
-		}
 	}
 }
 

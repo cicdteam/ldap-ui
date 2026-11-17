@@ -58,6 +58,7 @@ func TestErrorResponse(t *testing.T) {
 		{name: "not allowed on non-leaf", err: ldap.NewError(ldap.LDAPResultNotAllowedOnNonLeaf, errors.New("")), wantStatus: http.StatusUnprocessableEntity, wantCode: "rejected"},
 		{name: "other ldap", err: ldap.NewError(ldap.LDAPResultBusy, errors.New("")), wantStatus: http.StatusBadGateway, wantCode: "ldap_error"},
 		{name: "invalid request", err: fmt.Errorf("%w: bad scope", ldapx.ErrInvalidRequest), wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
+		{name: "secret filter", err: fmt.Errorf("%w: userPassword", ldapx.ErrSecretFilter), wantStatus: http.StatusBadRequest, wantCode: "secret_filter"},
 		{name: "timeout", err: context.DeadlineExceeded, wantStatus: http.StatusGatewayTimeout, wantCode: "timeout"},
 		{name: "not connected", err: session.ErrNotConnected, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},
 		{name: "no session", err: session.ErrNoSession, wantStatus: http.StatusUnauthorized, wantCode: "not_connected"},

@@ -76,6 +76,9 @@ func TestLoadRejects(t *testing.T) {
 		{name: "duplicate", yaml: "connections: [{name: a, url: 'ldap://h'}, {name: a, url: 'ldap://g'}]", wantInvalid: true},
 		{name: "url credentials", yaml: "connections: [{name: a, url: 'ldap://cn=admin:s3cret@h:389'}]", wantInvalid: true},
 		{name: "unknown field", yaml: "connections: [{name: a, url: 'ldap://h', pasword: x}]", wantInvalid: false},
+		// environment: prod does not make a profile read-only (readOnly
+		// does), so the key stops the start instead of being ignored.
+		{name: "environment", yaml: "connections: [{name: a, url: 'ldap://h', environment: prod}]", wantInvalid: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,36 +93,10 @@ func TestLoadRejects(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsIdentityUser(t *testing.T) {
-	_, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://h', bindDNTemplate: '{user}@corp.example', identityUser: exact}]"))
-	if err == nil || !strings.Contains(err.Error(), "field identityUser not found") {
-		t.Errorf("Load(identityUser) error = %v, want an unknown field error", err)
-	}
-}
-
 func TestLoadErrorHidesURLPassword(t *testing.T) {
 	_, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://cn=admin:s3cret@h:badport'}]"))
 	if err == nil || strings.Contains(err.Error(), "s3cret") {
 		t.Errorf("Load() error = %v, want an error without the password", err)
-	}
-}
-
-func TestLoadRejectsEnvironment(t *testing.T) {
-	_, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://h', environment: prod}]"))
-	if err == nil || !strings.Contains(err.Error(), "field environment not found") {
-		t.Errorf("Load(environment) error = %v, want an unknown field error", err)
-	}
-}
-
-func TestReadOnlyDefault(t *testing.T) {
-	got, err := Load(writeFile(t, "connections: [{name: a, url: 'ldap://h'}, {name: b, url: 'ldap://h', readOnly: true}]"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	for i, want := range []bool{false, true} {
-		if got[i].ReadOnly != want {
-			t.Errorf("Load() profile %s ReadOnly = %v, want %v", got[i].Name, got[i].ReadOnly, want)
-		}
 	}
 }
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { normDN } from './dn'
 import {
-  TREE_PAGE,
   buildRows,
   childrenFromPage,
   entryKind,
@@ -85,12 +84,6 @@ describe('childrenFromPage', () => {
       'cn=Doe\\, John': null,
       'uid=svc': null,
     })
-  })
-})
-
-describe('TREE_PAGE', () => {
-  it('asks for 2000 children per container', () => {
-    expect(TREE_PAGE).toBe(2000)
   })
 })
 

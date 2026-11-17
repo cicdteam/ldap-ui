@@ -26,7 +26,7 @@ import (
 	"github.com/cicdteam/ldaplens/internal/profile"
 )
 
-func TestParseFlags(t *testing.T) {
+func TestParseArgs(t *testing.T) {
 	env := map[string]string{
 		"LDAPLENS_LISTEN":        "0.0.0.0:9000",
 		"LDAPLENS_ALLOWED_HOSTS": "ldap.example.com, ui.local,",
@@ -59,7 +59,7 @@ func TestParseFlags(t *testing.T) {
 	}
 }
 
-func TestParseFlagsSecureCookies(t *testing.T) {
+func TestParseArgsSecureCookies(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    []string
@@ -93,27 +93,39 @@ func TestParseFlagsSecureCookies(t *testing.T) {
 	}
 }
 
-func TestParseFlagsSessionIdle(t *testing.T) {
+func TestParseArgsSessionIdle(t *testing.T) {
 	tests := []struct {
-		value   string
+		name    string
+		args    []string
+		env     string
 		want    time.Duration
 		wantErr bool
 	}{
-		{value: "5m", want: 5 * time.Minute},
-		{value: "0", wantErr: true},
-		{value: "-1m", wantErr: true},
+		{name: "default", want: 30 * time.Minute},
+		{name: "env", env: "5m", want: 5 * time.Minute},
+		{name: "flag", args: []string{"--session-idle", "5m"}, want: 5 * time.Minute},
+		{name: "flag wins over env", args: []string{"--session-idle", "1m"}, env: "5m", want: time.Minute},
+		{name: "zero flag", args: []string{"--session-idle", "0"}, wantErr: true},
+		{name: "negative flag", args: []string{"--session-idle", "-1m"}, wantErr: true},
+		{name: "invalid env", env: "soon", wantErr: true},
+		{name: "invalid variable with the flag set", args: []string{"--session-idle", "1m"}, env: "soon", wantErr: true},
 	}
-	noEnv := func(string) string { return "" }
 	for _, tc := range tests {
-		got, err := parseArgs([]string{"--session-idle", tc.value}, noEnv, io.Discard)
+		getenv := func(k string) string {
+			if k == "LDAPLENS_SESSION_IDLE" {
+				return tc.env
+			}
+			return ""
+		}
+		got, err := parseArgs(tc.args, getenv, io.Discard)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("parseArgs(--session-idle %s) error = nil, want error", tc.value)
+				t.Errorf("%s: parseArgs(%q) error = nil, want error", tc.name, tc.args)
 			}
 			continue
 		}
 		if err != nil || got.sessionIdle != tc.want {
-			t.Errorf("parseArgs(--session-idle %s) = %v, %v, want %v, nil", tc.value, got.sessionIdle, err, tc.want)
+			t.Errorf("%s: parseArgs(%q) sessionIdle = %v, %v, want %v, nil", tc.name, tc.args, got.sessionIdle, err, tc.want)
 		}
 	}
 }
@@ -355,7 +367,7 @@ func TestLocalDefaultDataDir(t *testing.T) {
 	}
 }
 
-func TestParseFlagsTrustedProxies(t *testing.T) {
+func TestParseArgsTrustedProxies(t *testing.T) {
 	env := map[string]string{"LDAPLENS_TRUSTED_PROXIES": "10.0.0.0/8, 192.0.2.7,,2001:db8::1"}
 	getenv := func(k string) string { return env[k] }
 	got, err := parseArgs(nil, getenv, io.Discard)
@@ -378,15 +390,7 @@ func TestParseFlagsTrustedProxies(t *testing.T) {
 	}
 }
 
-func TestParseFlagsNoIdentityHeader(t *testing.T) {
-	noEnv := func(string) string { return "" }
-	args := []string{"--identity-header", "X-User", "--trusted-proxies", "10.0.0.0/8"}
-	if _, err := parseArgs(args, noEnv, io.Discard); err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -identity-header") {
-		t.Errorf("parseArgs(%q) error = %v, want an unknown flag error", args, err)
-	}
-}
-
-func TestParseFlagsAuthToken(t *testing.T) {
+func TestParseArgsAuthToken(t *testing.T) {
 	tests := []struct {
 		name    string
 		value   string
@@ -424,7 +428,7 @@ func TestParseFlagsAuthToken(t *testing.T) {
 	}
 }
 
-func TestParseFlagsKeepsEnvTokenOutOfUsage(t *testing.T) {
+func TestParseArgsKeepsEnvTokenOutOfUsage(t *testing.T) {
 	const fromEnv = "SuperSecretToken1234"
 	getenv := func(k string) string {
 		if k == "LDAPLENS_AUTH_TOKEN" {
@@ -494,7 +498,7 @@ func TestServeDrainsInFlightRequests(t *testing.T) {
 	<-requested
 }
 
-func TestParseFlagsTokenFile(t *testing.T) {
+func TestParseArgsTokenFile(t *testing.T) {
 	const token = "abcXYZ0129._~-ok" //nolint:gosec // test value, not a credential
 	dir := t.TempDir()
 	write := func(name, content string) string {
@@ -547,23 +551,7 @@ func TestParseFlagsTokenFile(t *testing.T) {
 	}
 }
 
-func TestParseFlagsSessionIdleEnv(t *testing.T) {
-	env := map[string]string{"LDAPLENS_SESSION_IDLE": "5m"}
-	getenv := func(k string) string { return env[k] }
-	if got, err := parseArgs(nil, getenv, io.Discard); err != nil || got.sessionIdle != 5*time.Minute {
-		t.Errorf("parseArgs() with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 5m, nil", got.sessionIdle, err)
-	}
-	args := []string{"--session-idle", "1m"}
-	if got, err := parseArgs(args, getenv, io.Discard); err != nil || got.sessionIdle != time.Minute {
-		t.Errorf("parseArgs(%q) with LDAPLENS_SESSION_IDLE=5m sessionIdle = %v, %v, want 1m, nil", args, got.sessionIdle, err)
-	}
-	env["LDAPLENS_SESSION_IDLE"] = "soon"
-	if _, err := parseArgs(nil, getenv, io.Discard); err == nil {
-		t.Errorf("parseArgs() with LDAPLENS_SESSION_IDLE=soon error = nil, want error")
-	}
-}
-
-func TestParseFlagsSessionMaxAge(t *testing.T) {
+func TestParseArgsSessionMaxAge(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    []string

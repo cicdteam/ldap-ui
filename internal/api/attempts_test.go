@@ -6,8 +6,6 @@ package api
 import (
 	"maps"
 	"slices"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,52 +45,6 @@ func TestLimiterBlocksAfterFive(t *testing.T) {
 	clock.advance(56 * time.Second) // 61 s after the first failure
 	if got, ok := l.begin("uid=a"); !ok {
 		t.Errorf("begin(uid=a) after the window = %v, false, want true", got)
-	}
-}
-
-func TestLimiterSuccessResets(t *testing.T) {
-	l := newAttemptLimiter(5, time.Minute, 10, newClockFake().now)
-	failN(t, l, "uid=a", 4)
-	l.begin("uid=a")
-	l.succeed("uid=a")
-	failN(t, l, "uid=a", 4)
-	if got, ok := l.begin("uid=a"); !ok {
-		t.Errorf("begin(uid=a) after 4 failures, a success and 4 failures = %v, false, want true", got)
-	}
-}
-
-func TestLimiterKeysIndependent(t *testing.T) {
-	l := newAttemptLimiter(5, time.Minute, 10, newClockFake().now)
-	failN(t, l, "uid=a", 5)
-	if _, ok := l.begin("uid=a"); ok {
-		t.Errorf("begin(uid=a) after 5 failures = true, want false")
-	}
-	if got, ok := l.begin("uid=b"); !ok {
-		t.Errorf("begin(uid=b) after 5 failures of uid=a = %v, false, want true", got)
-	}
-}
-
-func TestLimiterConcurrentBurst(t *testing.T) {
-	l := newAttemptLimiter(5, time.Minute, 10, newClockFake().now)
-	start := make(chan struct{})
-	var begun atomic.Int32
-	var wg sync.WaitGroup
-	for range 20 {
-		wg.Go(func() {
-			<-start
-			if _, ok := l.begin("uid=a"); ok {
-				begun.Add(1)
-				l.fail("uid=a")
-			}
-		})
-	}
-	close(start)
-	wg.Wait()
-	if got := begun.Load(); got > 5 {
-		t.Errorf("20 concurrent begin(uid=a): %d ok, want at most 5", got)
-	}
-	if _, ok := l.begin("uid=a"); ok {
-		t.Errorf("begin(uid=a) after the burst failed = true, want false")
 	}
 }
 

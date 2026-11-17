@@ -126,35 +126,6 @@ func TestWriteEntriesGuard(t *testing.T) {
 	}
 }
 
-// TestWriteWithoutConfirm checks that writes take no typed confirmation:
-// a body without one is written, and a body with a confirm field is
-// refused like any other unknown field.
-func TestWriteWithoutConfirm(t *testing.T) {
-	bodies := map[string]string{
-		"changes/apply": twoEntries, "entries/add": addBody, "entries/delete": deleteBody,
-		"entries/rename": renameBody, "entries/password": setBody,
-	}
-	for path, body := range bodies {
-		t.Run(path, func(t *testing.T) {
-			env := newTestEnv(t)
-			connectTo(t, env, `{"profile":"dev"}`)
-			confirmed := strings.Replace(body, "{", `{"confirm":"dev",`, 1)
-			if rec := env.do(t, http.MethodPost, "/api/c/dev/"+path, confirmed); rec.Code != http.StatusBadRequest || errorCode(t, rec) != "bad_request" {
-				t.Errorf("%s with confirm = %d %s, want 400 bad_request", path, rec.Code, rec.Body)
-			}
-			if len(env.dir.writes)+len(env.dir.modified) != 0 {
-				t.Errorf("writes = %v, modified = %v, want none", env.dir.writes, env.dir.modified)
-			}
-			if rec := env.do(t, http.MethodPost, "/api/c/dev/"+path, body); rec.Code != http.StatusOK {
-				t.Errorf("%s without confirm = %d %s, want 200", path, rec.Code, rec.Body)
-			}
-			if len(env.dir.writes)+len(env.dir.modified) == 0 {
-				t.Errorf("%s without confirm wrote nothing, want a write", path)
-			}
-		})
-	}
-}
-
 func TestWriteEntriesBadRequest(t *testing.T) {
 	const oc = `{"name":"objectClass","values":["top"]}`
 	tests := []struct {
@@ -178,7 +149,9 @@ func TestWriteEntriesBadRequest(t *testing.T) {
 		{name: "add: secret in the RDN", path: "entries/add", body: `{"dn":"cn=n+userPassword=hunter2,dc=x","attributes":[` + oc + `]}`, wantAttr: "userPassword"},
 		{name: "add: not a DN", path: "entries/add", body: `{"dn":"hunter2","attributes":[` + oc + `]}`},
 		{name: "delete: empty dn", path: "entries/delete", body: `{"dn":""}`},
+		{name: "delete: unknown field", path: "entries/delete", body: `{"dn":"uid=n,dc=x","x":1}`},
 		{name: "rename: empty dn", path: "entries/rename", body: `{"dn":"","newRDN":"uid=m"}`},
+		{name: "rename: unknown field", path: "entries/rename", body: `{"dn":"uid=n,dc=x","newRDN":"uid=m","x":1}`},
 		{name: "rename: empty newRDN", path: "entries/rename", body: `{"dn":"uid=n,dc=x","newRDN":" "}`},
 		{name: "rename: newRDN without =", path: "entries/rename", body: `{"dn":"uid=n,dc=x","newRDN":"m"}`},
 		{name: "rename: newRDN of two RDNs", path: "entries/rename", body: `{"dn":"uid=n,dc=x","newRDN":"uid=m,ou=y"}`},

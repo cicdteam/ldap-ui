@@ -322,42 +322,6 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 	}
 }
 
-// TestConnectStartTLSStallTimesOut checks that a server which accepts
-// StartTLS and then never answers the TLS handshake cannot hold connect
-// past the connect timeout.
-func TestConnectStartTLSStallTimesOut(t *testing.T) {
-	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
-		id, err := readRequest(conn)
-		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
-			return
-		}
-		_, _ = io.Copy(io.Discard, conn) // swallow the ClientHello, answer nothing
-	})
-	p := fakeProfile(url)
-	p.StartTLS = true
-	p.ConnectTimeout = 300 * time.Millisecond
-	cfg, err := p.TLSConfig()
-	if err != nil {
-		t.Fatalf("TLSConfig() error = %v", err)
-	}
-	errc := make(chan error, 1)
-	go func() {
-		lc, err := connect(context.Background(), p, cfg)
-		if err == nil {
-			_ = lc.Close()
-		}
-		errc <- err
-	}()
-	select {
-	case err := <-errc:
-		if err == nil {
-			t.Error("connect(stalled StartTLS) error = nil, want a timeout")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("connect(stalled StartTLS) still blocked after 3s")
-	}
-}
-
 // TestConnectTimeoutErrors pins how connect reports a server that stops
 // answering. An ldaps handshake out of time is a context.DeadlineExceeded,
 // the API's timeout, as tls.DialWithDialer reported it. go-ldap turns any
@@ -396,6 +360,7 @@ func TestConnectTimeoutErrors(t *testing.T) {
 			}
 			// A socket deadline and a context timer that expire together can
 			// fire in either order; enough attempts catch the losing order.
+			// The bound catches a stall the connect timeout does not cover.
 			errs := make([]error, 20)
 			var wg sync.WaitGroup
 			for i := range errs {
@@ -407,7 +372,9 @@ func TestConnectTimeoutErrors(t *testing.T) {
 					errs[i] = err
 				})
 			}
-			wg.Wait()
+			if !returnsWithin(5*time.Second, wg.Wait) {
+				t.Fatalf("connect(stalled %s) still blocked after 5s", tc.name)
+			}
 			for _, err := range errs {
 				if !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) || errors.Is(err, context.DeadlineExceeded) != tc.wantTimeout {
 					t.Fatalf("connect(stalled %s) error = %v, want ErrorNetwork with context.DeadlineExceeded %v", tc.name, err, tc.wantTimeout)
