@@ -300,7 +300,7 @@ function RefList({
                     <span
                       role="img"
                       aria-label={hint}
-                      title={hint}
+                      title={visible(hint)}
                       className="flex h-full w-7 shrink-0 items-center justify-center text-muted"
                     >
                       <Lock className="h-3.5 w-3.5" />

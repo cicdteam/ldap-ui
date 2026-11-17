@@ -325,7 +325,9 @@ function EntryError({ dn, error, retry }: { dn: string; error: unknown; retry: (
         }
       >
         No entry at this DN.
-        {target && <span className="block font-mono text-[11px] text-muted">{target}</span>}
+        {target && (
+          <span className="block font-mono text-[11px] text-muted">{visible(target)}</span>
+        )}
       </Banner>
     )
   }

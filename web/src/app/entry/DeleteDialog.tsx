@@ -59,7 +59,8 @@ export function DeleteDialog({ dn, close }: { dn: string; close: () => void }) {
       {n > 0 && <p className="text-sm text-danger">{childrenNote(n)}</p>}
       {kids.isSuccess && n === 0 && (
         <label className="flex flex-col gap-1 text-xs">
-          {/* One flex item; bdi keeps the raw RDN, typed as is, from reordering the words around it. */}
+          {/* One flex item; bdi keeps the raw RDN, typed as is, from reordering the words
+              around it. */}
           <span>
             Type <bdi>{rdn}</bdi> to confirm
           </span>

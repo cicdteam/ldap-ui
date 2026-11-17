@@ -112,6 +112,13 @@ describe('breadcrumbs', () => {
       { label: 'cn=x', dn: 'cn=x,dc=other' },
     ])
   })
+
+  it('shows hidden characters in the base crumb label, not its dn', () => {
+    expect(breadcrumbs('cn=x,dc=\u202Eorg', 'dc=\u202Eorg')).toEqual([
+      { label: 'dc=<U+202E>org', dn: 'dc=\u202Eorg' },
+      { label: 'cn=x', dn: 'cn=x,dc=\u202Eorg' },
+    ])
+  })
 })
 
 describe('looksLikeDN', () => {

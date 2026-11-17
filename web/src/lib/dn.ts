@@ -85,7 +85,10 @@ export function rdnValue(rdn: string): string {
   return unescapeDNValue(i < 0 ? rdn : rdn.slice(i + 1))
 }
 
-/** "cn=Doe, John" for "cn=Doe\, John", hidden characters as <U+XXXX>: readable, not for sending back. */
+/**
+ * "cn=Doe, John" for "cn=Doe\, John", hidden characters as <U+XXXX>: readable, not for
+ * sending back.
+ */
 export function rdnDisplay(rdn: string): string {
   const t = rdnType(rdn)
   return visible(t ? `${t}=${rdnValue(rdn)}` : rdnValue(rdn))
@@ -126,7 +129,7 @@ export function breadcrumbs(dn: string, base: string): Crumb[] {
   const crumbs: Crumb[] = []
   if (baseLen > 0) {
     const b = joinDN(rdns.slice(rdns.length - baseLen))
-    crumbs.push({ label: b, dn: b })
+    crumbs.push({ label: visible(b), dn: b })
   }
   for (let i = rdns.length - baseLen - 1; i >= 0; i--) {
     crumbs.push({ label: rdnDisplay(rdns[i]), dn: joinDN(rdns.slice(i)) })

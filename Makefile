@@ -69,8 +69,8 @@ image-multiarch: ## Build and check the image for amd64 and arm64 (IMAGE-amd64, 
 	@set -e; for p in $(PLATFORMS); do \
 	  a=$${p#linux/}; \
 	  docker buildx build --platform $$p --load --build-arg VERSION="$$VERSION" \
-	    -f deploy/Dockerfile -t $(IMAGE)-$$a . ; \
-	  deploy/image-check.sh $(IMAGE)-$$a $$p "$$VERSION"; \
+	    -f deploy/Dockerfile -t "$(IMAGE)-$$a" . ; \
+	  deploy/image-check.sh "$(IMAGE)-$$a" $$p "$$VERSION"; \
 	done
 
 check: fmt vet lint vuln test web-check ## Run every check: fmt vet lint vuln test web-check

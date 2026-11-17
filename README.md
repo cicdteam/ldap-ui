@@ -124,7 +124,10 @@ With no arguments, the image runs `server`, which needs `LDAPLENS_CONFIG`
 (or `--config`) and writes nothing, so it runs with a read-only root
 filesystem and no volume. Arguments replace that default, so start them with
 `server` or `local`: `--config=...` alone runs local mode.
-Both modes run with `--read-only --cap-drop ALL --security-opt no-new-privileges:true`; local mode writes only to `/data`.
+
+Both modes also work hardened, with these flags added to `docker run`:
+`--read-only --cap-drop ALL --security-opt no-new-privileges:true` (local
+mode writes only to `/data`).
 
 To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
@@ -133,9 +136,9 @@ The UI's hashed assets are served gzipped and cached for a year, so no ingress c
 `/api` responses are never cached (`Cache-Control: no-store`), and the UI refuses to be framed by other pages.
 
 `make image-multiarch` builds `ldaplens:dev-amd64` and `ldaplens:dev-arm64` with
-buildx and checks each (architecture, `--version`, `/healthz` of server mode
-and the login link of local mode with a volume, both run with the flags above,
-unpacked size under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
+buildx and checks each (architecture, unpacked size under 40 MiB, `--version`,
+and, with the flags above, `/healthz` of server mode and the login link of
+local mode with a volume); set `IMAGE` to tag them for a registry. On a host without amd64
 (or arm64) emulation, pass `PLATFORMS=linux/arm64` (or `linux/amd64`) to check
 one platform.
 

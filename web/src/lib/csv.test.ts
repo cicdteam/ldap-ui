@@ -34,7 +34,7 @@ describe('csvField', () => {
     ['+1', "'+1"],
     ['-1', "'-1"],
     ['@x', "'@x"],
-    // Every segment a spreadsheet may split on (values join with "; ") starts defused.
+    // Every value of the "; " join, and every tab-separated segment, starts defused.
     ['x;=1+1', "x;'=1+1"],
     ["x;=cmd|' /C calc'!A0", "x;'=cmd|' /C calc'!A0"],
     ['x;+1+1', "x;'+1+1"],
@@ -42,6 +42,8 @@ describe('csvField', () => {
     ['ok; =1+1', "ok; '=1+1"],
     ['a-b', 'a-b'],
     ['Doe, John', '"Doe, John"'],
+    ['a\n- b', '"a\n- b"'],
+    ['1,-2', '"1,-2"'],
   ])('%j', (s, want) => {
     expect(csvField(s)).toBe(want)
   })
