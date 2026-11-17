@@ -15,7 +15,7 @@ import {
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api, errorMessage } from '../../lib/api'
 import { entryChanges } from '../../lib/changes'
-import { ancestorsWithin, isUnder, normDN, sameDN } from '../../lib/dn'
+import { ancestorsWithin, isUnder, normDN } from '../../lib/dn'
 import { rowHeight, usePrefs } from '../../lib/prefs'
 import { keys, load, save } from '../../lib/storage'
 import {
@@ -142,9 +142,14 @@ export function Tree() {
   const [filter, setFilter] = useState('')
   const rows = buildRows(roots, expanded, (dn) => states.get(dn), filter.trim(), ws.dn)
 
-  const selectedIndex = ws.dn
-    ? rows.findIndex((r) => r.type === 'entry' && sameDN(r.dn, ws.dn))
-    : -1
+  // A collapsed parent stands in for a hidden selection: it is marked and keeps the
+  // focus, so the tree does not jump to the top.
+  let selectedIndex = -1
+  if (ws.dn)
+    rows.forEach((r, i) => {
+      if (r.type !== 'entry' || !isUnder(ws.dn, r.dn)) return
+      if (selectedIndex < 0 || r.depth > rows[selectedIndex].depth) selectedIndex = i
+    })
   const keyed = focusKey ? rows.findIndex((r) => r.key === focusKey) : -1
   const focusIndex = keyed >= 0 ? keyed : Math.max(selectedIndex, 0)
 

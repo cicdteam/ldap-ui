@@ -61,6 +61,24 @@ test('one click on a container selects and expands it; Left and Right also toggl
   await expect(people).toHaveAttribute('aria-expanded', 'false')
 })
 
+test('collapsing a parent of the selected entry marks the parent, the card stays', async ({
+  page,
+}) => {
+  await openEntry(page, 'demo', e2eDN('jdoe'))
+  const e2e = row(page, 'ou=e2e')
+  await expect(row(page, 'uid=jdoe')).toHaveAttribute('aria-selected', 'true')
+  // The chevron only toggles.
+  await e2e.locator('span').first().click()
+  await expect(e2e).toHaveAttribute('aria-expanded', 'false')
+  await expect(e2e).toHaveAttribute('aria-selected', 'true')
+  const id = await e2e.getAttribute('id')
+  await expect(page.getByRole('tree')).toHaveAttribute('aria-activedescendant', id!)
+  await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(e2eDN('jdoe'))}`))
+  await e2e.locator('span').first().click()
+  await expect(row(page, 'uid=jdoe')).toHaveAttribute('aria-selected', 'true')
+  await expect(e2e).toHaveAttribute('aria-selected', 'false')
+})
+
 test('a container row lists its children from its List children icon', async ({ page }) => {
   await connect(page, 'demo')
   const people = row(page, 'ou=people')
