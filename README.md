@@ -172,7 +172,8 @@ directories reset on every start. `make demo-stop` stops it; `make demo-start DE
   Each row shows its RDN; an account row (`uid=` or `sAMAccountName=`) also
   shows the person's name, muted: `displayName`, else `cn`. A click on a
   container selects it and expands or collapses it; the chevron only expands
-  or collapses it, and so do Right and Left. A container shows its List
+  or collapses it, and so do Right and Left. Collapsing a parent of the
+  selected entry marks that parent instead and keeps the card. A container shows its List
   children icon while the pointer is over its row, and on the row with
   keyboard focus; Shift+Enter on the row does the same. "Filter loaded
   entries" above the tree narrows the rows of open branches to the ones whose
