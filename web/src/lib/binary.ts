@@ -17,10 +17,12 @@ export function needsBinaryOption(name: string, schema: SchemaIndex): boolean {
   return CERT_SYNTAXES.has(schema.syntax(name))
 }
 
-/** name with every character a file name cannot hold, on any system, made '_'. */
+/**
+ * name with every character a file name cannot hold, on any system, made '_', and control and
+ * format characters too: a bidi override (U+202E) can make a name read backwards.
+ */
 export function fileSafe(name: string): string {
-  // eslint-disable-next-line no-control-regex -- control characters are not allowed in file names
-  return name.replace(/[\x00-\x1f\\/:*?"<>|]/g, '_')
+  return name.replace(/[\\/:*?"<>|\p{Cc}\p{Cf}]/gu, '_')
 }
 
 /**

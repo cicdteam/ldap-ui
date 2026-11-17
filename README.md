@@ -374,10 +374,13 @@ on non-Latin keyboard layouts.
   (photos) and attributes with options too, without the RDN value, operational
   and secret attributes, the attributes that identify one entry (`uid`, `mail`,
   `uidNumber`, `employeeNumber`, `sAMAccountName`, `userPrincipalName`,
-  `objectGUID`, `objectSid`, `mS-DS-ConsistencyGuid`) and certificates
+  `objectGUID`, `objectSid`, `mS-DS-ConsistencyGuid`), certificates
   (`userCertificate`, `userSMIMECertificate`, any attribute of certificate
-  syntax). Binary fields in both list their values with a delete button and
-  take files through "+ Upload file…".
+  syntax), authentication bindings (`sshPublicKey`, `ipaSshPubKey`,
+  `altSecurityIdentities`, `msDS-KeyCredentialLink`, `servicePrincipalName`,
+  `krbPrincipalName`, `krbCanonicalName`) and `ipaUniqueID`. Binary fields in
+  both list their values with a delete button and take files through
+  "+ Upload file…".
 - **Rename/Move** changes the RDN, the parent, or both; "Keep old RDN value as
   an attribute" is off by default and not offered on Active Directory.
   **Delete** removes an entry without children after you type its RDN. Both

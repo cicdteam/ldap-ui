@@ -10,9 +10,12 @@ export function cellValue(e: Entry, column: string): string {
   return (a.values ?? []).map((v) => v.display ?? v.text).join('; ')
 }
 
-/** Quotes per RFC 4180 and defuses spreadsheet formulas (OWASP CSV injection). */
+/**
+ * Quotes per RFC 4180 and defuses spreadsheet formulas (OWASP CSV injection): at the start and
+ * after every separator a spreadsheet may split the cell on, since values join with "; ".
+ */
 export function csvField(s: string): string {
-  const v = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s
+  const v = (/^[\t\r]/.test(s) ? `'${s}` : s).replace(/(^|[;,\t\r\n])(\s*)([=+\-@])/g, "$1$2'$3")
   return /[",\r\n]/.test(v) || v !== v.trim() ? `"${v.replace(/"/g, '""')}"` : v
 }
 
