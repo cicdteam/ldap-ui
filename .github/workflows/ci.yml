@@ -88,7 +88,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: make image-multiarch PLATFORMS=linux/${{ matrix.arch }}
+      - run: make image-multiarch PLATFORMS="linux/$ARCH"
+        env:
+          ARCH: ${{ matrix.arch }}
 
   # A v* tag on main publishes one multi-arch image, with an SBOM and a signed
   # provenance attestation, after every check passes. The Go and Node stages

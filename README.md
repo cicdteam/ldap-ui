@@ -103,7 +103,9 @@ docker run --rm -p 127.0.0.1:8080:8080 -v ldaplens:/data ghcr.io/cicdteam/ldaple
 Open the login link from the log, then add your directories with **New
 connection**. The volume keeps them and the token; without it, both are lost
 when the container is removed. Set `LDAPLENS_AUTH_TOKEN` to choose the token
-(at least 16 characters from `A-Z a-z 0-9 . _ ~ -`).
+(at least 16 characters from `A-Z a-z 0-9 . _ ~ -`). The image runs as UID
+65532, so a bind mount used in place of the volume must be owned by it
+(`chown 65532:65532 <dir>`), and `--user` needs a directory that user owns.
 
 Connections come from two places, and you can use either or both: the ones
 you create in the UI (kept in the data dir, passwords never stored) and the
@@ -122,6 +124,7 @@ With no arguments, the image runs `server`, which needs `LDAPLENS_CONFIG`
 (or `--config`) and writes nothing, so it runs with a read-only root
 filesystem and no volume. Arguments replace that default, so start them with
 `server` or `local`: `--config=...` alone runs local mode.
+Both modes run with `--read-only --cap-drop ALL --security-opt no-new-privileges:true`; local mode writes only to `/data`.
 
 To run your own build instead, `make image` builds `ldaplens:dev`; use that name
 in place of the published one.
@@ -131,7 +134,7 @@ The UI's hashed assets are served gzipped and cached for a year, so no ingress c
 
 `make image-multiarch` builds `ldaplens:dev-amd64` and `ldaplens:dev-arm64` with
 buildx and checks each (architecture, `--version`, `/healthz` of server mode
-on a read-only root filesystem, the login link of local mode with a volume,
+and the login link of local mode with a volume, both run with the flags above,
 unpacked size under 40 MiB); set `IMAGE` to tag them for a registry. On a host without amd64
 (or arm64) emulation, pass `PLATFORMS=linux/arm64` (or `linux/amd64`) to check
 one platform.
