@@ -183,7 +183,7 @@ func TestApplyRefusals(t *testing.T) {
 		{name: "not base64", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"jpegPhoto","base64":true,"values":["not base64!"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request", wantAttr: "jpegPhoto", wantMsg: "jpegPhoto: value is not base64"},
 		{name: "binary value over 1 MiB", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"jpegPhoto","base64":true,"values":["` + big + `"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request", wantAttr: "jpegPhoto", wantMsg: "jpegPhoto: value is larger than 1 MiB"},
 		{name: "text value over 1 MiB", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"description","values":["` + long + `"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request", wantAttr: "description", wantMsg: "description: value is larger than 1 MiB"},
-		{name: "unknown field", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[],"x":1}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
+		{name: "unknown field", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"cn","values":["x"]}]}],"x":1}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -18,7 +18,11 @@ func TestProbes(t *testing.T) {
 	for _, base := range []string{"", "/ldap", "/ldap/"} {
 		h := New(Options{BasePath: base, AuthToken: "abcXYZ0129._~-ok"}) //nolint:gosec // test value, not a credential
 		prefix := strings.TrimSuffix(base, "/")
-		for _, path := range []string{"/healthz", "/readyz", prefix + "/healthz", prefix + "/readyz"} {
+		paths := []string{"/healthz", "/readyz"}
+		if prefix != "" {
+			paths = append(paths, prefix+"/healthz", prefix+"/readyz")
+		}
+		for _, path := range paths {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			req.Host = podHost
 			rec := httptest.NewRecorder()

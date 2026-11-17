@@ -16,13 +16,19 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// TestCatalogSaveAndReload checks that a saved profile comes back from disk
+// with every field the saved JSON carries.
 func TestCatalogSaveAndReload(t *testing.T) {
 	dir := t.TempDir()
 	c, err := NewCatalog(nil, dir)
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
 	}
-	if _, err := c.Save(Profile{Name: "lab", URL: "ldap://lab:389"}); err != nil {
+	saved := Profile{
+		Name: "lab", URL: "ldap://lab:389", StartTLS: true, BaseDN: "dc=lab,dc=example", BindDN: "cn=admin,dc=lab,dc=example",
+		CAPEM: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", InsecureSkipVerify: true, Color: "red", ReadOnly: true,
+	}
+	if _, err := c.Save(saved); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	if err := c.Close(); err != nil {
@@ -36,8 +42,12 @@ func TestCatalogSaveAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Find(lab) error = %v", err)
 	}
-	if got.URL != "ldap://lab:389" || got.ConnectTimeout != defaultConnectTimeout {
-		t.Errorf("Find(lab) = %+v, want url ldap://lab:389 and the default connect timeout", got)
+	// The timeouts come from the config file only, so a saved profile has
+	// the defaults.
+	want := saved
+	want.ConnectTimeout, want.SearchTimeout = defaultConnectTimeout, defaultSearchTimeout
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Find(lab) after a reload mismatch (-want +got):\n%s", diff)
 	}
 }
 

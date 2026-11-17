@@ -147,6 +147,7 @@ describe('ldifPreview', () => {
     ['ASCII only', 'plain'],
     ['a C1 next-line character', 'Андрей\u0085x'],
     ['a line separator', 'Андрей\u2028x'],
+    ['a paragraph separator', 'Андрей\u2029x'],
     ['a right-to-left override', 'Андрей\u202Ex'],
     ['a zero-width space', 'admin\u200Bй'],
     ['a trailing no-break space', 'Андрей\u00A0'],
