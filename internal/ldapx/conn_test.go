@@ -388,7 +388,7 @@ func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
 			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
 			p.StartTLS = tc.startTLS
 			p.CAPEM = caPEM
-			p.ConnectTimeout = 100 * time.Millisecond
+			p.ConnectTimeout = 500 * time.Millisecond
 			cfg, err := p.TLSConfig()
 			if err != nil {
 				t.Fatalf("TLSConfig() error = %v", err)
@@ -399,7 +399,9 @@ func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
 			}
 			c := &Conn{prof: p, lc: lc}
 			defer c.Close()
-			time.Sleep(300 * time.Millisecond)
+			// A TLS handshake under -race on a busy CI runner can take over
+			// 100 ms, so the budget is generous and the idle time well past it.
+			time.Sleep(1500 * time.Millisecond)
 			if lc.IsClosing() {
 				t.Error("connection closed while idle, want it open past the connect timeout")
 			}
