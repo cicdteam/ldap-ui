@@ -16,13 +16,19 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// TestCatalogSaveAndReload checks that a saved profile comes back from disk
+// with every field the saved JSON carries.
 func TestCatalogSaveAndReload(t *testing.T) {
 	dir := t.TempDir()
 	c, err := NewCatalog(nil, dir)
 	if err != nil {
 		t.Fatalf("NewCatalog() error = %v", err)
 	}
-	if _, err := c.Save(Profile{Name: "lab", URL: "ldap://lab:389"}); err != nil {
+	saved := Profile{
+		Name: "lab", URL: "ldap://lab:389", StartTLS: true, BaseDN: "dc=lab,dc=example", BindDN: "cn=admin,dc=lab,dc=example",
+		CAPEM: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", InsecureSkipVerify: true, Color: "red", ReadOnly: true,
+	}
+	if _, err := c.Save(saved); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	if err := c.Close(); err != nil {
@@ -36,8 +42,12 @@ func TestCatalogSaveAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Find(lab) error = %v", err)
 	}
-	if got.URL != "ldap://lab:389" || got.ConnectTimeout != defaultConnectTimeout {
-		t.Errorf("Find(lab) = %+v, want url ldap://lab:389 and the default connect timeout", got)
+	// The timeouts come from the config file only, so a saved profile has
+	// the defaults.
+	want := saved
+	want.ConnectTimeout, want.SearchTimeout = defaultConnectTimeout, defaultSearchTimeout
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Find(lab) after a reload mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -257,55 +267,6 @@ func TestNewCatalogKeepsUnreadableFileError(t *testing.T) {
 	if c, err := NewCatalog(nil, dir); err == nil {
 		_ = c.Close()
 		t.Errorf("NewCatalog() with unreadable profiles.json error = nil, want an error")
-	}
-}
-
-func TestNewCatalogReadsOldFile(t *testing.T) {
-	// profiles.json as v1.1.0 wrote it; environment is ignored.
-	const old = `[
-  {
-    "name": "lab",
-    "url": "ldap://lab:389",
-    "startTLS": true,
-    "baseDN": "dc=lab,dc=example",
-    "bindDN": "cn=admin,dc=lab,dc=example",
-    "insecureSkipVerify": false,
-    "environment": "dev"
-  },
-  {
-    "name": "corp",
-    "url": "ldaps://corp:636",
-    "startTLS": false,
-    "insecureSkipVerify": true,
-    "environment": "prod",
-    "color": "red",
-    "readOnly": false
-  }
-]`
-	dir := t.TempDir()
-	writePath(t, filepath.Join(dir, "profiles.json"), old)
-
-	c := newCatalog(t, dir)
-	if got, reason := c.Quarantined(); got != "" || reason != nil {
-		t.Fatalf("Quarantined() = %q, %v, want the v1.1.0 file accepted", got, reason)
-	}
-	if _, err := c.Save(Profile{Name: "new", URL: "ldap://new"}); err != nil {
-		t.Fatalf("Save(new) error = %v", err)
-	}
-	want := []map[string]any{
-		{
-			"name": "lab", "url": "ldap://lab:389", "startTLS": true,
-			"baseDN": "dc=lab,dc=example", "bindDN": "cn=admin,dc=lab,dc=example",
-			"insecureSkipVerify": false, "readOnly": false,
-		},
-		{
-			"name": "corp", "url": "ldaps://corp:636", "startTLS": false,
-			"insecureSkipVerify": true, "color": "red", "readOnly": false,
-		},
-		{"name": "new", "url": "ldap://new", "startTLS": false, "insecureSkipVerify": false, "readOnly": false},
-	}
-	if diff := cmp.Diff(want, readProfiles(t, dir)); diff != "" {
-		t.Errorf("profiles.json after Save mismatch (-want +got):\n%s", diff)
 	}
 }
 

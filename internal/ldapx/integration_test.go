@@ -35,6 +35,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/openldap"
 
 	"github.com/cicdteam/ldaplens/internal/profile"
+	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 const (
@@ -42,8 +43,8 @@ const (
 	testBase      = "dc=example,dc=org"
 	testPeople    = "ou=people," + testBase
 	testGroups    = "ou=groups," + testBase
-	testUsers     = 20000
-	testBigGroup  = 5000
+	testUsers     = 2000
+	testBigGroup  = testUsers
 	// testSpecialDN has an escaped comma, a slash and non-ASCII text.
 	testSpecialDN = `cn=Smith\, John/Jr Ünal,` + "ou=people," + testBase
 )
@@ -131,14 +132,18 @@ func userDN(i int) string { return fmt.Sprintf("uid=user%05d,%s", i, testPeople)
 
 func groupDN(name string) string { return "cn=" + name + "," + testGroups }
 
+// writeLDIF writes the LDIF record of dn with lines, its "attr: value"
+// lines, to b.
+func writeLDIF(b *strings.Builder, dn string, lines ...string) {
+	fmt.Fprintf(b, "dn: %s\n%s\n\n", dn, strings.Join(lines, "\n"))
+}
+
 // seedLDIF builds the test tree: testUsers people, a group with testBigGroup
 // members, a two-level nested group, a membership cycle, an entry with a DN
 // that needs escaping and a posixGroup.
 func seedLDIF() string {
 	var b strings.Builder
-	entry := func(dn string, lines ...string) {
-		fmt.Fprintf(&b, "dn: %s\n%s\n\n", dn, strings.Join(lines, "\n"))
-	}
+	entry := func(dn string, lines ...string) { writeLDIF(&b, dn, lines...) }
 	entry(testBase, "objectClass: dcObject", "objectClass: organization", "dc: example", "o: example")
 	entry(testPeople, "objectClass: organizationalUnit", "ou: people")
 	entry(testGroups, "objectClass: organizationalUnit", "ou: groups")
@@ -253,24 +258,54 @@ func TestSchemaFromServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schema() error = %v", err)
 	}
-	must, _ := s.Allowed([]string{"inetOrgPerson"})
-	if !slices.Contains(must, "cn") || !slices.Contains(must, "sn") {
-		t.Errorf("Allowed(inetOrgPerson) must = %v, want cn and sn", must)
+	if objectClass(s, "inetOrgPerson") == nil {
+		t.Error("Schema() has no inetOrgPerson class")
 	}
-	if !s.IsDN("member") {
-		t.Error("IsDN(member) = false, want true")
+	if oc := objectClass(s, "person"); oc == nil || !slices.Contains(oc.Must, "cn") || !slices.Contains(oc.Must, "sn") {
+		t.Errorf("Schema() person = %+v, want MUST cn and sn", oc)
+	}
+	if got, want := s.Syntax("member"), "1.3.6.1.4.1.1466.115.121.1.12"; got != want {
+		t.Errorf("Syntax(member) = %q, want the DN syntax %q", got, want)
+	}
+	if len(s.Skipped) != 0 {
+		t.Errorf("Schema() skipped %q, want every definition parsed", s.Skipped)
 	}
 }
 
-// TestSearchPaging checks that a search with more matches than its size
-// limit walks the pages up to the limit and reports more.
-func TestSearchPaging(t *testing.T) {
-	p, err := dialAdmin(t).Search(context.Background(), peopleListing(1000, 5000))
-	if err != nil {
-		t.Fatalf("Search(sizeLimit 5000) error = %v", err)
+// objectClass returns the class s publishes under name, or nil.
+func objectClass(s *schema.Schema, name string) *schema.ObjectClass {
+	for _, oc := range s.ObjectClasses {
+		if slices.Contains(oc.Names, name) {
+			return oc
+		}
 	}
-	if len(p.Entries) != 5000 || !p.More || p.Truncated {
-		t.Errorf("Search(sizeLimit 5000) = %d entries, more %v, truncated %v; want 5000, more, not truncated", len(p.Entries), p.More, p.Truncated)
+	return nil
+}
+
+// TestSearchStopsAtLimit checks that a search with more matches than its
+// size limit stops at the limit and reports more, whether the limit spans
+// several pages or ends inside the first.
+func TestSearchStopsAtLimit(t *testing.T) {
+	c := dialAdmin(t)
+	tests := []struct {
+		name      string
+		pageSize  int
+		sizeLimit int
+	}{
+		{name: "over several pages", pageSize: 500, sizeLimit: 1500},
+		{name: "inside the first page", pageSize: 100, sizeLimit: 10},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := c.Search(context.Background(), peopleListing(tc.pageSize, tc.sizeLimit))
+			if err != nil {
+				t.Fatalf("Search(sizeLimit %d) error = %v", tc.sizeLimit, err)
+			}
+			if len(p.Entries) != tc.sizeLimit || !p.More || p.Truncated {
+				t.Errorf("Search(sizeLimit %d) = %d entries, more %v, truncated %v; want %d, more, not truncated",
+					tc.sizeLimit, len(p.Entries), p.More, p.Truncated, tc.sizeLimit)
+			}
+		})
 	}
 }
 
@@ -287,16 +322,6 @@ func TestSearchPagesToEnd(t *testing.T) {
 	}
 }
 
-func TestSearchSizeLimit(t *testing.T) {
-	p, err := dialAdmin(t).Search(context.Background(), peopleListing(100, 10))
-	if err != nil {
-		t.Fatalf("Search() error = %v", err)
-	}
-	if len(p.Entries) != 10 || !p.More || p.Truncated {
-		t.Errorf("Search(sizeLimit 10) = %d entries, more %v, truncated %v; want 10, more, not truncated", len(p.Entries), p.More, p.Truncated)
-	}
-}
-
 func TestSearchWithoutPaging(t *testing.T) {
 	c := dialAdmin(t)
 	c.info.Paging = false // pretend the server lacks the paging control
@@ -306,15 +331,6 @@ func TestSearchWithoutPaging(t *testing.T) {
 	}
 	if len(p.Entries) != 100 || !p.More || p.Truncated {
 		t.Errorf("Search(no paging, sizeLimit 100) = %d entries, more %v, truncated %v; want 100, more, not truncated", len(p.Entries), p.More, p.Truncated)
-	}
-}
-
-func TestSearchCanceled(t *testing.T) {
-	c := dialAdmin(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := c.Search(ctx, SearchRequest{BaseDN: testPeople}); !errors.Is(err, context.Canceled) {
-		t.Errorf("Search(canceled) error = %v, want context.Canceled", err)
 	}
 }
 
@@ -398,31 +414,6 @@ func TestReconnect(t *testing.T) {
 	}
 }
 
-// TestIdleConnectionSurvivesConnectTimeout checks that the connect-phase
-// deadline does not outlive connect: a connection idle for longer than the
-// connect timeout still serves a search, without a redial.
-func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
-	p := testProfile()
-	p.ConnectTimeout = time.Second
-	c, err := Dial(context.Background(), p, "adminpassword")
-	if err != nil {
-		t.Fatalf("Dial() error = %v", err)
-	}
-	defer c.Close()
-	lc, err := c.current(context.Background())
-	if err != nil {
-		t.Fatalf("current() error = %v", err)
-	}
-	time.Sleep(2 * time.Second)
-	if lc.IsClosing() {
-		t.Error("connection closed while idle, want it open past the connect timeout")
-	}
-	page, err := c.Search(context.Background(), SearchRequest{BaseDN: userDN(0), Scope: ScopeBase})
-	if err != nil || len(page.Entries) != 1 {
-		t.Errorf("Search() after idling = %d entries, %v, want 1 entry", len(page.Entries), err)
-	}
-}
-
 // peopleListing lists the test users: at most sizeLimit of them,
 // pageSize at a time.
 func peopleListing(pageSize, sizeLimit int) SearchRequest {
@@ -439,9 +430,9 @@ func TestSearchConcurrentWalks(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 3 {
 		wg.Go(func() {
-			p, err := c.Search(context.Background(), peopleListing(1000, 5000))
-			if err != nil || len(p.Entries) != 5000 || !p.More {
-				t.Errorf("concurrent Search() %d = %d entries, more %v, %v; want 5000, more", i, len(p.Entries), p.More, err)
+			p, err := c.Search(context.Background(), peopleListing(500, 1500))
+			if err != nil || len(p.Entries) != 1500 || !p.More {
+				t.Errorf("concurrent Search() %d = %d entries, more %v, %v; want 1500, more", i, len(p.Entries), p.More, err)
 			}
 		})
 	}
@@ -516,13 +507,23 @@ func TestMembers(t *testing.T) {
 	if err != nil || len(big.Refs) != testBigGroup || big.Truncated {
 		t.Errorf("Members(big) = %d refs truncated %v, %v, want %d not truncated", len(big.Refs), big.Truncated, err, testBigGroup)
 	}
-	got, err := c.Members(context.Background(), groupDN("outer"), true)
-	if err != nil {
-		t.Fatalf("Members(outer, nested) error = %v", err)
+	tests := []struct {
+		group string
+		want  []Ref
+	}{
+		{group: "outer", want: []Ref{{DN: groupDN("inner")}, {DN: userDN(0), Via: groupDN("inner")}}},
+		// cycle-b lists cycle-a again, which is not repeated.
+		{group: "cycle-a", want: []Ref{{DN: groupDN("cycle-b")}, {DN: userDN(1)}}},
 	}
-	want := []Ref{{DN: groupDN("inner")}, {DN: userDN(0), Via: groupDN("inner")}}
-	if diff := cmp.Diff(want, got.Refs, cmpSortRefs); diff != "" || got.Truncated {
-		t.Errorf("Members(outer, nested) truncated %v, mismatch (-want +got):\n%s", got.Truncated, diff)
+	for _, tc := range tests {
+		got, err := c.Members(context.Background(), groupDN(tc.group), true)
+		if err != nil {
+			t.Errorf("Members(%s, nested) error = %v", tc.group, err)
+			continue
+		}
+		if diff := cmp.Diff(tc.want, got.Refs, cmpSortRefs); diff != "" || got.Truncated {
+			t.Errorf("Members(%s, nested) truncated %v, mismatch (-want +got):\n%s", tc.group, got.Truncated, diff)
+		}
 	}
 }
 
@@ -537,9 +538,9 @@ var cmpSortRefs = cmp.Transformer("normRefs", func(in []Ref) []string {
 })
 
 // TestMembershipScansHandBackConnection checks that a membership scan
-// stops at its limit, also above maxRefs, and that a scan stopped early
-// hands back a connection that pages again. A scan stopped at its limit
-// reports truncation.
+// pages to the end below its limit and stops at its limit, and that a scan
+// stopped early hands back a connection that pages again. A scan stopped
+// at its limit reports truncation.
 func TestMembershipScansHandBackConnection(t *testing.T) {
 	ctx := context.Background()
 	c := dialAdmin(t)
@@ -562,8 +563,8 @@ func TestMembershipScansHandBackConnection(t *testing.T) {
 	if shared == nil {
 		t.Error("allDNs stopped at its limit closed its connection, want it abandoned and shared again")
 	}
-	if p, err := c.Search(ctx, peopleListing(1000, 5000)); err != nil || len(p.Entries) != 5000 || !p.More {
-		t.Errorf("Search(sizeLimit 5000) after an abandoned scan = %d entries, more %v, %v; want 5000, more", len(p.Entries), p.More, err)
+	if p, err := c.Search(ctx, peopleListing(500, 1500)); err != nil || len(p.Entries) != 1500 || !p.More {
+		t.Errorf("Search(sizeLimit 1500) after an abandoned scan = %d entries, more %v, %v; want 1500, more", len(p.Entries), p.More, err)
 	}
 }
 
@@ -604,16 +605,16 @@ func valuesOf(t *testing.T, c *Conn, dn, attr string) []string {
 func TestModifyReplaceValue(t *testing.T) {
 	c := dialAdmin(t)
 	ctx := context.Background()
-	dn := userDN(19990)
-	old := "user19990@example.org"
+	dn := userDN(1990)
+	old := "user01990@example.org"
 	err := c.Modify(ctx, dn, []Change{
 		{Op: "delete", Attr: "mail", Values: []string{old}},
-		{Op: "add", Attr: "mail", Values: []string{"new19990@example.org"}},
+		{Op: "add", Attr: "mail", Values: []string{"new01990@example.org"}},
 	})
 	if err != nil {
 		t.Fatalf("Modify() error = %v", err)
 	}
-	if diff := cmp.Diff([]string{"new19990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
+	if diff := cmp.Diff([]string{"new01990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
 		t.Errorf("mail after Modify (-want +got):\n%s", diff)
 	}
 
@@ -625,11 +626,11 @@ func TestModifyReplaceValue(t *testing.T) {
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute) {
 		t.Errorf("stale Modify() error = %v, want noSuchAttribute", err)
 	}
-	if diff := cmp.Diff([]string{"new19990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
+	if diff := cmp.Diff([]string{"new01990@example.org"}, valuesOf(t, c, dn, "mail")); diff != "" {
 		t.Errorf("mail after stale Modify (-want +got):\n%s", diff)
 	}
 
-	err = c.Modify(ctx, dn, []Change{{Op: "add", Attr: "mail", Values: []string{"new19990@example.org"}}})
+	err = c.Modify(ctx, dn, []Change{{Op: "add", Attr: "mail", Values: []string{"new01990@example.org"}}})
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultAttributeOrValueExists) {
 		t.Errorf("duplicate add error = %v, want attributeOrValueExists", err)
 	}
@@ -638,7 +639,7 @@ func TestModifyReplaceValue(t *testing.T) {
 func TestModifySingleValue(t *testing.T) {
 	c := dialAdmin(t)
 	ctx := context.Background()
-	dn := userDN(19991)
+	dn := userDN(1991)
 	if err := c.Modify(ctx, dn, []Change{{Op: "add", Attr: "displayName", Values: []string{"A"}}}); err != nil {
 		t.Fatalf("add displayName error = %v", err)
 	}
@@ -651,13 +652,6 @@ func TestModifySingleValue(t *testing.T) {
 	err := c.Modify(ctx, dn, []Change{{Op: "add", Attr: "displayName", Values: []string{"C"}}})
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultConstraintViolation) {
 		t.Errorf("second displayName error = %v, want constraintViolation", err)
-	}
-}
-
-func TestModifyUnknownOp(t *testing.T) {
-	err := dialAdmin(t).Modify(context.Background(), userDN(19992), []Change{{Op: "increment", Attr: "mail", Values: []string{"x"}}})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Errorf("Modify(increment) error = %v, want ErrInvalidRequest", err)
 	}
 }
 

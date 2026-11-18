@@ -10,4 +10,16 @@ export default defineConfig(
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
   { files: ['**/*.{ts,tsx}'], languageOptions: { globals: globals.browser } },
+  {
+    files: ['e2e/**/*.spec.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          name: '@playwright/test',
+          message: "Import from './test', whose fixture fails a test on page errors.",
+        },
+      ],
+    },
+  },
 )

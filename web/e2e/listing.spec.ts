@@ -1,6 +1,6 @@
-import { expect, test, type Page, type Route } from '@playwright/test'
 import { BASE } from './fixture'
 import { connect, exact, openEntry } from './helpers'
+import { expect, test, type Page, type Route } from './test'
 
 const count = (page: Page) => page.getByText(/^\d+ entr(y|ies)\b/)
 const search = (filter: string, scope: string, base = '') =>

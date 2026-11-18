@@ -122,14 +122,6 @@ func (m *Manager[C]) Rotate(id string) string {
 	return newID
 }
 
-// Exists reports whether id names a live session.
-func (m *Manager[C]) Exists(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.sessions[id]
-	return ok
-}
-
 // Put stores c under name in session id, closing any connection it
 // replaces; c's maximum age starts now. It returns ErrTooManyConns, leaving
 // c open, when name is new and the session already holds MaxConns

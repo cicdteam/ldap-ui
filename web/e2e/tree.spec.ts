@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { BASE, e2eDN } from './fixture'
-import { connect, exact, openEntry } from './helpers'
+import { connect, exact, openEntry, results } from './helpers'
+import { expect, test, type Page } from './test'
 
 const AD_BASE = 'DC=corp,DC=example,DC=test'
 const rows = (page: Page) => page.getByRole('treeitem')
@@ -68,13 +68,13 @@ test('collapsing a parent of the selected entry marks the parent, the card stays
   const e2e = row(page, 'ou=e2e')
   await expect(row(page, 'uid=jdoe')).toHaveAttribute('aria-selected', 'true')
   // The chevron only toggles.
-  await e2e.locator('span').first().click()
+  await e2e.getByTitle('Collapse', { exact: true }).click()
   await expect(e2e).toHaveAttribute('aria-expanded', 'false')
   await expect(e2e).toHaveAttribute('aria-selected', 'true')
   const id = await e2e.getAttribute('id')
   await expect(page.getByRole('tree')).toHaveAttribute('aria-activedescendant', id!)
   await expect(page).toHaveURL(new RegExp(`dn=${encodeURIComponent(e2eDN('jdoe'))}`))
-  await e2e.locator('span').first().click()
+  await e2e.getByTitle('Expand', { exact: true }).click()
   await expect(row(page, 'uid=jdoe')).toHaveAttribute('aria-selected', 'true')
   await expect(e2e).toHaveAttribute('aria-selected', 'false')
 })
@@ -102,7 +102,7 @@ test('a container row lists its children from its List children icon', async ({ 
   await expect(icon).toBeHidden()
   // Shift+Enter does what the icon does.
   await page.keyboard.press('Shift+Enter')
-  await expect(page.getByRole('grid', exact('Search results'))).toContainText('E2E layout')
+  await expect(results(page)).toContainText('E2E layout')
   expect(new URL(page.url()).searchParams.get('base')).toBe(`ou=e2e,${BASE}`)
   // Leaves have none.
   await openEntry(page, 'demo', e2eDN('jdoe'))

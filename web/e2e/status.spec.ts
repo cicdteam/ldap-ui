@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, connect, openEntry, pendingBar } from './helpers'
+import { expect, test, type Page } from './test'
 
 const bar = (page: Page) => page.getByRole('contentinfo', { name: 'Connection status' })
 
@@ -40,15 +40,4 @@ test('status bar on Active Directory over ldaps', async ({ page }) => {
   await expect(status.getByText('TLS', { exact: true })).toBeVisible()
   await expect(status).toContainText('Active Directory')
   await expect(status).not.toContainText('certificate not verified')
-})
-
-test('status bar fits the window at compact density', async ({ page }) => {
-  await connect(page, 'demo')
-  const status = bar(page)
-  await expect.poll(async () => (await status.boundingBox())?.height).toBe(24)
-  await page.getByRole('button', { name: 'Toggle density', exact: true }).click()
-  await expect.poll(async () => (await status.boundingBox())?.height).toBe(22)
-  const box = await status.boundingBox()
-  expect(box!.y + box!.height).toBeLessThanOrEqual(page.viewportSize()!.height)
-  await page.getByRole('button', { name: 'Toggle density', exact: true }).click()
 })

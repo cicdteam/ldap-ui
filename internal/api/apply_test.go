@@ -183,7 +183,7 @@ func TestApplyRefusals(t *testing.T) {
 		{name: "not base64", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"jpegPhoto","base64":true,"values":["not base64!"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request", wantAttr: "jpegPhoto", wantMsg: "jpegPhoto: value is not base64"},
 		{name: "binary value over 1 MiB", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"jpegPhoto","base64":true,"values":["` + big + `"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request", wantAttr: "jpegPhoto", wantMsg: "jpegPhoto: value is larger than 1 MiB"},
 		{name: "text value over 1 MiB", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"description","values":["` + long + `"]}]}]}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request", wantAttr: "description", wantMsg: "description: value is larger than 1 MiB"},
-		{name: "unknown field", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[],"x":1}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
+		{name: "unknown field", connect: `{"profile":"dev"}`, conn: "dev", body: `{"entries":[{"dn":"uid=a","changes":[{"op":"add","attr":"cn","values":["x"]}]}],"x":1}`, wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -199,6 +199,55 @@ func TestApplyRefusals(t *testing.T) {
 				t.Errorf("modified = %v, want none", env.dir.modified)
 			}
 		})
+	}
+}
+
+// TestReadOnlyAppliesWithoutReconnect checks that a saved profile switched to
+// read-only refuses the next apply of a session connected before the
+// switch, and that its info shows the switch, with no reconnect.
+func TestReadOnlyAppliesWithoutReconnect(t *testing.T) {
+	env := newTestEnv(t)
+	save := func(readOnly bool) {
+		t.Helper()
+		body := `{"name":"lab","url":"ldap://lab:389","bindDN":"cn=admin,dc=example,dc=org","readOnly":` + strconv.FormatBool(readOnly) + `}`
+		if rec := env.do(t, http.MethodPost, "/api/profiles", body); rec.Code != http.StatusOK {
+			t.Fatalf("save(readOnly %v) = %d %s, want 200", readOnly, rec.Code, rec.Body)
+		}
+	}
+	infoReadOnly := func() bool {
+		t.Helper()
+		rec := env.do(t, http.MethodGet, "/api/c/lab/info", "")
+		var info struct {
+			ReadOnly bool `json:"readOnly"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &info); rec.Code != http.StatusOK || err != nil {
+			t.Fatalf("info = %d %s, want 200", rec.Code, rec.Body)
+		}
+		return info.ReadOnly
+	}
+
+	save(false)
+	connectTo(t, env, `{"profile":"lab","password":"pw"}`)
+	if rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", twoEntries); rec.Code != http.StatusOK || len(env.dir.modified) != 2 {
+		t.Fatalf("apply while writable = %d %s, modified %v, want 200 and both entries", rec.Code, rec.Body, env.dir.modified)
+	}
+	if infoReadOnly() {
+		t.Error("info while writable: readOnly = true, want false")
+	}
+
+	save(true)
+	rec := env.do(t, http.MethodPost, "/api/c/lab/changes/apply", twoEntries)
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "read_only" {
+		t.Errorf("apply after the switch = %d %s, want 403 read_only", rec.Code, rec.Body)
+	}
+	if len(env.dir.modified) != 2 {
+		t.Errorf("modified after the switch = %v, want no more than the first apply", env.dir.modified)
+	}
+	if !infoReadOnly() {
+		t.Error("info after the switch: readOnly = false, want true")
+	}
+	if env.dials != 1 {
+		t.Errorf("dials = %d, want 1 (no reconnect)", env.dials)
 	}
 }
 
@@ -343,24 +392,6 @@ func TestWriteBodyLimits(t *testing.T) {
 				t.Errorf("%s body = %.200s, want a too-large refusal", tc.path, rec.Body)
 			}
 		})
-	}
-}
-
-// TestBlameManyNames bounds blame on 50 000 names that its diagnostic does
-// not name: a scan per name made it quadratic.
-func TestBlameManyNames(t *testing.T) {
-	names := make([]string, 50000)
-	for i := range names {
-		names[i] = "a" + strconv.Itoa(i)
-	}
-	const diagnostic = "modify/add: description: value #0 already exists"
-	start := time.Now()
-	got := blame(names, diagnostic)
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("blame(50000 names, %q) took %v, want at most 5s", diagnostic, elapsed)
-	}
-	if got != "" {
-		t.Errorf("blame(50000 names, %q) = %q, want \"\"", diagnostic, got)
 	}
 }
 

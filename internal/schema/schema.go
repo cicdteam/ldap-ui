@@ -21,11 +21,8 @@ const (
 	Abstract   Kind = "ABSTRACT"
 )
 
-// Well-known syntax OIDs.
-const (
-	SyntaxDN              = "1.3.6.1.4.1.1466.115.121.1.12"
-	SyntaxGeneralizedTime = "1.3.6.1.4.1.1466.115.121.1.24"
-)
+// SyntaxGeneralizedTime is the syntax OID of timestamps.
+const SyntaxGeneralizedTime = "1.3.6.1.4.1.1466.115.121.1.24"
 
 // binarySyntaxes are syntaxes whose values are not text: audio, binary,
 // certificate, certificate list, certificate pair, JPEG, octet string.
@@ -74,7 +71,8 @@ type ContentRule struct {
 	Not   []string `json:"not,omitempty"`
 }
 
-// Schema is a parsed subschema, indexed by lower-cased name and OID.
+// Schema is a parsed subschema; attribute types are indexed by lower-cased
+// name and OID.
 type Schema struct {
 	AttributeTypes []*AttributeType `json:"attributeTypes"`
 	ObjectClasses  []*ObjectClass   `json:"objectClasses"`
@@ -82,9 +80,7 @@ type Schema struct {
 	// Skipped lists definitions that could not be parsed, so the UI can warn.
 	Skipped []string `json:"skipped,omitempty"`
 
-	attrs   map[string]*AttributeType
-	classes map[string]*ObjectClass
-	rules   map[string]*ContentRule
+	attrs map[string]*AttributeType
 }
 
 // Parse builds a Schema from the raw attributeTypes, objectClasses and
@@ -92,7 +88,7 @@ type Schema struct {
 // recorded in Skipped rather than failing the whole schema, because real
 // servers ship odd extensions.
 func Parse(attributeTypes, objectClasses, dITContentRules []string) *Schema {
-	s := &Schema{attrs: map[string]*AttributeType{}, classes: map[string]*ObjectClass{}, rules: map[string]*ContentRule{}}
+	s := &Schema{attrs: map[string]*AttributeType{}}
 	for _, d := range attributeTypes {
 		at, err := parseAttributeType(d)
 		if err != nil {
@@ -112,10 +108,6 @@ func Parse(attributeTypes, objectClasses, dITContentRules []string) *Schema {
 			continue
 		}
 		s.ObjectClasses = append(s.ObjectClasses, oc)
-		s.classes[strings.ToLower(oc.OID)] = oc
-		for _, n := range oc.Names {
-			s.classes[strings.ToLower(n)] = oc
-		}
 	}
 	for _, d := range dITContentRules {
 		cr, err := parseContentRule(d)
@@ -124,10 +116,6 @@ func Parse(attributeTypes, objectClasses, dITContentRules []string) *Schema {
 			continue
 		}
 		s.ContentRules = append(s.ContentRules, cr)
-		s.rules[strings.ToLower(cr.OID)] = cr
-		for _, n := range cr.Names {
-			s.rules[strings.ToLower(n)] = cr
-		}
 	}
 	return s
 }
@@ -137,12 +125,6 @@ func Parse(attributeTypes, objectClasses, dITContentRules []string) *Schema {
 func (s *Schema) AttributeType(name string) (*AttributeType, bool) {
 	at, ok := s.attrs[strings.ToLower(baseName(name))]
 	return at, ok
-}
-
-// ObjectClass looks up an object class by name or OID, ignoring case.
-func (s *Schema) ObjectClass(name string) (*ObjectClass, bool) {
-	oc, ok := s.classes[strings.ToLower(name)]
-	return oc, ok
 }
 
 // Syntax returns the syntax OID of an attribute, following SUP when the type
@@ -165,74 +147,6 @@ func (s *Schema) Syntax(name string) string {
 // IsBinary reports whether values of the attribute are not text.
 func (s *Schema) IsBinary(name string) bool {
 	return strings.HasSuffix(strings.ToLower(name), ";binary") || binarySyntaxes[s.Syntax(name)]
-}
-
-// IsDN reports whether values of the attribute are DNs.
-func (s *Schema) IsDN(name string) bool {
-	return s.Syntax(name) == SyntaxDN
-}
-
-// Allowed returns the MUST and MAY attributes for an entry with the given
-// object classes, including those inherited through SUP. When a visited
-// class has a dITContentRule (Active Directory publishes them), the rule's
-// AUX classes and its own MUST and MAY count too, and attributes the rule
-// lists in NOT are dropped from may (NOT never removes a MUST). Names are
-// canonical (first NAME of the type) and an attribute required by any class
-// is never listed in may. Unknown classes are ignored.
-func (s *Schema) Allowed(objectClasses []string) (must, may []string) {
-	visited := map[string]bool{}
-	inMust, inMay, notMay := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	var mayAll []string
-	add := func(attrs []string, seen map[string]bool, out *[]string) {
-		for _, a := range attrs {
-			a = s.canonical(a)
-			if key := strings.ToLower(a); !seen[key] {
-				seen[key] = true
-				*out = append(*out, a)
-			}
-		}
-	}
-	var visit func(name string)
-	visit = func(name string) {
-		oc, ok := s.ObjectClass(name)
-		if !ok || visited[oc.OID] {
-			return
-		}
-		visited[oc.OID] = true
-		for _, sup := range oc.Sup {
-			visit(sup)
-		}
-		add(oc.Must, inMust, &must)
-		add(oc.May, inMay, &mayAll)
-		cr, ok := s.rules[strings.ToLower(oc.OID)]
-		if !ok {
-			return
-		}
-		for _, aux := range cr.Aux {
-			visit(aux)
-		}
-		add(cr.Must, inMust, &must)
-		add(cr.May, inMay, &mayAll)
-		for _, a := range cr.Not {
-			notMay[strings.ToLower(s.canonical(a))] = true
-		}
-	}
-	for _, name := range objectClasses {
-		visit(name)
-	}
-	for _, a := range mayAll {
-		if key := strings.ToLower(a); !inMust[key] && !notMay[key] {
-			may = append(may, a)
-		}
-	}
-	return must, may
-}
-
-func (s *Schema) canonical(name string) string {
-	if at, ok := s.AttributeType(name); ok && len(at.Names) > 0 {
-		return at.Names[0]
-	}
-	return name
 }
 
 // baseName strips attribute options: "member;range=0-1499" -> "member".

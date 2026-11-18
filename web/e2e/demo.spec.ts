@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { BASE } from './fixture'
 import { adBind, attrRow, openEntry, valueItems } from './helpers'
+import { expect, test } from './test'
 
 // The demo directory (deploy/demo-ldif/demo.ldif) is loaded before the e2e fixture.
 const user = (n: string) => `uid=user${n},ou=people,${BASE}`

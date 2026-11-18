@@ -40,6 +40,10 @@ describe('csvField', () => {
     ['x;+1+1', "x;'+1+1"],
     ['x;@SUM(1+1)', "x;'@SUM(1+1)"],
     ['ok; =1+1', "ok; '=1+1"],
+    // A leading tab or CR is a formula trigger of its own; a CR also makes the field quoted.
+    ['\tcmd', "'\tcmd"],
+    ['\rcmd', `"'\rcmd"`],
+    ['a\t=1+1', "a\t'=1+1"],
     ['a-b', 'a-b'],
     ['Doe, John', '"Doe, John"'],
     ['a\n- b', '"a\n- b"'],

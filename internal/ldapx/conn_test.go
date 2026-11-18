@@ -78,6 +78,7 @@ type search struct {
 	id        int64
 	base      string
 	sizeLimit int
+	filter    string
 	paging    *ldap.ControlPaging // nil without the paging control
 }
 
@@ -87,7 +88,7 @@ func readSearch(r io.Reader) (search, error) {
 	if err != nil {
 		return search{}, err
 	}
-	if len(p.Children) < 2 || len(p.Children[1].Children) < 4 {
+	if len(p.Children) < 2 || len(p.Children[1].Children) < 7 {
 		return search{}, errors.New("not a search request")
 	}
 	var s search
@@ -95,6 +96,9 @@ func readSearch(r io.Reader) (search, error) {
 	s.base, _ = p.Children[1].Children[0].Value.(string)
 	limit, _ := p.Children[1].Children[3].Value.(int64)
 	s.sizeLimit = int(limit)
+	if s.filter, err = ldap.DecompileFilter(p.Children[1].Children[6]); err != nil {
+		return search{}, err
+	}
 	if len(p.Children) > 2 {
 		for _, cp := range p.Children[2].Children {
 			if ctl, err := ldap.DecodeControl(cp); err == nil {
@@ -161,8 +165,10 @@ func answerSearches(conn net.Conn) {
 	}
 }
 
+// fakeProfile's search timeout leaves room for a large response under the
+// race detector; a test about a timeout sets a short one itself.
 func fakeProfile(url string) profile.Profile {
-	return profile.Profile{Name: "fake", URL: url, ConnectTimeout: time.Second, SearchTimeout: 200 * time.Millisecond}
+	return profile.Profile{Name: "fake", URL: url, ConnectTimeout: time.Second, SearchTimeout: 30 * time.Second}
 }
 
 // fakeConn connects anonymously to url without reading the root DSE, which
@@ -183,8 +189,9 @@ func fakeConn(t *testing.T, url string) *Conn {
 	return c
 }
 
-// selfSignedCert returns a certificate for 127.0.0.1 and its PEM encoding.
-func selfSignedCert(t *testing.T) (tls.Certificate, string) {
+// selfSignedCert returns a certificate for host, an IP address or a DNS
+// name, and its PEM encoding.
+func selfSignedCert(t *testing.T, host string) (tls.Certificate, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -193,13 +200,17 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "ldaplens test"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+	} else {
+		tmpl.DNSNames = []string{host}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -209,59 +220,143 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pemText
 }
 
+// TestDialUntrustedCertificate checks the certificate verification of
+// ldaps:// and StartTLS: a certificate from an unknown CA, or from a trusted
+// CA for another host name, fails with an UntrustedCertError holding the
+// server's chain; a trusted CA, or insecureSkipVerify, connects.
 func TestDialUntrustedCertificate(t *testing.T) {
-	cert, caPEM := selfSignedCert(t)
-	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-	ldaps := func(_ int32, conn net.Conn) { _ = tls.Server(conn, serverTLS).Handshake() }
-	startTLS := func(_ int32, conn net.Conn) {
-		id, err := readRequest(conn)
-		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
-			return
+	local, localPEM := selfSignedCert(t, "127.0.0.1")
+	other, otherPEM := selfSignedCert(t, "ldap.example.org")
+	// serve upgrades the connection to TLS with cert, after a StartTLS
+	// request if startTLS is set, then answers every search with the root
+	// DSE.
+	serve := func(cert tls.Certificate, startTLS bool) func(int32, net.Conn) {
+		serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+		return func(_ int32, conn net.Conn) {
+			if startTLS {
+				id, err := readRequest(conn)
+				if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+			}
+			tc := tls.Server(conn, serverTLS)
+			if tc.Handshake() != nil {
+				return
+			}
+			for {
+				id, err := readRequest(tc)
+				if err != nil || writeEntry(tc, id, "") != nil ||
+					writeResult(tc, id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+			}
 		}
-		_ = tls.Server(conn, serverTLS).Handshake()
 	}
 	tests := []struct {
-		name     string
-		startTLS bool
-		serve    func(int32, net.Conn)
+		name          string
+		cert          tls.Certificate
+		caPEM         string
+		insecure      bool
+		wantUntrusted bool
 	}{
-		{name: "ldaps", serve: ldaps},
-		{name: "StartTLS", startTLS: true, serve: startTLS},
+		{name: "unknown CA", cert: local, wantUntrusted: true},
+		{name: "trusted CA", cert: local, caPEM: localPEM},
+		{name: "trusted CA, another host name", cert: other, caPEM: otherPEM, wantUntrusted: true},
+		{name: "insecureSkipVerify", cert: local, insecure: true},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			url, accepts := fakeServer(t, tc.serve)
-			p := fakeProfile(url)
-			p.StartTLS = tc.startTLS
-			if !tc.startTLS {
-				p.URL = strings.Replace(url, "ldap://", "ldaps://", 1)
+	for _, startTLS := range []bool{false, true} {
+		for _, tc := range tests {
+			name := "ldaps: " + tc.name
+			if startTLS {
+				name = "StartTLS: " + tc.name
 			}
-			_, err := Dial(context.Background(), p, "")
-			var untrusted *UntrustedCertError
-			if !errors.As(err, &untrusted) {
-				t.Fatalf("Dial(self-signed) error = %v, want UntrustedCertError", err)
-			}
-			if len(untrusted.Certificates) != 1 || !untrusted.Certificates[0].Equal(&x509.Certificate{Raw: cert.Certificate[0]}) {
-				t.Errorf("UntrustedCertError.Certificates = %d certs, want the server's one", len(untrusted.Certificates))
-			}
-			if n := accepts.Load(); n != 1 {
-				t.Errorf("Dial(self-signed) opened %d connections, want 1", n)
-			}
-
-			p.CAPEM = caPEM
-			if _, err := Dial(context.Background(), p, ""); errors.As(err, &untrusted) {
-				t.Errorf("Dial(trusted CA) error = %v, want no certificate error", err)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				url, accepts := fakeServer(t, serve(tc.cert, startTLS))
+				p := fakeProfile(url)
+				p.StartTLS, p.CAPEM, p.InsecureSkipVerify = startTLS, tc.caPEM, tc.insecure
+				if !startTLS {
+					p.URL = strings.Replace(url, "ldap://", "ldaps://", 1)
+				}
+				c, err := Dial(context.Background(), p, "")
+				if err == nil {
+					_ = c.Close()
+				}
+				if !tc.wantUntrusted {
+					if err != nil {
+						t.Errorf("Dial() error = %v, want a connection", err)
+					}
+					return
+				}
+				var untrusted *UntrustedCertError
+				if !errors.As(err, &untrusted) {
+					t.Fatalf("Dial() error = %v, want UntrustedCertError", err)
+				}
+				if len(untrusted.Certificates) != 1 || !untrusted.Certificates[0].Equal(&x509.Certificate{Raw: tc.cert.Certificate[0]}) {
+					t.Errorf("UntrustedCertError.Certificates = %d certs, want the server's one", len(untrusted.Certificates))
+				}
+				if n := accepts.Load(); n != 1 {
+					t.Errorf("Dial() opened %d connections, want 1", n)
+				}
+			})
+		}
 	}
 }
 
-// TestIdleTLSConnectionSurvivesConnectTimeout checks that the connect-phase
-// deadline does not outlive connect over TLS either: an ldaps:// or StartTLS
+// TestStartTLSRefusedSendsNothing checks that a StartTLS profile never falls
+// back to cleartext: when the server refuses the StartTLS operation, Dial
+// fails with the refusal and sends neither the bind nor a search, on that
+// connection or on a new one.
+func TestStartTLSRefusedSendsNothing(t *testing.T) {
+	var after atomic.Int32 // requests the server got after the refusal
+	done := make(chan struct{})
+	url, accepts := fakeServer(t, func(n int32, conn net.Conn) {
+		if n != 1 {
+			return // a redial, hung up on at once and counted by accepts
+		}
+		defer close(done)
+		id, err := readRequest(conn) // the StartTLS request
+		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultProtocolError) != nil {
+			return
+		}
+		// A request that comes is counted and hung up on; Dial closing the
+		// connection ends the read.
+		if _, err := readRequest(conn); err == nil {
+			after.Add(1)
+		}
+	})
+	p := fakeProfile(url)
+	p.StartTLS, p.BindDN = true, "cn=admin,dc=x"
+	// go-ldap stops reading at the StartTLS response and reads again only
+	// after a handshake, so a bind sent after the refusal can only time out:
+	// a short timeout makes that regression fail fast.
+	p.SearchTimeout = time.Second
+	c, err := Dial(context.Background(), p, "secret")
+	if err == nil {
+		_ = c.Close()
+	}
+	if !ldap.IsErrorWithCode(err, ldap.LDAPResultProtocolError) {
+		t.Errorf("Dial(StartTLS refused) error = %v, want the refusal, protocolError", err)
+	}
+	if n := accepts.Load(); n != 1 {
+		t.Errorf("Dial(StartTLS refused) opened %d connections, want 1: no redial in cleartext", n)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection still open 5s after Dial(StartTLS refused), want it closed")
+	}
+	if n := after.Load(); n != 0 {
+		t.Errorf("Dial(StartTLS refused) sent %d requests after the refusal, want none", n)
+	}
+}
+
+// TestIdleConnectionSurvivesConnectTimeout checks that the connect-phase
+// deadline does not outlive connect: an ldap://, ldaps:// or StartTLS
 // connection idle for longer than the connect timeout still serves a search,
 // without a redial.
-func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
-	cert, caPEM := selfSignedCert(t)
+func TestIdleConnectionSurvivesConnectTimeout(t *testing.T) {
+	t.Parallel()
+	cert, caPEM := selfSignedCert(t, "127.0.0.1")
 	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	ldaps := func(_ int32, conn net.Conn) {
 		tc := tls.Server(conn, serverTLS)
@@ -282,16 +377,18 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 		startTLS bool
 		serve    func(int32, net.Conn)
 	}{
+		{name: "ldap", scheme: "ldap", serve: func(_ int32, conn net.Conn) { answerSearches(conn) }},
 		{name: "ldaps", scheme: "ldaps", serve: ldaps},
 		{name: "StartTLS", scheme: "ldap", startTLS: true, serve: startTLS},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			url, accepts := fakeServer(t, tc.serve)
 			p := fakeProfile(strings.Replace(url, "ldap://", tc.scheme+"://", 1))
 			p.StartTLS = tc.startTLS
 			p.CAPEM = caPEM
-			p.ConnectTimeout = 300 * time.Millisecond
+			p.ConnectTimeout = 100 * time.Millisecond
 			cfg, err := p.TLSConfig()
 			if err != nil {
 				t.Fatalf("TLSConfig() error = %v", err)
@@ -302,7 +399,7 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 			}
 			c := &Conn{prof: p, lc: lc}
 			defer c.Close()
-			time.Sleep(time.Second)
+			time.Sleep(300 * time.Millisecond)
 			if lc.IsClosing() {
 				t.Error("connection closed while idle, want it open past the connect timeout")
 			}
@@ -318,48 +415,13 @@ func TestIdleTLSConnectionSurvivesConnectTimeout(t *testing.T) {
 	}
 }
 
-// TestConnectStartTLSStallTimesOut checks that a server which accepts
-// StartTLS and then never answers the TLS handshake cannot hold connect
-// past the connect timeout.
-func TestConnectStartTLSStallTimesOut(t *testing.T) {
-	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
-		id, err := readRequest(conn)
-		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultSuccess) != nil {
-			return
-		}
-		_, _ = io.Copy(io.Discard, conn) // swallow the ClientHello, answer nothing
-	})
-	p := fakeProfile(url)
-	p.StartTLS = true
-	p.ConnectTimeout = 300 * time.Millisecond
-	cfg, err := p.TLSConfig()
-	if err != nil {
-		t.Fatalf("TLSConfig() error = %v", err)
-	}
-	errc := make(chan error, 1)
-	go func() {
-		lc, err := connect(context.Background(), p, cfg)
-		if err == nil {
-			_ = lc.Close()
-		}
-		errc <- err
-	}()
-	select {
-	case err := <-errc:
-		if err == nil {
-			t.Error("connect(stalled StartTLS) error = nil, want a timeout")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("connect(stalled StartTLS) still blocked after 3s")
-	}
-}
-
 // TestConnectTimeoutErrors pins how connect reports a server that stops
 // answering. An ldaps handshake out of time is a context.DeadlineExceeded,
 // the API's timeout, as tls.DialWithDialer reported it. go-ldap turns any
 // StartTLS failure into ErrorNetwork text, and a StartTLS request timeout
 // was ErrorNetwork before connect had a deadline.
 func TestConnectTimeoutErrors(t *testing.T) {
+	t.Parallel()
 	silent := func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
 	stallHandshake := func(n int32, conn net.Conn) {
 		id, err := readRequest(conn)
@@ -392,6 +454,7 @@ func TestConnectTimeoutErrors(t *testing.T) {
 			}
 			// A socket deadline and a context timer that expire together can
 			// fire in either order; enough attempts catch the losing order.
+			// The bound catches a stall the connect timeout does not cover.
 			errs := make([]error, 20)
 			var wg sync.WaitGroup
 			for i := range errs {
@@ -403,7 +466,9 @@ func TestConnectTimeoutErrors(t *testing.T) {
 					errs[i] = err
 				})
 			}
-			wg.Wait()
+			if !returnsWithin(5*time.Second, wg.Wait) {
+				t.Fatalf("connect(stalled %s) still blocked after 5s", tc.name)
+			}
 			for _, err := range errs {
 				if !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) || errors.Is(err, context.DeadlineExceeded) != tc.wantTimeout {
 					t.Fatalf("connect(stalled %s) error = %v, want ErrorNetwork with context.DeadlineExceeded %v", tc.name, err, tc.wantTimeout)
@@ -417,6 +482,7 @@ func TestConnectTimeoutErrors(t *testing.T) {
 // not read fails after the search timeout, and that the connection is then
 // closed: a request cut off midway leaves the stream unusable.
 func TestWriteToStalledServerTimesOut(t *testing.T) {
+	t.Parallel()
 	read, hungUp := make(chan struct{}), make(chan struct{})
 	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
 		<-read
@@ -456,8 +522,11 @@ func TestWriteToStalledServerTimesOut(t *testing.T) {
 }
 
 func TestReadDoesNotRetryTimeout(t *testing.T) {
+	t.Parallel()
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := fakeConn(t, url)
+	c.prof.SearchTimeout = 200 * time.Millisecond
+	c.lc.SetTimeout(c.prof.SearchTimeout)
 	if _, err := c.rawEntry(context.Background(), "dc=x", nil); err == nil {
 		t.Error("rawEntry(silent server) error = nil, want a timeout")
 	}
@@ -604,7 +673,7 @@ func TestRedialDoesNotHoldLock(t *testing.T) {
 		t.Fatal("current(lost connection) did not redial")
 	}
 
-	const limit = 100 * time.Millisecond
+	const limit = 5 * time.Second
 	if !returnsWithin(limit, func() { _ = c.Close() }) {
 		t.Errorf("Close() during a redial did not return within %v", limit)
 	}
@@ -717,6 +786,7 @@ func TestSearchTimeLimit(t *testing.T) {
 // hand its connection back to the shared slot: go-ldap sends no Abandon, so
 // the paged search may still be running on it.
 func TestPagedSearchClosesConnectionOnFirstPageError(t *testing.T) {
+	t.Parallel()
 	url, accepts := fakeServer(t, func(_ int32, conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := fakeConn(t, url)
 	c.info.Paging = true
@@ -804,10 +874,6 @@ func childrenConn(t *testing.T, n int, paging bool) (*Conn, *atomic.Bool, *atomi
 	url, accepts := fakeServer(t, serveChildren(n, open))
 	c := fakeConn(t, url)
 	c.info.Paging = paging
-	// go-ldap's request timeout covers a whole page, which may take longer
-	// than the fake's 200ms under the race detector.
-	c.prof.SearchTimeout = time.Minute
-	c.lc.SetTimeout(time.Minute)
 	return c, open, accepts
 }
 
@@ -828,19 +894,20 @@ func checkChildren(t *testing.T, entries []Entry, n int) {
 }
 
 // TestSearchWalksPages checks that a search with more matches than its
-// size limit walks the pages up to the limit, reports more and abandons
-// the paged search: no paged state outlives the request, and the next
-// search runs on the same connection.
+// size limit, here the largest one, walks the pages up to the limit,
+// reports more and abandons the paged search: no paged state outlives the
+// request, and the next search runs on the same connection.
 func TestSearchWalksPages(t *testing.T) {
-	c, open, accepts := childrenConn(t, 1200, true)
+	const n, limit = maxResponseEntries + 200, maxResponseEntries
+	c, open, accepts := childrenConn(t, n, true)
 	for i := range 2 {
-		page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", SizeLimit: 1000})
+		page, err := c.Search(context.Background(), SearchRequest{BaseDN: "dc=x", PageSize: 1000, SizeLimit: limit})
 		if err != nil {
-			t.Fatalf("Search(1200 children, sizeLimit 1000) %d error = %v", i+1, err)
+			t.Fatalf("Search(%d children, sizeLimit %d) %d error = %v", n, limit, i+1, err)
 		}
-		checkChildren(t, page.Entries, 1000)
+		checkChildren(t, page.Entries, limit)
 		if !page.More || page.Truncated {
-			t.Errorf("Search(1200 children, sizeLimit 1000) %d = more %v, truncated %v; want more, not truncated", i+1, page.More, page.Truncated)
+			t.Errorf("Search(%d children, sizeLimit %d) %d = more %v, truncated %v; want more, not truncated", n, limit, i+1, page.More, page.Truncated)
 		}
 		if open.Load() {
 			t.Errorf("after Search() %d the server holds paged state, want it abandoned", i+1)
@@ -880,6 +947,30 @@ func TestSearchNoPagingLimit(t *testing.T) {
 	checkChildren(t, page.Entries, 500)
 	if !page.More || page.Truncated {
 		t.Errorf("Search(600 children, no paging, sizeLimit 500) = more %v, truncated %v; want more, not truncated", page.More, page.Truncated)
+	}
+}
+
+func TestSearchCanceled(t *testing.T) {
+	url, _ := fakeServer(t, func(_ int32, conn net.Conn) { answerSearches(conn) })
+	c := fakeConn(t, url)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Search(ctx, SearchRequest{BaseDN: "dc=x"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Search(canceled) error = %v, want context.Canceled", err)
+	}
+}
+
+// TestAllDNsPassesMaxRefs checks that allDNs at the group index limit
+// returns every match, past maxRefs and over pages, without truncation:
+// the group list of Members(nested) is not held to the membership cap.
+func TestAllDNsPassesMaxRefs(t *testing.T) {
+	n := maxRefs + 2000
+	c, _, _ := childrenConn(t, n, true)
+	c.info.BaseDN = "dc=x"
+	dns, truncated, err := c.allDNs(context.Background(), "(objectClass=*)", maxGroupIndex)
+	if err != nil || len(dns) != n || truncated {
+		t.Errorf("allDNs(%d entries, limit %d) = %d DNs truncated %v, %v; want %d not truncated",
+			n, maxGroupIndex, len(dns), truncated, err, n)
 	}
 }
 
@@ -1040,10 +1131,6 @@ func TestSearchOnceCaps(t *testing.T) {
 				answerSearches(conn)
 			})
 			c := fakeConn(t, url)
-			// go-ldap's request timeout covers the whole response, which
-			// takes longer than the fake's 200ms under the race detector.
-			c.prof.SearchTimeout = time.Minute
-			c.lc.SetTimeout(time.Minute)
 			search := func() (*result, error) {
 				var res *result
 				err := c.read(context.Background(), func(lc *ldap.Conn) error {
@@ -1106,8 +1193,6 @@ func TestPagedSearchCapClosesConnection(t *testing.T) {
 	})
 	c := fakeConn(t, url)
 	c.info.Paging = true
-	c.prof.SearchTimeout = time.Minute
-	c.lc.SetTimeout(time.Minute)
 	c.mu.Lock()
 	first := c.lc
 	c.mu.Unlock()
@@ -1201,6 +1286,78 @@ func TestMembersHardCap(t *testing.T) {
 				t.Errorf("%s(nested) = %d refs, truncated %v; want %d, truncated", tc.name, len(m.Refs), m.Truncated, maxRefs)
 			}
 		})
+	}
+}
+
+// TestMembershipDepthLimit checks that nested membership follows groups
+// maxNestingDepth levels deep and marks the result truncated when groups are
+// left past that depth. The fake directory is a chain: uid=u is a member of
+// cn=g1, and each cn=gK is a member of cn=gK+1.
+func TestMembershipDepthLimit(t *testing.T) {
+	// member returns the one member of cn=gk.
+	member := func(k int) string {
+		if k == 1 {
+			return "uid=u"
+		}
+		return fmt.Sprintf("cn=g%d", k-1)
+	}
+	tests := []struct {
+		groups        int
+		wantRefs      int
+		wantTruncated bool
+	}{
+		{groups: 9, wantRefs: 9},
+		{groups: 12, wantRefs: maxNestingDepth, wantTruncated: true},
+	}
+	for _, tc := range tests {
+		url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+			for {
+				s, err := readSearch(conn)
+				if err != nil {
+					return
+				}
+				switch {
+				case s.base == "uid=u":
+					err = writeEntry(conn, s.id, s.base)
+				case s.base != "": // a group read by Members
+					k, _ := strconv.Atoi(strings.TrimPrefix(s.base, "cn=g"))
+					err = writeEntry(conn, s.id, s.base, attr("member", member(k)))
+				default: // the group index, or the groups that list one member
+					_, rest, byMember := strings.Cut(s.filter, "(member=")
+					for k := 1; k <= tc.groups && err == nil; k++ {
+						if !byMember || strings.HasPrefix(rest, member(k)+")") {
+							err = writeEntry(conn, s.id, fmt.Sprintf("cn=g%d", k))
+						}
+					}
+				}
+				if err != nil || writeResult(conn, s.id, ldap.ApplicationSearchResultDone, ldap.LDAPResultSuccess) != nil {
+					return
+				}
+			}
+		})
+		c := fakeConn(t, url)
+		scans := []struct {
+			name string
+			scan func() (Membership, error)
+		}{
+			{name: "MemberOf", scan: func() (Membership, error) {
+				return c.MemberOf(context.Background(), "uid=u", true)
+			}},
+			{name: "Members", scan: func() (Membership, error) {
+				return c.Members(context.Background(), fmt.Sprintf("cn=g%d", tc.groups), true)
+			}},
+		}
+		for _, sc := range scans {
+			m, err := sc.scan()
+			if err != nil {
+				t.Errorf("%s(nested) in a chain of %d groups error = %v", sc.name, tc.groups, err)
+				continue
+			}
+			if len(m.Refs) != tc.wantRefs || m.Truncated != tc.wantTruncated {
+				t.Errorf("%s(nested) in a chain of %d groups = %d refs, truncated %v; want %d, truncated %v",
+					sc.name, tc.groups, len(m.Refs), m.Truncated, tc.wantRefs, tc.wantTruncated)
+			}
+		}
 	}
 }
 

@@ -1,16 +1,10 @@
-import { expect, test, type Page } from '@playwright/test'
 import { e2eDN } from './fixture'
-import { attrRow, blur, openEntry } from './helpers'
+import { attrRow, openEntry, review } from './helpers'
+import { expect, test } from './test'
 
 const editButton = { name: 'Edit', exact: true }
 const applyButton = { name: 'Apply to demo', exact: true }
 const posixMust = ['uidNumber', 'gidNumber', 'homeDirectory']
-
-/** Mod+S with nothing focused (see blur). */
-async function review(page: Page) {
-  await blur(page)
-  await page.keyboard.press('ControlOrMeta+S')
-}
 
 test('add an auxiliary class with its MUST attributes, then remove it with them', async ({
   page,
@@ -29,8 +23,7 @@ test('add an auxiliary class with its MUST attributes, then remove it with them'
     await expect(offered(a)).toHaveCount(0)
   }
 
-  const dialog = page.getByRole('dialog', { name: 'Review changes' })
-  await review(page)
+  let dialog = await review(page)
   await expect(dialog.getByRole('button', applyButton)).toBeDisabled()
   await page.keyboard.press('Escape')
 
@@ -47,7 +40,7 @@ test('add an auxiliary class with its MUST attributes, then remove it with them'
     await input.press('Enter')
     await expect(attrRow(page, a).getByRole('alert')).toHaveCount(0)
   }
-  await review(page)
+  dialog = await review(page)
   await expect(dialog).toContainText('objectClass: posixAccount')
   await dialog.getByRole('button', applyButton).click()
   await expect(dialog).toBeHidden()
@@ -66,7 +59,7 @@ test('add an auxiliary class with its MUST attributes, then remove it with them'
     await attrRow(page, a)
       .getByRole('button', { name: `Delete ${a} value`, exact: true })
       .click()
-  await review(page)
+  dialog = await review(page)
   await dialog.getByRole('button', applyButton).click()
   await expect(dialog).toBeHidden()
 

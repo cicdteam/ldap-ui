@@ -1,93 +1,67 @@
-import { expect, test, type Page } from '@playwright/test'
+import { connectDialog, profileButton } from './helpers'
+import { expect, test } from './test'
 
-// The e2e server runs in local mode: these specs stub what the UI reads to
-// tell the modes apart and the profile list, and answer the connect with an
-// untrusted certificate, so they reach no directory.
-
-/** A tls_untrusted connect in local mode: one self-signed certificate. */
-const untrusted = {
-  code: 'tls_untrusted',
-  message: 'the server certificate is not trusted',
-  certificates: [
-    {
-      subject: 'CN=ldap.example.test',
-      issuer: 'CN=ldap.example.test',
-      notAfter: '2030-01-01T00:00:00Z',
-      sha256: 'ab'.repeat(32),
-      pem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
-    },
-  ],
-}
-
-/** The same in server mode, which shows nothing about the directory before sign-in. */
-const untrustedServer = {
-  code: 'tls_untrusted',
-  message: "the directory server's certificate is not trusted",
-}
-
-async function stub(page: Page, mode: 'local' | 'server', profiles: object[]) {
-  await page.route('**/api/server', (r) => r.fulfill({ json: { mode } }))
-  await page.route('**/api/profiles', (r) => r.fulfill({ json: profiles }))
-  await page.route('**/api/connect', (r) =>
-    r.fulfill({ status: 502, json: mode === 'server' ? untrustedServer : untrusted }),
-  )
-  const loaded = page.waitForResponse('**/api/server')
-  await page.goto('./')
-  await loaded
-}
-
-const row = (page: Page, name: string) =>
-  page.getByRole('button', { name: new RegExp(`^${name}(?![\\w-])`) })
+// The server-mode instance (playwright.config.ts): root path, no token, the profiles in
+// deploy/e2e/connections.server.yaml. Its failed sign-in limits are its own, so the wrong
+// password here locks nobody out of the local instance.
+test.use({ baseURL: 'http://127.0.0.1:18092/', extraHTTPHeaders: {} })
 
 test('server mode shows no saving and no trust', async ({ page }) => {
-  // What server mode sends: no URL, bind DN, TLS settings or editable flag.
-  await stub(page, 'server', [
-    { name: 'team', readOnly: false, connected: false, userLogin: true, needsPassword: true },
-    { name: 'fixed', readOnly: true, connected: false, userLogin: false, needsPassword: true },
-  ])
-  await expect(row(page, 'team')).toBeVisible()
+  // The checks for absent controls below mean something only once the UI knows its mode.
+  const mode = page.waitForResponse('**/api/server')
+  await page.goto('./')
+  expect((await mode).ok()).toBe(true)
+  await expect(profileButton(page, 'people')).toBeVisible()
+  // Nothing about where a profile binds before a sign-in.
+  await expect(page.getByText('127.0.0.1')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'New connection' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(0)
   await expect(page.getByText('yaml', { exact: true })).toHaveCount(0)
 
-  // A bind DN the UI is not told: the field is just "Password", and password
-  // managers key it by the profile name.
-  await row(page, 'fixed').click()
-  let dialog = page.getByRole('dialog')
+  // A bind DN the UI is not told: the field is just "Password", and password managers key it by
+  // the profile name.
+  let dialog = await connectDialog(page, 'fixed')
   await expect(dialog.getByLabel('Password', { exact: true })).toBeVisible()
   await expect(dialog.getByLabel('Username')).toHaveCount(0)
   await expect(dialog.locator('input[autocomplete=username]')).toHaveValue('fixed')
-  await dialog.getByRole('button', { name: 'Cancel' }).click()
 
-  await row(page, 'team').click()
-  dialog = page.getByRole('dialog')
+  // An untrusted certificate: the generic message, no chain and no trust.
+  dialog = await connectDialog(page, 'ad-untrusted')
   await dialog.getByLabel('Username').fill('user001')
-  const password = dialog.getByLabel('Password', { exact: true })
-  await password.fill('secret001')
-  await password.press('Enter')
-  await expect(dialog.getByRole('alert')).toContainText(untrustedServer.message)
+  await dialog.getByLabel('Password', { exact: true }).fill('Demo-Passw0rd!')
+  await dialog.getByLabel('Password', { exact: true }).press('Enter')
+  await expect(dialog.getByRole('alert')).toHaveText(
+    "the directory server's certificate is not trusted",
+  )
   await expect(dialog.getByText('Server certificate', { exact: true })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: 'Trust this CA and connect' })).toHaveCount(0)
-})
 
-test('local mode offers saving and trust', async ({ page }) => {
-  await stub(page, 'local', [
-    {
-      name: 'lab',
-      url: 'ldaps://lab.example.test',
-      startTLS: false,
-      insecureSkipVerify: false,
-      readOnly: false,
-      editable: true,
-      hasPassword: false,
-      connected: false,
-      userLogin: false,
-      needsPassword: false,
-    },
-  ])
-  await expect(page.getByRole('button', { name: 'New connection' })).toBeVisible()
-  await row(page, 'lab').click()
+  dialog = await connectDialog(page, 'people')
+  const username = dialog.getByLabel('Username')
+  const password = dialog.getByLabel('Password', { exact: true })
+  await expect(username).toHaveAttribute('autocomplete', 'username')
+  await expect(dialog.getByText('127.0.0.1')).toHaveCount(0)
+  await username.fill('a b')
+  await password.fill('secret001')
+  await password.press('Enter')
+  await expect(dialog.getByRole('alert')).toHaveText(
+    'A username has only letters, digits, ".", "_" and "-", starts with a letter or digit and is at most 64 characters long.',
+  )
+  // A wrong password says no more than that, whatever the directory said.
+  await username.fill('user001')
+  await password.fill('wrong')
+  await password.press('Enter')
+  await expect(dialog.getByRole('alert')).toHaveText('invalid username or password')
+
+  await password.fill('secret001')
+  await password.press('Enter')
+  await expect(page).toHaveURL('http://127.0.0.1:18092/c/people')
   await expect(
-    page.getByRole('dialog').getByRole('button', { name: 'Trust this CA and connect' }),
+    page.locator('header').getByText('Signed in as uid=user001,ou=people,dc=example,dc=org', {
+      exact: true,
+    }),
   ).toBeVisible()
+  await expect(page.getByRole('contentinfo', { name: 'Connection status' })).toContainText(
+    'ldap://127.0.0.1:1390',
+  )
 })

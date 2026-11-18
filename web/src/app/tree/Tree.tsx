@@ -295,6 +295,7 @@ export function Tree() {
                   // Not a button: a click must leave focus on the tree (aria-activedescendant).
                   <span
                     aria-hidden
+                    title={r.expanded ? 'Collapse' : 'Expand'}
                     onClick={(e) => {
                       e.stopPropagation()
                       toggle(r)

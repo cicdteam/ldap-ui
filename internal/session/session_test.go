@@ -6,12 +6,21 @@ package session
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+// exists reports whether id names a live session of m.
+func exists[C io.Closer](m *Manager[C], id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.sessions[id]
+	return ok
+}
 
 type closerSpy struct{ closed bool }
 
@@ -100,7 +109,7 @@ func TestConns(t *testing.T) {
 	}
 	now = now.Add(30 * time.Minute) // idle since the Put, not since Conns
 	m.Sweep()
-	if m.Exists(id) {
+	if exists(m, id) {
 		t.Error("Conns() marked the session used: Sweep kept it")
 	}
 	if got := m.Conns("nope"); len(got) != 0 {
@@ -135,7 +144,7 @@ func TestSweep(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Error("Sweep() did not close a session idle for 40m")
 	}
-	if m.Exists(idle) {
+	if exists(m, idle) {
 		t.Error("Sweep() kept a session idle for 40m")
 	}
 	select {
@@ -143,7 +152,7 @@ func TestSweep(t *testing.T) {
 		t.Error("Sweep() closed a session used 20m ago")
 	default:
 	}
-	if !m.Exists(active) {
+	if !exists(m, active) {
 		t.Error("Sweep() dropped a session used 20m ago")
 	}
 }
@@ -278,7 +287,7 @@ func TestSweepDoesNotWaitForClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Sweep() still waiting for a blocked Close after 1s")
 	}
-	if m.Exists(id) {
+	if exists(m, id) {
 		t.Error("Sweep() kept the expired session")
 	}
 }
@@ -307,20 +316,15 @@ func (c *lockSpy) Close() error {
 
 // A Close that blocks on the network must not stall every other session.
 func TestCloseOutsideLock(t *testing.T) {
-	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	m := New[*lockSpy](time.Minute, 8*time.Hour)
-	m.now = func() time.Time { return now }
 	id := m.Create()
-	replaced, dropped, swept := &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}
+	replaced, dropped := &lockSpy{mu: &m.mu}, &lockSpy{mu: &m.mu}
 	_ = m.Put(id, "a", replaced)
 	_ = m.Put(id, "a", &lockSpy{mu: &m.mu})
 	_ = m.Put(id, "b", dropped)
 	m.Drop(id, "b")
-	_ = m.Put(id, "c", swept)
-	now = now.Add(time.Hour)
-	m.Sweep()
 
-	for name, c := range map[string]*lockSpy{"Put": replaced, "Drop": dropped, "Sweep": swept} {
+	for name, c := range map[string]*lockSpy{"Put": replaced, "Drop": dropped} {
 		if c.locked {
 			t.Errorf("%s() closed a connection while holding the manager lock", name)
 		}
@@ -346,8 +350,8 @@ func TestRotateMovesConns(t *testing.T) {
 			t.Errorf("Rotate() closed connection %s", name)
 		}
 	}
-	if m.Exists(old) {
-		t.Error("Exists(old ID) after Rotate = true, want false")
+	if exists(m, old) {
+		t.Error("exists(old ID) after Rotate = true, want false")
 	}
 }
 
@@ -355,7 +359,7 @@ func TestRotateUnknown(t *testing.T) {
 	m := New[*closerSpy](time.Hour, 8*time.Hour)
 	for _, id := range []string{"", "nope"} {
 		got := m.Rotate(id)
-		if got == id || !m.Exists(got) {
+		if got == id || !exists(m, got) {
 			t.Errorf("Rotate(%q) = %q, want a new live session ID", id, got)
 		}
 		if names := m.Names(got); len(names) != 0 {
@@ -416,11 +420,11 @@ func TestSessionLimitEvictsOldest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Error("Create() over the limit did not close the oldest session's connection")
 	}
-	if m.Exists(oldest) {
+	if exists(m, oldest) {
 		t.Error("Create() over the limit kept the least recently used session")
 	}
-	if !m.Exists(recent) || !m.Exists(id) {
-		t.Errorf("Exists(most recently used), Exists(new) = %v, %v, want true, true", m.Exists(recent), m.Exists(id))
+	if !exists(m, recent) || !exists(m, id) {
+		t.Errorf("exists(most recently used), exists(new) = %v, %v, want true, true", exists(m, recent), exists(m, id))
 	}
 	select {
 	case <-recentConn:

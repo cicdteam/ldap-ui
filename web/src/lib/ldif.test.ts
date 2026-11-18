@@ -4,7 +4,6 @@ import {
   entriesToLDIF,
   entryToLDIF,
   fold,
-  HIDDEN,
   isAttrDescription,
   isSafe,
   ldifPreview,
@@ -148,6 +147,7 @@ describe('ldifPreview', () => {
     ['ASCII only', 'plain'],
     ['a C1 next-line character', 'Андрей\u0085x'],
     ['a line separator', 'Андрей\u2028x'],
+    ['a paragraph separator', 'Андрей\u2029x'],
     ['a right-to-left override', 'Андрей\u202Ex'],
     ['a zero-width space', 'admin\u200Bй'],
     ['a trailing no-break space', 'Андрей\u00A0'],
@@ -179,14 +179,5 @@ describe('ldifPreview', () => {
       { text: '' },
       { text: 'b: 2' },
     ])
-  })
-})
-
-describe('HIDDEN', () => {
-  it('covers default-ignorable, private use and unassigned code points', () => {
-    expect(HIDDEN.source).toBe(
-      '[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_Code_Point}\\p{Co}\\P{Assigned}]',
-    )
-    expect(HIDDEN.flags).toBe('u')
   })
 })

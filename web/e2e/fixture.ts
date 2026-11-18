@@ -11,14 +11,14 @@ export const e2eDN = (name: string) => `uid=${name},${E2E_OU}`
 export const e2eOU = (name: string) => `ou=${name},${E2E_OU}`
 export const e2eGroup = (name: string) => `cn=${name},${E2E_OU}`
 
-/** A demo avatar (Task 4), for uploads and the people seeded with a photo. */
+/** A demo avatar, for uploads and the people seeded with a photo. */
 export const PHOTO = fileURLToPath(
   new URL('../../deploy/demo-ldif/photos/avatar-1.jpg', import.meta.url),
 )
 /** The demo certificate, for uploads. */
 export const CERT = fileURLToPath(new URL('../../deploy/demo-ldif/cert.der', import.meta.url))
 
-/** People seeded with PHOTO as their jpegPhoto, one per binary scenario; later tasks append. */
+/** People seeded with PHOTO as their jpegPhoto, one per binary scenario. */
 export const E2E_PHOTO_PEOPLE: string[] = [
   'snapshot',
   'photodel',
@@ -28,10 +28,10 @@ export const E2E_PHOTO_PEOPLE: string[] = [
   'photoscroll',
 ]
 
-/** OUs under ou=e2e, each with the people (uids) it holds; later tasks append. */
+/** OUs under ou=e2e, each with the people (uids) it holds. */
 export const E2E_OUS: Record<string, string[]> = { moveto: [], full: ['inside'] }
 
-/** One inetOrgPerson per scenario; later tasks append names. */
+/** One inetOrgPerson per scenario. */
 export const E2E_PEOPLE: string[] = [
   'read',
   'edit',

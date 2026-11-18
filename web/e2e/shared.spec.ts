@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test'
-import { connect } from './helpers'
+import { connect, profileButton } from './helpers'
+import { expect, test, watch } from './test'
 
 // demo binds with its configured password (deploy/e2e/connections.yaml), so
 // one connection in the server serves every browser, outside any session.
@@ -9,10 +9,11 @@ test('a shared profile serves another browser without connecting', async ({ page
   expect(cookies).not.toContain('ldaplens_session')
 
   const other = await browser.newContext()
+  const checkOther = await watch(other)
   try {
     const page2 = await other.newPage()
     await page2.goto('./')
-    const demo = page2.getByRole('button', { name: /^demo(?![\w-])/ })
+    const demo = profileButton(page2, 'demo')
     await expect(demo).toContainText('CONNECTED')
     await demo.click()
     await expect(page2.getByRole('treeitem', { name: /^ou=people/ })).toBeVisible()
@@ -22,6 +23,7 @@ test('a shared profile serves another browser without connecting', async ({ page
     await expect(page2).toHaveURL(/\/ldap\/?$/)
     await page.reload()
     await expect(page.getByRole('treeitem', { name: /^ou=people/ })).toBeVisible()
+    await checkOther()
   } finally {
     await other.close()
   }

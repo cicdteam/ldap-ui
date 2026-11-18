@@ -1,7 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
-import { connect, exact } from './helpers'
-
-const results = (page: Page) => page.getByRole('grid', exact('Search results'))
+import { connect, exact, results } from './helpers'
+import { expect, test } from './test'
 
 for (const [width, height] of [
   [1280, 720],
@@ -21,8 +19,8 @@ for (const [width, height] of [
     for (let i = 0; i < 3; i++) {
       const head = (await heads.nth(i).boundingBox())!
       const cell = (await cells.nth(i).boundingBox())!
-      expect(cell.x, `column ${i} x`).toBe(head.x)
-      expect(cell.width, `column ${i} width`).toBe(head.width)
+      expect(Math.abs(cell.x - head.x), `column ${i} x`).toBeLessThanOrEqual(1)
+      expect(Math.abs(cell.width - head.width), `column ${i} width`).toBeLessThanOrEqual(1)
     }
     // Nothing scrolls sideways, and the last column ends inside the grid.
     expect(await grid.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0)

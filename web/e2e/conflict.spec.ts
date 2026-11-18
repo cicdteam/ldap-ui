@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, ldapmodify, openEntry, pendingBar, reviewButton } from './helpers'
+import { expect, test } from './test'
 
 // exact: names match as case-insensitive substrings ("Copy LDIF for uid=...").
 const editButton = { name: 'Edit', exact: true }

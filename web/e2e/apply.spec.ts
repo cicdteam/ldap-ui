@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, blur, ldapmodify, openEntry, pendingBar, reviewButton } from './helpers'
+import { expect, test, type Page } from './test'
 
 // exact: names match as case-insensitive substrings, and breadcrumbs or
 // "Copy LDIF for uid=apply1,..." would match too.
@@ -13,29 +13,6 @@ async function editDescription(page: Page, text: string) {
   await desc.fill(text)
   await desc.press('Enter')
   await page.getByRole('button', editButton).click()
-}
-
-/** POSTs a valid one-entry batch straight to changes/apply, bypassing the UI. */
-async function applyDirect(page: Page, conn: string) {
-  // The fetch path is relative to <base href>, which is /ldap/.
-  return page.evaluate(
-    async ({ conn }) => {
-      const r = await fetch(`api/c/${conn}/changes/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          entries: [
-            {
-              dn: 'uid=x,dc=example,dc=org',
-              changes: [{ op: 'add', attr: 'description', values: ['x'] }],
-            },
-          ],
-        }),
-      })
-      return { status: r.status, code: ((await r.json()) as { code?: string }).code }
-    },
-    { conn },
-  )
 }
 
 test('review shows LDIF and apply writes two entries', async ({ page }) => {
@@ -113,16 +90,6 @@ test('an apply in flight freezes the review, posts once, and leaves no undo', as
   await expect(pendingBar(page)).toHaveCount(0)
   await page.reload()
   await expect(attrRow(page, 'description')).toContainText('in flight')
-})
-
-test('read-only profile: the server refuses a direct apply', async ({ page }) => {
-  await page.goto('./')
-  await page.getByRole('button', { name: /^readonly-badpw\b/ }).click()
-  const pw = page.getByRole('dialog').locator('input[type=password]')
-  await pw.fill('adminpassword')
-  await pw.press('Enter')
-  await expect(page).toHaveURL(/\/c\/readonly-badpw/)
-  expect(await applyDirect(page, 'readonly-badpw')).toEqual({ status: 403, code: 'read_only' })
 })
 
 test('a batch too large for sessionStorage stays in the tab, with a warning', async ({ page }) => {

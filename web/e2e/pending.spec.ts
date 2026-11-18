@@ -1,10 +1,8 @@
-import { expect, test } from '@playwright/test'
 import { e2eDN } from './fixture'
 import { attrRow, blur, exact, openEntry, pendingBar, reviewButton } from './helpers'
+import { expect, test } from './test'
 
-test('the pending bar names the connection; Review applies to it; no header badge', async ({
-  page,
-}) => {
+test('the pending bar names the connection; Review applies to it', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('pending'))
   await expect(pendingBar(page)).toHaveCount(0)
   await page.getByRole('button', exact('Edit')).click()
@@ -15,12 +13,11 @@ test('the pending bar names the connection; Review applies to it; no header badg
   const bar = pendingBar(page)
   await expect(bar).toContainText('1 change in 1 entry staged for demo')
   await expect(bar).toContainText('ldap://127.0.0.1:1390')
-  // Between the panes and the status bar, and the header has no Review badge any more.
+  // Between the panes and the status bar.
   const status = page.getByRole('contentinfo', { name: 'Connection status' })
   expect((await bar.boundingBox())!.y + (await bar.boundingBox())!.height).toBeLessThanOrEqual(
     (await status.boundingBox())!.y,
   )
-  await expect(page.getByRole('banner').getByRole('button', { name: /Review/ })).toHaveCount(0)
   // In a narrow window the text gives way: the bar fits and Review stays on screen.
   await page.setViewportSize({ width: 400, height: 900 })
   expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0)

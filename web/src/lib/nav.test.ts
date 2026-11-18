@@ -101,4 +101,7 @@ describe('reconnectURL', () => {
   ])('is null off the workspace: %s under %s', (pathname, basename) => {
     expect(reconnectURL(pathname, '', basename)).toBeNull()
   })
+  it('is null for a malformed escape in the profile name', () => {
+    expect(reconnectURL('/c/%zz/entry', '', '/')).toBeNull()
+  })
 })

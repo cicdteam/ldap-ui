@@ -39,7 +39,7 @@ export function useDisconnect(): () => Promise<void> {
   }
 }
 
-/** extra: slot for the command palette button (Task 13). */
+/** extra: slot for the command palette button. */
 export function Header({ extra }: { extra?: ReactNode }) {
   const ws = useWorkspace()
   const disconnect = useDisconnect()

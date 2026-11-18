@@ -319,8 +319,12 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   also hold only the first 10 000. Edit still adds and deletes single
   values, and Apply touches only those. Member of searches `member`,
   `uniqueMember` and `memberUid`; an equality index on each keeps it fast.
-  Member of and Members list at most 10 000 groups or members: a longer list
-  is truncated there and marked incomplete.
+  Member of and Members list at most 10 000 groups or members, and Nested
+  follows groups 10 levels deep: a longer list is truncated there, a deeper
+  one stops at the tenth level, and either is marked "The list may be
+  incomplete" (Member of marks a chain exactly 10 levels deep too: it
+  cannot tell that the tenth group is in no other; nor can Members tell that
+  a group at the tenth level has no members).
 - **Pending changes** (above the status bar, only while changes are staged):
   "2 changes in 1 entry staged for demo" with the server address, Discard
   and Review (⌘S / Ctrl+S). Discard asks first; ⌘Z / Ctrl+Z brings the
@@ -1326,8 +1330,9 @@ web` builds the UI into `web/dist`, which the Go binary embeds (`make build`
 does both).
 
 `make e2e` runs the Playwright suite against a fresh OpenLDAP and Samba AD
-(Docker) and the built binary on 127.0.0.1:18091, using the locally installed
-Google Chrome; it is not part of `make check`.
+(Docker) and the built binary, in local mode on 127.0.0.1:18091 and in server
+mode on 127.0.0.1:18092, using the locally installed Google Chrome; it is not
+part of `make check`.
 
 Both suites (`make test-integration` and `make e2e`) reach Samba AD
 (`smblds/smblds`) over LDAPS with the test CA in `deploy/ad-test/tls/` (test

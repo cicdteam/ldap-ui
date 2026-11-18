@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
 import { E2E_OU, e2eGroup, PHOTO } from './fixture'
 import { TMP } from './global-setup'
-import { attrRow, blur, canBind, exact, openEntry } from './helpers'
+import { attrRow, blur, canBind, exact, openEntry, review } from './helpers'
+import { expect, test, type Page } from './test'
 
-// The 3b, 3c and 3d success scenarios in one pass over the same entries, in an OU of their own; then
-// the server log has every write and none of the values written.
+// The success paths of create, clone, rename and move, object classes, a photo, passwords, membership
+// and delete in one pass over the same entries, in an OU of their own; then the server log has every
+// write and none of the values written.
 const OU = `ou=journey,${E2E_OU}`
 const OU2 = `ou=arrivals,${OU}`
 const PERSON = `uid=voyager,${OU}`
@@ -35,11 +36,9 @@ async function action(page: Page, item: string) {
   await page.getByRole('button', exact(item)).click()
 }
 
-/** Mod+S with nothing focused (see blur), then Apply in the review. */
+/** Reviews the staged changes, expects the ldif lines in them, then applies them. */
 async function reviewAndApply(page: Page, ...ldif: string[]) {
-  await blur(page)
-  await page.keyboard.press('ControlOrMeta+S')
-  const dialog = page.getByRole('dialog', { name: 'Review changes' })
+  const dialog = await review(page)
   for (const line of ldif) await expect(dialog).toContainText(line)
   await dialog.getByRole('button', exact('Apply to demo')).click()
   await expect(dialog).toBeHidden()

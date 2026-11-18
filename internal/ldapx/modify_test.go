@@ -12,6 +12,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -151,6 +152,16 @@ func TestWritesRefuseBadBase64(t *testing.T) {
 	}
 }
 
+func TestModifyUnknownOp(t *testing.T) {
+	// As above, ErrInvalidRequest on a closed Conn shows the operation was
+	// refused before a request reached the connection.
+	c := &Conn{closed: true}
+	err := c.Modify(context.Background(), "uid=x", []Change{{Op: "increment", Attr: "mail", Values: []string{"x"}}})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("Modify(increment) error = %v, want ErrInvalidRequest", err)
+	}
+}
+
 func TestReplaceBinaryDeletes(t *testing.T) {
 	const photo, other, next = "\xff\xd8\xff photo", "\xff\xd8\xff other", "\xff\xd8\xff next"
 	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
@@ -194,6 +205,45 @@ func TestReplaceBinaryDeletes(t *testing.T) {
 	same := []Change{{Op: "delete", Attr: "mail", Values: []string{"a@x"}}}
 	if got, err := replaceBinaryChanges(same, have); err != nil || !cmp.Equal(got, same) {
 		t.Errorf("replaceBinaryChanges(no binary change) = %+v, %v, want it unchanged", got, err)
+	}
+}
+
+// TestWritesAreNotRetried checks that a write the server hangs up on fails
+// with a network error and is not sent again on a new connection: the
+// server may have applied it before the connection was lost.
+func TestWritesAreNotRetried(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		write func(*Conn) error
+	}{
+		{name: "Modify", write: func(c *Conn) error {
+			return c.Modify(ctx, "uid=a", []Change{{Op: "add", Attr: "mail", Values: []string{"a@x"}}})
+		}},
+		{name: "Add", write: func(c *Conn) error {
+			return c.Add(ctx, "uid=a", []TextAttribute{{Name: "objectClass", Values: []string{"top"}}})
+		}},
+		{name: "Delete", write: func(c *Conn) error { return c.Delete(ctx, "uid=a") }},
+		{name: "Rename", write: func(c *Conn) error { return c.Rename(ctx, "uid=a", "uid=b", "", true) }},
+		{name: "SetPassword", write: func(c *Conn) error { return c.SetPassword(ctx, "uid=a", "secret", "server") }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			url, accepts := fakeServer(t, func(_ int32, conn net.Conn) {
+				if _, err := readRequest(conn); err == nil {
+					requests.Add(1)
+				}
+				// Returning hangs up.
+			})
+			err := tc.write(fakeConn(t, url))
+			if !ldap.IsErrorWithCode(err, ldap.ErrorNetwork) {
+				t.Errorf("%s(server hangs up) error = %v, want ErrorNetwork", tc.name, err)
+			}
+			if n, conns := requests.Load(), accepts.Load(); n != 1 || conns != 1 {
+				t.Errorf("%s(server hangs up) sent %d requests on %d connections, want 1 on 1", tc.name, n, conns)
+			}
+		})
 	}
 }
 

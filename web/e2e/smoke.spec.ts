@@ -1,11 +1,10 @@
-import { expect, test } from '@playwright/test'
-import { attrRow, connect } from './helpers'
+import { attrRow, connect, palette, paletteItem } from './helpers'
+import { expect, test } from './test'
 
 test('connect, find, change, check LDIF, apply', async ({ page }) => {
   await connect(page, 'demo')
-  await page.keyboard.press('ControlOrMeta+K')
-  await page.locator('[cmdk-input]').fill('smoke')
-  await page.locator('[cmdk-item]', { hasText: 'smoke' }).first().click()
+  await palette(page, 'smoke')
+  await paletteItem(page, 'smoke').first().click()
   await expect(page).toHaveURL(/dn=uid%3Dsmoke/)
   await page.getByRole('button', { name: 'Edit', exact: true }).click()
   const mail = attrRow(page, 'mail').locator('input').first()

@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test'
 import { E2E_OU, e2eDN, e2eOU } from './fixture'
 import { attrRow, blur, openEntry } from './helpers'
+import { expect, test } from './test'
 
 test('rename within the parent, then move to another OU', async ({ page }) => {
   await openEntry(page, 'demo', e2eDN('renamer'))
