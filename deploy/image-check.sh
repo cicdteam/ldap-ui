@@ -73,12 +73,12 @@ got=$(curl -s --max-time 5 -H 'Authorization: Bearer image-check-token-0000' -o 
 script=$(grep -o 'src="\./assets/[^"]*\.js"' "$tmp/index.html" 2>/dev/null | head -1 | sed 's/^src="\.\///; s/"$//')
 case $got in
   '200 text/html'*) grep -q '<base href="/">' "$tmp/index.html" && [ -n "$script" ] ||
-    { echo "$image: / has no <base href=\"/\"> or no script under assets/" >&2; exit 1; } ;;
+    { echo "$image: / has no <base href=\"/\"> or no script under assets/" >&2; docker logs "$name" >&2; exit 1; } ;;
   *) echo "$image: / answered '$got', want 200 text/html" >&2; docker logs "$name" >&2; exit 1 ;;
 esac
 got=$(curl -s --max-time 5 -H 'Authorization: Bearer image-check-token-0000' -H 'Accept-Encoding: gzip' -o /dev/null \
   -w '%{http_code} %header{content-encoding}' "http://127.0.0.1:$port/$script") || true
-[ "$got" = '200 gzip' ] || { echo "$image: /$script answered '$got', want '200 gzip'" >&2; exit 1; }
+[ "$got" = '200 gzip' ] || { echo "$image: /$script answered '$got', want '200 gzip'" >&2; docker logs "$name" >&2; exit 1; }
 
 # Local mode keeps a token in the volume at /data, its only write, and logs the
 # login link.

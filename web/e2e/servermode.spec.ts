@@ -7,7 +7,10 @@ import { expect, test } from './test'
 test.use({ baseURL: 'http://127.0.0.1:18092/', extraHTTPHeaders: {} })
 
 test('server mode shows no saving and no trust', async ({ page }) => {
+  // The checks for absent controls below mean something only once the UI knows its mode.
+  const mode = page.waitForResponse('**/api/server')
   await page.goto('./')
+  expect((await mode).ok()).toBe(true)
   await expect(profileButton(page, 'people')).toBeVisible()
   // Nothing about where a profile binds before a sign-in.
   await expect(page.getByText('127.0.0.1')).toHaveCount(0)

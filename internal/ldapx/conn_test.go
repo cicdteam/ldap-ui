@@ -304,11 +304,15 @@ func TestDialUntrustedCertificate(t *testing.T) {
 
 // TestStartTLSRefusedSendsNothing checks that a StartTLS profile never falls
 // back to cleartext: when the server refuses the StartTLS operation, Dial
-// fails with the refusal and sends neither the bind nor a search.
+// fails with the refusal and sends neither the bind nor a search, on that
+// connection or on a new one.
 func TestStartTLSRefusedSendsNothing(t *testing.T) {
 	var after atomic.Int32 // requests the server got after the refusal
 	done := make(chan struct{})
-	url, _ := fakeServer(t, func(_ int32, conn net.Conn) {
+	url, accepts := fakeServer(t, func(n int32, conn net.Conn) {
+		if n != 1 {
+			return // a redial, hung up on at once and counted by accepts
+		}
 		defer close(done)
 		id, err := readRequest(conn) // the StartTLS request
 		if err != nil || writeResult(conn, id, ldap.ApplicationExtendedResponse, ldap.LDAPResultProtocolError) != nil {
@@ -332,6 +336,9 @@ func TestStartTLSRefusedSendsNothing(t *testing.T) {
 	}
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultProtocolError) {
 		t.Errorf("Dial(StartTLS refused) error = %v, want the refusal, protocolError", err)
+	}
+	if n := accepts.Load(); n != 1 {
+		t.Errorf("Dial(StartTLS refused) opened %d connections, want 1: no redial in cleartext", n)
 	}
 	select {
 	case <-done:

@@ -241,7 +241,7 @@ function RefList({
       {query.data?.truncated && (
         <Banner tone="warn">
           The list may be incomplete: it reached a limit (10 levels of nesting, 10,000 entries or a
-          server size limit).
+          server limit).
         </Banner>
       )}
       {query.isSuccess && all.length === 0 && <p className="px-2 py-1 text-muted">None.</p>}

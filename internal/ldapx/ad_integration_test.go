@@ -117,6 +117,8 @@ func waitForBind(ctx context.Context) error {
 // transaction on Samba's database, many times faster than one LDAP add per
 // entry.
 func seedAD(ctx context.Context, ctr testcontainers.Container) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	var b strings.Builder
 	big := []string{"objectClass: group", "sAMAccountName: big"}
 	writeLDIF(&b, adOU, "objectClass: organizationalUnit", "ou: ldaplens")
