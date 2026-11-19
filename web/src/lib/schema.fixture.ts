@@ -28,6 +28,12 @@ export const directorySchema: Schema = {
       usage: 'directoryOperation',
       noUserModification: true,
     },
+    {
+      oid: '1.3.6.1.1.16.4',
+      names: ['entryUUID'],
+      usage: 'directoryOperation',
+      noUserModification: true,
+    },
   ],
   objectClasses: [
     { oid: '2.5.6.0', names: ['top'], kind: 'ABSTRACT', must: ['objectClass'] },

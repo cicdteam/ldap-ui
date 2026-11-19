@@ -17,7 +17,14 @@ import { Spinner } from '../../ui/Spinner'
 import { stepBatch, useBatch } from '../batch'
 import { useWorkspace } from '../context'
 import { openEntryAction, visibleActions } from '../entry/actions'
-import { ADD_TO_GROUP, FOCUS_FILTER, FORMAT_FILTER, OPEN_REVIEW, RUN_SEARCH } from '../events'
+import {
+  ADD_TO_GROUP,
+  FOCUS_FILTER,
+  FORMAT_FILTER,
+  OPEN_IMPORT,
+  OPEN_REVIEW,
+  RUN_SEARCH,
+} from '../events'
 import { useDisconnect } from '../Header'
 import { entryKey, useDebounced, useFind } from '../queries'
 import { isSaved, list, queryText } from '../search/Omnibox'
@@ -87,6 +94,13 @@ export const addToGroup: Action = {
   run: fire(ADD_TO_GROUP),
 }
 
+/** Opens the LDIF import with no entry to place it under; the workspace listens. */
+export const importLDIF: Action = {
+  id: 'import',
+  label: 'Import LDIF…',
+  run: fire(OPEN_IMPORT),
+}
+
 export function CommandPalette({
   open,
   onOpenChange,
@@ -129,7 +143,7 @@ export function CommandPalette({
   const actions: Action[] = [
     ...filterActions,
     // Read-only profiles stage and write nothing.
-    ...(ws.info.readOnly ? [] : batchActions(ws.conn, qc)),
+    ...(ws.info.readOnly ? [] : [...batchActions(ws.conn, qc), importLDIF]),
     ...entryCommands,
     ...(ws.dn && !ws.info.readOnly ? [addToGroup] : []),
     {

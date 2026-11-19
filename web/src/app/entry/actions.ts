@@ -1,7 +1,7 @@
 import { isMacPlatform } from '../../lib/shortcuts'
 import { ENTRY_ACTION } from '../events'
 
-export type EntryActionKind = 'new' | 'clone' | 'rename' | 'password' | 'delete'
+export type EntryActionKind = 'new' | 'clone' | 'import' | 'rename' | 'password' | 'delete'
 
 export interface EntryAction {
   kind: EntryActionKind
@@ -20,6 +20,14 @@ export interface EntryAction {
 export const ENTRY_ACTIONS: EntryAction[] = [
   { kind: 'new', label: 'New child', shortcut: 'N', keys: ['N'], clean: false },
   { kind: 'clone', label: 'Clone', shortcut: 'C', keys: ['C'], clean: false },
+  {
+    kind: 'import',
+    label: 'Import LDIF here…',
+    palette: 'Import LDIF here…',
+    shortcut: 'I',
+    keys: ['I'],
+    clean: false,
+  },
   { kind: 'rename', label: 'Rename/Move', shortcut: 'R', keys: ['R', 'F2'], clean: true },
   // Written at once and never staged, so it does not wait for the batch.
   {

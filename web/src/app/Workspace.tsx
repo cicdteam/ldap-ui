@@ -24,9 +24,10 @@ import { WorkspaceContext, type WorkspaceCtx } from './context'
 import type { EntryActionKind } from './entry/actions'
 import { CreateDialog } from './entry/CreateDialog'
 import { DeleteDialog } from './entry/DeleteDialog'
+import { ImportDialog } from './entry/ImportDialog'
 import { PasswordDialog } from './entry/PasswordDialog'
 import { RenameDialog } from './entry/RenameDialog'
-import { ENTRY_ACTION, FOCUS_FILTER, OPEN_REVIEW } from './events'
+import { ENTRY_ACTION, FOCUS_FILTER, OPEN_IMPORT, OPEN_REVIEW } from './events'
 import { Header } from './Header'
 import { Inspector } from './inspector/Inspector'
 import { CommandPalette } from './palette/CommandPalette'
@@ -172,15 +173,23 @@ export function Workspace() {
     return () => window.removeEventListener(OPEN_REVIEW, onOpen)
   }, [])
 
-  // An entry action's dialog, for the entry open when it was asked for.
+  // An entry action's dialog, for the entry open when it was asked for. An open import keeps its
+  // dialog: Mod+K works over it, and a running import must not lose its report.
   const [action, setAction] = useState<{ kind: EntryActionKind; dn: string } | null>(null)
   useEffect(() => {
     const onAction = (e: Event) => {
-      if (dn) setAction({ kind: (e as CustomEvent<EntryActionKind>).detail, dn })
+      const kind = (e as CustomEvent<EntryActionKind>).detail
+      if (dn) setAction((a) => (a?.kind === 'import' ? a : { kind, dn }))
     }
     window.addEventListener(ENTRY_ACTION, onAction)
     return () => window.removeEventListener(ENTRY_ACTION, onAction)
   }, [dn])
+  // The palette's Import LDIF…: an import with no entry to place it under.
+  useEffect(() => {
+    const onImport = () => setAction((a) => (a?.kind === 'import' ? a : { kind: 'import', dn: '' }))
+    window.addEventListener(OPEN_IMPORT, onImport)
+    return () => window.removeEventListener(OPEN_IMPORT, onImport)
+  }, [])
 
   if (info.isPending) {
     return (
@@ -292,6 +301,9 @@ export function Workspace() {
       <ReviewDialog open={review} onOpenChange={setReview} />
       {action && (action.kind === 'new' || action.kind === 'clone') && (
         <CreateDialog mode={action.kind} dn={action.dn} close={() => setAction(null)} />
+      )}
+      {action?.kind === 'import' && (
+        <ImportDialog here={action.dn || undefined} close={() => setAction(null)} />
       )}
       {action?.kind === 'rename' && <RenameDialog dn={action.dn} close={() => setAction(null)} />}
       {action?.kind === 'delete' && <DeleteDialog dn={action.dn} close={() => setAction(null)} />}

@@ -19,5 +19,11 @@ export const OPEN_REVIEW = 'ldaplens:open-review'
  */
 export const ENTRY_ACTION = 'ldaplens:entry-action'
 
+/**
+ * Window event asking the workspace to open the LDIF import with no entry to place it under;
+ * Import LDIF here… goes through ENTRY_ACTION.
+ */
+export const OPEN_IMPORT = 'ldaplens:open-import'
+
 /** Window event asking the inspector to turn on Edit and open its "Add to group" field. */
 export const ADD_TO_GROUP = 'ldaplens:add-to-group'

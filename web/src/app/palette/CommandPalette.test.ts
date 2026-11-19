@@ -7,10 +7,11 @@ import {
   ENTRY_ACTION,
   FOCUS_FILTER,
   FORMAT_FILTER,
+  OPEN_IMPORT,
   OPEN_REVIEW,
   RUN_SEARCH,
 } from '../events'
-import { addToGroup, batchActions, entryActions, filterActions } from './CommandPalette'
+import { addToGroup, batchActions, entryActions, filterActions, importLDIF } from './CommandPalette'
 
 // prefs.ts reads localStorage on import, and Node 26's own localStorage warns when read without
 // --localstorage-file: the import sees no storage instead, like a browser with storage blocked.
@@ -88,6 +89,7 @@ it('lists the entry actions; rename and delete carry the staged hint', () => {
   expect(entryActions(hint).map((a) => [a.label, a.shortcut, a.disabled])).toEqual([
     ['New child entry', 'N', ''],
     ['Clone entry', 'C', ''],
+    ['Import LDIF here…', 'I', ''],
     ['Rename/Move entry', 'R', hint],
     ['Delete entry', 'Delete', hint],
   ])
@@ -95,12 +97,23 @@ it('lists the entry actions; rename and delete carry the staged hint', () => {
   expect(entryActions(hint, true).map((a) => [a.label, a.shortcut, a.disabled])).toEqual([
     ['New child entry', 'N', ''],
     ['Clone entry', 'C', ''],
+    ['Import LDIF here…', 'I', ''],
     ['Rename/Move entry', 'R', hint],
     ['Set password…', 'P', ''],
     ['Delete entry', 'Delete', hint],
   ])
   for (const a of entryActions('', true)) a.run()
-  expect(fired).toEqual(['new', 'clone', 'rename', 'password', 'delete'])
+  expect(fired).toEqual(['new', 'clone', 'import', 'rename', 'password', 'delete'])
+})
+
+it('Import LDIF… opens the import dialog with no entry to place it under', () => {
+  const win = new EventTarget()
+  vi.stubGlobal('window', win)
+  const fired: string[] = []
+  win.addEventListener(OPEN_IMPORT, (e) => fired.push(e.type))
+  expect(importLDIF.label).toBe('Import LDIF…')
+  importLDIF.run()
+  expect(fired).toEqual([OPEN_IMPORT])
 })
 
 it('Add to group asks the inspector for its add field', () => {
