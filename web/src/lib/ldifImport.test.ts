@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import { ApiError } from './api'
 import {
+  addFailure,
   commonBase,
   defaultTarget,
+  endsRun,
+  failedLDIF,
   LdifSyntaxError,
+  type Outcome,
   parseLDIF,
+  type PlanItem,
   planImport,
+  precheck,
   rebase,
 } from './ldifImport'
 import { SchemaIndex } from './schema'
@@ -349,5 +356,99 @@ Description: /9j/4AAQ
       leftOut: ['entryUUID'],
       passwords: 1,
     })
+  })
+})
+
+const item = (dn: string, unsupported?: string): PlanItem => ({
+  dn,
+  line: 1,
+  entry: { dn, attributes: [{ name: 'cn', values: [{ text: 'x' }] }] },
+  unsupported,
+  warnings: [],
+})
+
+describe('precheck', () => {
+  const failed: Outcome = { kind: 'failed', message: 'no' }
+  const unsupported: Outcome = { kind: 'unsupported', reason: 'changetype: delete' }
+  const notImported: Outcome = { kind: 'not-imported', reason: 'parent' }
+
+  it('is unsupported for an unsupported item', () => {
+    expect(precheck(item('cn=x,dc=corp', 'changetype: delete'), new Map())).toStrictEqual(
+      unsupported,
+    )
+  })
+
+  it('is not imported when a failed or unsupported DN is above the item', () => {
+    for (const above of [failed, unsupported]) {
+      const done = new Map([['OU=Staff,dc=corp', above]])
+      expect(precheck(item('uid=a,ou=staff,dc=corp'), done)).toStrictEqual(notImported)
+      expect(precheck(item('cn=b,uid=a,ou=staff,dc=corp'), done)).toStrictEqual(notImported)
+    }
+  })
+
+  it('sends an item whose parent exists or was created, or whose sibling failed', () => {
+    const done = new Map<string, Outcome>([
+      ['ou=Staff,dc=corp', { kind: 'exists' }],
+      ['ou=Board,dc=corp', { kind: 'created' }],
+      ['uid=b,ou=Staff,dc=corp', failed],
+    ])
+    expect(precheck(item('uid=a,ou=Staff,dc=corp'), done)).toBeUndefined()
+    expect(precheck(item('uid=c,ou=Board,dc=corp'), done)).toBeUndefined()
+  })
+})
+
+describe('addFailure', () => {
+  it('is exists for result 68 and failed with the message for another code', () => {
+    const conflict = (ldapResultCode: number) =>
+      new ApiError(409, { code: 'conflict', message: 'taken', ldapResultCode })
+    expect(addFailure(conflict(68))).toStrictEqual({ kind: 'exists' })
+    expect(addFailure(conflict(20))).toStrictEqual({ kind: 'failed', message: 'taken' })
+    expect(addFailure(new Error('boom'))).toStrictEqual({ kind: 'failed', message: 'boom' })
+  })
+})
+
+describe('endsRun', () => {
+  it('is true for a lost token or session and false for a conflict', () => {
+    expect(endsRun(new ApiError(401, { code: 'unauthorized', message: '' }))).toBe(true)
+    expect(endsRun(new ApiError(401, { code: 'not_connected', message: '' }))).toBe(true)
+    expect(endsRun(new ApiError(409, { code: 'conflict', message: '' }))).toBe(false)
+  })
+})
+
+describe('failedLDIF', () => {
+  const plan = {
+    items: [
+      item('ou=A,dc=corp'),
+      item('uid=a,ou=A,dc=corp'),
+      item('ou=B,dc=corp'),
+      item('uid=b,ou=B,dc=corp'),
+    ],
+    leftOut: [],
+    passwords: 0,
+  }
+
+  it('holds the failed and not-imported records in plan order', () => {
+    const outcomes = new Map<string, Outcome>([
+      ['ou=A,dc=corp', { kind: 'created' }],
+      ['uid=a,ou=A,dc=corp', { kind: 'not-imported', reason: 'stopped' }],
+      ['ou=B,dc=corp', { kind: 'failed', message: 'no' }],
+      ['uid=b,ou=B,dc=corp', { kind: 'not-imported', reason: 'parent' }],
+    ])
+    expect(failedLDIF(plan, outcomes)).toBe(`version: 1
+
+dn: uid=a,ou=A,dc=corp
+cn: x
+
+dn: ou=B,dc=corp
+cn: x
+
+dn: uid=b,ou=B,dc=corp
+cn: x
+`)
+  })
+
+  it('is empty when nothing failed', () => {
+    const outcomes = new Map<string, Outcome>([['ou=A,dc=corp', { kind: 'exists' }]])
+    expect(failedLDIF(plan, outcomes)).toBe('')
   })
 })

@@ -1,7 +1,8 @@
+import { errorKind, errorMessage, isApiError } from './api'
 import { base64ToBytes } from './binary'
 import { isUnder, joinDN, normDN, sameDN, splitDN } from './dn'
 import { isSecret } from './edit'
-import { bytesToBase64, isAttrDescription } from './ldif'
+import { bytesToBase64, entriesToLDIF, isAttrDescription } from './ldif'
 import { baseName, type SchemaIndex } from './schema'
 import type { Attribute, Entry, Info, Value } from './types'
 
@@ -237,4 +238,48 @@ export function planImport(
     ),
     passwords,
   }
+}
+
+export type Outcome =
+  | { kind: 'created' }
+  | { kind: 'exists' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'not-imported'; reason: 'parent' | 'stopped' }
+  | { kind: 'unsupported'; reason: string }
+
+/** The outcome of a record before it is sent: unsupported, or not imported because an earlier failed or unsupported DN is above it; undefined means send it. */
+export function precheck(item: PlanItem, done: ReadonlyMap<string, Outcome>): Outcome | undefined {
+  if (item.unsupported) return { kind: 'unsupported', reason: item.unsupported }
+  // ponytail: scans every outcome per item, O(n^2) at 5000 records next to 5000 adds; look up
+  // the item's ancestors in a set of normDN keys if it ever shows.
+  for (const [dn, o] of done)
+    if (
+      (o.kind === 'failed' || o.kind === 'unsupported') &&
+      isUnder(item.dn, dn) &&
+      !sameDN(item.dn, dn)
+    )
+      return { kind: 'not-imported', reason: 'parent' }
+  return undefined
+}
+
+/** The outcome of a failed add: exists for result 68, else failed with errorMessage(e). */
+export function addFailure(e: unknown): Outcome {
+  if (isApiError(e) && e.body.ldapResultCode === 68) return { kind: 'exists' }
+  return { kind: 'failed', message: errorMessage(e) }
+}
+
+/** Whether e ends the whole run (errorKind 'auth' or 'session'). */
+export function endsRun(e: unknown): boolean {
+  return errorKind(e) !== 'other'
+}
+
+/** The failed and not-imported records in plan order, as entriesToLDIF writes them. */
+export function failedLDIF(plan: ImportPlan, outcomes: ReadonlyMap<string, Outcome>): string {
+  const entries = plan.items
+    .filter((i) => {
+      const kind = outcomes.get(i.dn)?.kind
+      return kind === 'failed' || kind === 'not-imported'
+    })
+    .map((i) => i.entry)
+  return entries.length ? entriesToLDIF(entries) : ''
 }
