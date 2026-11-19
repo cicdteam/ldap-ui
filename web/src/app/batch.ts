@@ -1,7 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { useSyncExternalStore } from 'react'
 import { batches } from '../lib/batchStore'
-import type { Batch } from '../lib/changes'
+import { touchedAttributes, type Batch } from '../lib/changes'
+import { plural } from '../lib/status'
 import type { ApiErrorBody } from '../lib/types'
 
 export function useBatch(conn: string): Batch {
@@ -10,6 +11,12 @@ export function useBatch(conn: string): Batch {
 
 export function useBatchError(conn: string, dn: string): ApiErrorBody | undefined {
   return useSyncExternalStore(batches.subscribe, () => batches.errorOf(conn, dn))
+}
+
+/** Drops conn's whole batch once the user confirms, as Disconnect asks; Mod+Z brings it back. */
+export function discardAll(conn: string): void {
+  const what = plural(touchedAttributes(batches.get(conn)), 'unapplied change', 'unapplied changes')
+  if (window.confirm(`Discard ${what}?`)) batches.clear(conn)
 }
 
 /** The apply mutation's key: whoever changes the batch checks it is not in flight. */

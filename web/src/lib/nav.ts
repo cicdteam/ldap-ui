@@ -32,6 +32,27 @@ export function defaultColumns(info: Info): string[] {
   return [info.activeDirectory ? 'sAMAccountName' : 'uid', 'mail']
 }
 
+/** Starting points in the Recent and saved searches popover, per server type. */
+export function exampleSearches(info: Info): [label: string, filter: string][] {
+  return info.activeDirectory
+    ? [
+        ['People', '(&(objectCategory=person)(objectClass=user))'],
+        ['Groups', '(objectClass=group)'],
+        [
+          'Disabled accounts',
+          '(&(objectCategory=person)(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=2))',
+        ],
+      ]
+    : [
+        ['People', '(objectClass=person)'],
+        [
+          'Groups',
+          '(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))',
+        ],
+        ['Organizational units', '(objectClass=organizationalUnit)'],
+      ]
+}
+
 export function parseColumns(text: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []

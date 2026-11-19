@@ -1,13 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useSyncExternalStore } from 'react'
-import { batches } from '../lib/batchStore'
 import { invalidBatch, touchedAttributes } from '../lib/changes'
 import { keyLabel } from '../lib/shortcuts'
-import { pendingText, plural } from '../lib/status'
+import { pendingText } from '../lib/status'
 import type { Entry } from '../lib/types'
 import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
-import { useBatch } from './batch'
+import { discardAll, useBatch } from './batch'
 import { useWorkspace } from './context'
 import { OPEN_REVIEW } from './events'
 
@@ -33,11 +32,6 @@ export function PendingBar() {
   )
   if (!batch.length) return null
   const n = touchedAttributes(batch)
-  const discard = () => {
-    // As Disconnect asks; Mod+Z still brings the batch back.
-    const what = plural(n, 'unapplied change', 'unapplied changes')
-    if (window.confirm(`Discard ${what}?`)) batches.clear(ws.conn)
-  }
   return (
     <div
       role="status"
@@ -51,7 +45,12 @@ export function PendingBar() {
         <span className="truncate text-xs text-danger">Some changes fail validation</span>
       )}
       <span className="flex-1" />
-      <Button variant="ghost" size="sm" title="Drop every staged change" onClick={discard}>
+      <Button
+        variant="ghost"
+        size="sm"
+        title="Drop every staged change"
+        onClick={() => discardAll(ws.conn)}
+      >
         Discard
       </Button>
       <Button

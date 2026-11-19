@@ -136,6 +136,9 @@ describe('withColumns', () => {
     ])
     expect(kept(['displayname'], 'DisplayName', 'cn')).toEqual(['DisplayName'])
   })
+  it('keeps them when * is picked', () => {
+    expect(kept(['*'], 'displayName', 'cn', 'uid')).toEqual(['displayName', 'cn', 'uid'])
+  })
   it('keeps the DN and leaves the entries it was given alone', () => {
     const e = entry('cn', 'uid')
     expect(withColumns([e], ['uid'])[0].dn).toBe(e.dn)

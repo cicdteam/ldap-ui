@@ -20,7 +20,7 @@ import { openEntryAction, visibleActions } from '../entry/actions'
 import { ADD_TO_GROUP, FOCUS_FILTER, FORMAT_FILTER, OPEN_REVIEW, RUN_SEARCH } from '../events'
 import { useDisconnect } from '../Header'
 import { entryKey, useDebounced, useFind } from '../queries'
-import { isSaved, list } from '../search/Omnibox'
+import { isSaved, list, queryText } from '../search/Omnibox'
 
 const kindIcon: Record<EntryKind, typeof User> = {
   user: User,
@@ -279,7 +279,9 @@ export function CommandPalette({
                   {row(
                     <Star className="h-4 w-4 text-muted" />,
                     s.name,
-                    <span className="truncate font-mono text-[11px] text-muted">{s.filter}</span>,
+                    <span className="truncate font-mono text-[11px] text-muted">
+                      {queryText(s)}
+                    </span>,
                   )}
                 </Command.Item>
               ))}

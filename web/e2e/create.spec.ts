@@ -89,6 +89,7 @@ test('a bidi control in a name shows as <U+202E>; Copy DN keeps the real one', a
     await reviewButton(page).click()
     const review = page.getByRole('dialog', { name: 'Review changes' })
     await expect(review).toContainText(`${shown},${E2E_OU}`)
+    page.once('dialog', (d) => void d.accept())
     await review.getByRole('button', exact('Discard all')).click()
     await expect(pendingBar(page)).toBeHidden()
   } finally {

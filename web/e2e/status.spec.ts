@@ -25,9 +25,16 @@ test('status bar: address, transport, server type and the keys of the focused pa
   await desc.press('Enter')
   await expect(pendingBar(page)).toContainText('1 change in 1 entry staged for demo')
 
-  // Staged only: discarding leaves the directory as it was.
+  // Staged only: discarding leaves the directory as it was. Discard all asks first.
   await page.keyboard.press('ControlOrMeta+S')
   const review = page.getByRole('dialog', { name: 'Review changes' })
+  page.once('dialog', (d) => {
+    expect(d.message()).toBe('Discard 1 unapplied change?')
+    void d.dismiss()
+  })
+  await review.getByRole('button', { name: 'Discard all' }).click()
+  await expect(review).toContainText('status bar edit')
+  page.once('dialog', (d) => void d.accept())
   await review.getByRole('button', { name: 'Discard all' }).click()
   await page.keyboard.press('Escape')
   await expect(pendingBar(page)).toHaveCount(0)
