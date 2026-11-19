@@ -24,9 +24,10 @@ import { WorkspaceContext, type WorkspaceCtx } from './context'
 import type { EntryActionKind } from './entry/actions'
 import { CreateDialog } from './entry/CreateDialog'
 import { DeleteDialog } from './entry/DeleteDialog'
+import { ImportDialog } from './entry/ImportDialog'
 import { PasswordDialog } from './entry/PasswordDialog'
 import { RenameDialog } from './entry/RenameDialog'
-import { ENTRY_ACTION, FOCUS_FILTER, OPEN_REVIEW } from './events'
+import { ENTRY_ACTION, FOCUS_FILTER, OPEN_IMPORT, OPEN_REVIEW } from './events'
 import { Header } from './Header'
 import { Inspector } from './inspector/Inspector'
 import { CommandPalette } from './palette/CommandPalette'
@@ -181,6 +182,13 @@ export function Workspace() {
     window.addEventListener(ENTRY_ACTION, onAction)
     return () => window.removeEventListener(ENTRY_ACTION, onAction)
   }, [dn])
+  // The palette's Import LDIF…: an import action placed under here, '' for none.
+  useEffect(() => {
+    const onImport = (e: Event) =>
+      setAction({ kind: 'import', dn: (e as CustomEvent<{ here?: string }>).detail?.here ?? '' })
+    window.addEventListener(OPEN_IMPORT, onImport)
+    return () => window.removeEventListener(OPEN_IMPORT, onImport)
+  }, [])
 
   if (info.isPending) {
     return (
@@ -292,6 +300,9 @@ export function Workspace() {
       <ReviewDialog open={review} onOpenChange={setReview} />
       {action && (action.kind === 'new' || action.kind === 'clone') && (
         <CreateDialog mode={action.kind} dn={action.dn} close={() => setAction(null)} />
+      )}
+      {action?.kind === 'import' && (
+        <ImportDialog here={action.dn || undefined} close={() => setAction(null)} />
       )}
       {action?.kind === 'rename' && <RenameDialog dn={action.dn} close={() => setAction(null)} />}
       {action?.kind === 'delete' && <DeleteDialog dn={action.dn} close={() => setAction(null)} />}

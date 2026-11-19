@@ -352,7 +352,7 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
 | `E` | Edit mode on the entry card (ignored while focus is in a text field, the tree, the results list or a dialog) |
 | ⌘S / Ctrl+S | Review the staged changes |
 | ⌘Z / Ctrl+Z, ⌘⇧Z / Ctrl+Shift+Z | Undo, redo a staged change (outside text fields) |
-| `N`, `C`, `R` or F2, `P`, `Delete` or ⌘⌫ / Ctrl+Backspace | New child, Clone, Rename/Move, Set password, Delete the open entry (ignored while focus is in a text field, the tree, the results list or a dialog) |
+| `N`, `C`, `I`, `R` or F2, `P`, `Delete` or ⌘⌫ / Ctrl+Backspace | New child, Clone, Import LDIF here, Rename/Move, Set password, Delete the open entry (ignored while focus is in a text field, the tree, the results list or a dialog) |
 
 ⌘K / Ctrl+K and ⇧⌥F / Shift+Alt+F match the physical key, so they also work
 on non-Latin keyboard layouts.
@@ -380,8 +380,9 @@ on non-Latin keyboard layouts.
 - **Entry actions** (in the card's More, or the command palette): **New child** (`N`),
   **Clone** (`C`), **Rename/Move** (`R` or F2) and **Delete** (`Delete` or
   ⌘⌫ / Ctrl+Backspace). Each opens a dialog with the DN and the LDIF it
-  writes, and writes at once; it is not staged. A read-only profile has no
-  entry actions, and the server refuses these writes too.
+  writes, and writes at once; it is not staged. More also holds **Import LDIF
+  here…** (`I`, see [Importing LDIF](#importing-ldif)). A read-only profile
+  has no entry actions, and the server refuses these writes too.
 - **New child** picks a structural class (common ones first), auxiliary
   classes, the RDN attribute and value, and asks for the MUST attributes.
   **Clone** starts from the entry, staged changes included, binary values
@@ -449,6 +450,45 @@ on non-Latin keyboard layouts.
   the tab only: Review says it will not survive a reload.
 - Not editable here: secrets other than the entry's password. RDN values
   change through Rename/Move, not in place.
+
+#### Importing LDIF
+
+**Import LDIF…** in the command palette, or **Import LDIF here…** (`I`) in
+an entry's More, creates the entries of an LDIF file (RFC 2849 content
+records) at once; it is not staged. A read-only profile has neither.
+
+- Paste the LDIF, open a file or drop one on the dialog. It is read in the
+  browser, up to 5,000 records; nothing is written until you press Import. A
+  syntax error names its line.
+- The preview places the entries under this directory: "Their base" (the
+  common base of the file's DNs) becomes "Becomes" in every DN, and in every
+  value of a DN attribute (`member`, `manager`, `seeAlso`...) under that
+  base. Import LDIF here… fills Becomes with the open entry; from the palette
+  it is their base itself when that already lies under the server's naming
+  context (nothing moves), else the naming context. Both fields can be
+  edited; equal values move nothing.
+- Left out and named in the preview: server-managed attributes
+  (`entryUUID`, `createTimestamp` and others the schema marks
+  NO-USER-MODIFICATION or operational) and password values. Users are created
+  without a password; set one later with Set password.
+- The entries list shows them parents first, in the order they are created,
+  with warnings from the schema (a missing required attribute, an attribute
+  the schema does not know, a DN value under their base that is not in the
+  file). Entries with warnings are still tried; the server decides.
+- Not supported, and skipped: `changetype: modify`, `delete`, `modrdn` and
+  `moddn` records (`changetype: add` is a plain record) and `attr:< URL`
+  values.
+- The import creates one entry at a time. An entry that already exists is
+  skipped, never changed. A failure does not stop the run, but the entries
+  below a failed one are not imported. "Stop after this entry" ends it after
+  the request in flight; a lost session or connection ends it too. The
+  dialog stays open while it runs.
+- The report counts created, already existed, failed, not imported and not
+  supported, and lists every failure and skip with the reason. **Copy failed
+  as LDIF** copies the failed and not imported records, already under the new
+  base: fix them and import that to finish a partial import, since what was
+  created is skipped the second time. **Copy created DNs** and **Show** (the
+  topmost created entry) are there too.
 
 ## connections.yaml
 

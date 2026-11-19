@@ -19,5 +19,11 @@ export const OPEN_REVIEW = 'ldaplens:open-review'
  */
 export const ENTRY_ACTION = 'ldaplens:entry-action'
 
+/**
+ * Window event, a CustomEvent<{ here?: string }>, asking the workspace to open the LDIF import,
+ * placing it under here when given.
+ */
+export const OPEN_IMPORT = 'ldaplens:open-import'
+
 /** Window event asking the inspector to turn on Edit and open its "Add to group" field. */
 export const ADD_TO_GROUP = 'ldaplens:add-to-group'

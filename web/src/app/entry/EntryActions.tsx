@@ -26,7 +26,7 @@ function Words({ children }: { children: ReactNode }) {
 
 /**
  * The card's actions: Edit, Add to group, Copy DN and More. More holds Raw values, Reload entry
- * and the entry actions with their keys (N, C, R or F2, P, Delete or Mod+Backspace). Set password
+ * and the entry actions with their keys (N, C, I, R or F2, P, Delete or Mod+Backspace). Set password
  * is there only when password is set (see canSetPassword). Rename/Move and Delete wait while the
  * entry or one below it has staged changes; their key then opens the menu to say why. A read-only
  * profile gets Copy DN and More with Raw values and Reload entry only.
@@ -104,7 +104,7 @@ export function EntryActions({
             size="sm"
             title={
               canEdit
-                ? 'More: raw values, reload, new child, clone, rename or move, set password, delete'
+                ? 'More: raw values, reload, new child, clone, import LDIF, rename or move, set password, delete'
                 : 'More: raw values, reload'
             }
           >

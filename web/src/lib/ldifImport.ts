@@ -2,9 +2,9 @@ import { errorKind, errorMessage, isApiError } from './api'
 import { base64ToBytes } from './binary'
 import { isUnder, joinDN, normDN, sameDN, splitDN } from './dn'
 import { isSecret } from './edit'
-import { bytesToBase64, entriesToLDIF, isAttrDescription } from './ldif'
+import { base64UTF8, bytesToBase64, entriesToLDIF, isAttrDescription } from './ldif'
 import { baseName, type SchemaIndex } from './schema'
-import type { Attribute, Entry, Info, Value } from './types'
+import type { AddRequest, Attribute, Entry, Info, Value } from './types'
 
 /** The most records one import takes. */
 export const MAX_IMPORT_RECORDS = 5000
@@ -268,9 +268,30 @@ export function addFailure(e: unknown): Outcome {
   return { kind: 'failed', message: errorMessage(e) }
 }
 
-/** Whether e ends the whole run (errorKind 'auth' or 'session'). */
+/**
+ * Whether e ends the whole run: a lost token or session, a lost LDAP connection (502 network), or
+ * ldaplens out of reach (the request itself failed).
+ */
 export function endsRun(e: unknown): boolean {
-  return errorKind(e) !== 'other'
+  if (!isApiError(e)) return true
+  const kind = errorKind(e)
+  return kind === 'auth' || kind === 'session' || e.code === 'network' || e.code === 'offline'
+}
+
+/** The add request for item: an attribute with a binary value goes all in base64, as the server takes one encoding per attribute. */
+export function addRequest(item: PlanItem): AddRequest {
+  return {
+    dn: item.dn,
+    attributes: (item.entry.attributes ?? []).map(({ name, values = [] }) =>
+      values.some((v) => v.base64)
+        ? {
+            name,
+            values: values.map((v) => (v.base64 ? v.text : base64UTF8(v.text))),
+            base64: true,
+          }
+        : { name, values: values.map((v) => v.text) },
+    ),
+  }
 }
 
 /** The failed and not-imported records in plan order, as entriesToLDIF writes them. */

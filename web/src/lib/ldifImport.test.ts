@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ApiError } from './api'
 import {
   addFailure,
+  addRequest,
   commonBase,
   defaultTarget,
   endsRun,
@@ -412,6 +413,33 @@ describe('endsRun', () => {
     expect(endsRun(new ApiError(401, { code: 'unauthorized', message: '' }))).toBe(true)
     expect(endsRun(new ApiError(401, { code: 'not_connected', message: '' }))).toBe(true)
     expect(endsRun(new ApiError(409, { code: 'conflict', message: '' }))).toBe(false)
+  })
+
+  it('is true for a lost LDAP connection and an unreachable ldaplens, false for a refusal', () => {
+    expect(endsRun(new ApiError(502, { code: 'network', message: '' }))).toBe(true)
+    expect(endsRun(new ApiError(0, { code: 'offline', message: '' }))).toBe(true)
+    expect(endsRun(new TypeError('Failed to fetch'))).toBe(true)
+    expect(endsRun(new ApiError(422, { code: 'rejected', message: '' }))).toBe(false)
+    expect(endsRun(new ApiError(502, { code: 'ldap_error', message: '' }))).toBe(false)
+  })
+})
+
+describe('addRequest', () => {
+  it('sends text values as text and an attribute with a binary value all in base64', () => {
+    const entry = {
+      dn: 'uid=a,dc=corp',
+      attributes: [
+        { name: 'cn', values: [{ text: 'Анна' }] },
+        { name: 'jpegPhoto', values: [{ text: '/9j/', base64: true }, { text: 'x' }] },
+      ],
+    }
+    expect(addRequest({ ...item('uid=a,dc=corp'), entry })).toStrictEqual({
+      dn: 'uid=a,dc=corp',
+      attributes: [
+        { name: 'cn', values: ['Анна'] },
+        { name: 'jpegPhoto', values: ['/9j/', 'eA=='], base64: true },
+      ],
+    })
   })
 })
 
