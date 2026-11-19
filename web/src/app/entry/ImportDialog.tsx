@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, errorMessage } from '../../lib/api'
+import { api, errorKind, errorMessage } from '../../lib/api'
 import { visible, type Tone } from '../../lib/display'
 import { parentDN, rdnDisplay, sameDN, splitDN } from '../../lib/dn'
 import {
@@ -138,7 +138,8 @@ export function ImportDialog({ here, close }: { here?: string; close: () => void
     () => records && planImport(records, from, to, ws.schema),
     [records, from, to, ws.schema],
   )
-  // By PlanItem.dn, in the order they came; null until Import.
+  // By PlanItem.dn, in the order they came; null until Import. A repeated DN (planImport gives it
+  // its first record's spelling) keeps the first record's outcome.
   const [outcomes, setOutcomes] = useState<Map<string, Outcome> | null>(null)
   const [current, setCurrent] = useState('')
   const [running, setRunning] = useState(false)
@@ -181,6 +182,7 @@ export function ImportDialog({ here, close }: { here?: string; close: () => void
     setRunning(true)
     const done = new Map<string, Outcome>()
     setOutcomes(done)
+    let end: unknown = null
     let i = 0
     for (; i < items.length && !stop.current; i++) {
       const item = items[i]
@@ -194,21 +196,28 @@ export function ImportDialog({ here, close }: { here?: string; close: () => void
           o = addFailure(e)
           if (endsRun(e)) {
             stop.current = true
+            end = e
             setEnded(e)
           }
         }
       }
-      done.set(item.dn, o)
+      if (!done.has(item.dn)) done.set(item.dn, o)
       // ponytail: a copy per entry, O(n^2) at 5000 next to 5000 adds; a ref and a counter if it shows.
       setOutcomes(new Map(done))
     }
     // Not tried: unsupported or below a failed entry as before, else stopped.
     for (; i < items.length; i++)
-      done.set(items[i].dn, precheck(items[i], done) ?? { kind: 'not-imported', reason: 'stopped' })
+      if (!done.has(items[i].dn))
+        done.set(
+          items[i].dn,
+          precheck(items[i], done) ?? { kind: 'not-imported', reason: 'stopped' },
+        )
     setOutcomes(new Map(done))
     setCurrent('')
     setRunning(false)
-    afterWrite(qc, ws.conn)
+    // After a lost session or token the refetch would leave for the reconnect screen and take the
+    // report with it; reconnecting reloads the tree anyway.
+    if (errorKind(end) === 'other') afterWrite(qc, ws.conn)
   }
 
   const supported = plan?.items.filter((i) => !i.unsupported) ?? []

@@ -173,19 +173,20 @@ export function Workspace() {
     return () => window.removeEventListener(OPEN_REVIEW, onOpen)
   }, [])
 
-  // An entry action's dialog, for the entry open when it was asked for.
+  // An entry action's dialog, for the entry open when it was asked for. An open import keeps its
+  // dialog: Mod+K works over it, and a running import must not lose its report.
   const [action, setAction] = useState<{ kind: EntryActionKind; dn: string } | null>(null)
   useEffect(() => {
     const onAction = (e: Event) => {
-      if (dn) setAction({ kind: (e as CustomEvent<EntryActionKind>).detail, dn })
+      const kind = (e as CustomEvent<EntryActionKind>).detail
+      if (dn) setAction((a) => (a?.kind === 'import' ? a : { kind, dn }))
     }
     window.addEventListener(ENTRY_ACTION, onAction)
     return () => window.removeEventListener(ENTRY_ACTION, onAction)
   }, [dn])
-  // The palette's Import LDIF…: an import action placed under here, '' for none.
+  // The palette's Import LDIF…: an import with no entry to place it under.
   useEffect(() => {
-    const onImport = (e: Event) =>
-      setAction({ kind: 'import', dn: (e as CustomEvent<{ here?: string }>).detail?.here ?? '' })
+    const onImport = () => setAction((a) => (a?.kind === 'import' ? a : { kind: 'import', dn: '' }))
     window.addEventListener(OPEN_IMPORT, onImport)
     return () => window.removeEventListener(OPEN_IMPORT, onImport)
   }, [])

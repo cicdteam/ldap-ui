@@ -343,6 +343,34 @@ Description: /9j/4AAQ
     ])
   })
 
+  it('marks a DN the file repeats after the swap, in any spelling, not supported', () => {
+    const ldif = `dn: ou=A,dc=corp,dc=com
+objectClass: organizationalUnit
+ou: A
+
+dn: OU=a, DC=Example,dc=org
+objectClass: organizationalUnit
+ou: a
+
+dn: ou=A,dc=corp,dc=com
+changetype: modify
+`
+    const plan = planImport(parseLDIF(ldif), 'dc=corp,dc=com', 'dc=example,dc=org', idx)
+    // The first record's spelling, so the run keeps one outcome per DN: the first record's.
+    expect(plan.items.map((i) => [i.dn, i.line, i.unsupported])).toStrictEqual([
+      ['ou=A,dc=example,dc=org', 1, undefined],
+      ['ou=A,dc=example,dc=org', 5, 'repeats line 1'],
+      ['ou=A,dc=example,dc=org', 9, 'changetype: modify'],
+    ])
+    // A repeat is never in the failed LDIF, though it shares the first record's outcome.
+    const outcomes = new Map<string, Outcome>([
+      ['ou=A,dc=example,dc=org', { kind: 'failed', message: 'no' }],
+    ])
+    expect(failedLDIF(plan, outcomes)).toBe(
+      'version: 1\n\ndn: ou=A,dc=example,dc=org\nobjectClass: organizationalUnit\nou: A\n',
+    )
+  })
+
   it('plans an entry whose attributes are all left out', () => {
     const ldif = 'dn: cn=x,dc=corp,dc=com\nuserPassword: s\nentryUUID: u\n'
     expect(planImport(parseLDIF(ldif), 'dc=corp,dc=com', 'dc=example,dc=org', idx)).toEqual({

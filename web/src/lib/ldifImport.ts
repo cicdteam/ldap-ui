@@ -149,7 +149,7 @@ export function rebase(dn: string, from: string, to: string): string {
 }
 
 export interface PlanItem {
-  /** After the swap. */
+  /** After the swap; a DN an earlier record has takes that record's spelling. */
   dn: string
   line: number
   /** After the swap and the filters; its dn equals PlanItem.dn. */
@@ -180,10 +180,15 @@ export function planImport(
   schema: SchemaIndex,
 ): ImportPlan {
   const inFile = new Set(records.map((r) => normDN(r.entry.dn)))
+  // The first record of each DN after the swap; a later one repeats it and is not imported.
+  const first = new Map<string, { dn: string; line: number }>()
   const leftOut = new Map<string, string>()
   let passwords = 0
   const items = records.map(({ line, entry, unsupported }): PlanItem => {
-    const dn = rebase(entry.dn, from, to)
+    let dn = rebase(entry.dn, from, to)
+    const repeats = first.get(normDN(dn))
+    if (repeats) dn = repeats.dn
+    else first.set(normDN(dn), { dn, line })
     const warnings: string[] = []
     const merged = new Map<string, Attribute>()
     const seen = new Set<string>()
@@ -226,7 +231,7 @@ export function planImport(
       dn,
       line,
       entry: { dn, attributes },
-      unsupported,
+      unsupported: unsupported ?? (repeats && `repeats line ${repeats.line}`),
       warnings: schema.available ? warnings : [],
     }
   })
@@ -298,7 +303,8 @@ export function addRequest(item: PlanItem): AddRequest {
 export function failedLDIF(plan: ImportPlan, outcomes: ReadonlyMap<string, Outcome>): string {
   const entries = plan.items
     .filter((i) => {
-      const kind = outcomes.get(i.dn)?.kind
+      // A repeat shares its first record's outcome but is never sent.
+      const kind = !i.unsupported && outcomes.get(i.dn)?.kind
       return kind === 'failed' || kind === 'not-imported'
     })
     .map((i) => i.entry)

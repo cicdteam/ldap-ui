@@ -109,11 +109,11 @@ it('lists the entry actions; rename and delete carry the staged hint', () => {
 it('Import LDIF… opens the import dialog with no entry to place it under', () => {
   const win = new EventTarget()
   vi.stubGlobal('window', win)
-  const fired: unknown[] = []
-  win.addEventListener(OPEN_IMPORT, (e) => fired.push((e as CustomEvent).detail))
+  const fired: string[] = []
+  win.addEventListener(OPEN_IMPORT, (e) => fired.push(e.type))
   expect(importLDIF.label).toBe('Import LDIF…')
   importLDIF.run()
-  expect(fired).toEqual([{}])
+  expect(fired).toEqual([OPEN_IMPORT])
 })
 
 it('Add to group asks the inspector for its add field', () => {

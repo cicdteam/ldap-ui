@@ -98,7 +98,7 @@ export const addToGroup: Action = {
 export const importLDIF: Action = {
   id: 'import',
   label: 'Import LDIF…',
-  run: () => window.dispatchEvent(new CustomEvent(OPEN_IMPORT, { detail: {} })),
+  run: fire(OPEN_IMPORT),
 }
 
 export function CommandPalette({

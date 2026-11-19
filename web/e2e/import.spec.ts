@@ -138,7 +138,7 @@ cn: No Surname
     .toMatch(new RegExp(`dn: ${person}\\n[^]*dn: ${child}\\n`))
 })
 
-test('Stop ends the run after the request in flight, a lost connection at once', async ({
+test('Stop ends the run after the request in flight, a lost connection or session at once', async ({
   page,
 }) => {
   // Answered here, so nothing is written.
@@ -163,6 +163,13 @@ test('Stop ends the run after the request in flight, a lost connection at once',
   await expect(running).toContainText('creating…')
   await page.keyboard.press('Escape')
   await expect(running).toBeVisible()
+  // The palette works over the dialog; picking another action keeps the run.
+  await palette(page, 'New child')
+  await paletteItem(page, 'New child entry').click()
+  await expect(running).toContainText('creating…')
+  await palette(page, 'Import LDIF')
+  await paletteItem(page, 'Import LDIF…').click()
+  await expect(running).toContainText('creating…')
   await running.getByRole('button', { name: 'Stop after this entry', exact: true }).click()
   release()
   const report = page.getByRole('dialog', { name: 'Import finished' })
@@ -186,6 +193,27 @@ test('Stop ends the run after the request in flight, a lost connection at once',
   await expect(report).toContainText('The import stopped: LDAP Result Code 200')
   await expect(report).toContainText('1 failed')
   await expect(report).toContainText('not imported: stopped')
+  await page.keyboard.press('Escape')
+  await expect(report).toBeHidden()
+
+  // A lost session: the report stays, with no refetch to send the page to reconnect.
+  d = await openImport(page)
+  await d.getByLabel('LDIF', { exact: true }).fill(ldif)
+  await d.getByRole('button', { name: 'Preview', exact: true }).click()
+  await page.unroute('**/entries/add')
+  const refetched: string[] = []
+  await page.route('**/api/c/demo/**', (route) => {
+    if (!route.request().url().endsWith('/entries/add')) refetched.push(route.request().url())
+    return route.fulfill({
+      status: 401,
+      json: { code: 'not_connected', message: 'connect to this profile first' },
+    })
+  })
+  await d.getByRole('button', { name: 'Import 2 entries', exact: true }).click()
+  await expect(report).toContainText('The import stopped: connect to this profile first')
+  await expect(report.getByRole('button', { name: 'Copy failed as LDIF' })).toBeVisible()
+  expect(refetched).toEqual([])
+  await expect(page).not.toHaveURL(/[?&]connect=/)
 })
 
 test('read-only profile: no Import LDIF in the palette or the actions menu', async ({ page }) => {

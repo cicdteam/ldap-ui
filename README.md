@@ -461,7 +461,8 @@ records) at once; it is not staged. A read-only profile has neither.
   browser, up to 5,000 records; nothing is written until you press Import. A
   syntax error names its line.
 - The preview places the entries under this directory: "Their base" (the
-  common base of the file's DNs) becomes "Becomes" in every DN, and in every
+  common base of the entries' parents, so the top entries keep their names)
+  becomes "Becomes" in every DN, and in every
   value of a DN attribute (`member`, `manager`, `seeAlso`...) under that
   base. Import LDIF here… fills Becomes with the open entry; from the palette
   it is their base itself when that already lies under the server's naming
@@ -476,8 +477,8 @@ records) at once; it is not staged. A read-only profile has neither.
   the schema does not know, a DN value under their base that is not in the
   file). Entries with warnings are still tried; the server decides.
 - Not supported, and skipped: `changetype: modify`, `delete`, `modrdn` and
-  `moddn` records (`changetype: add` is a plain record) and `attr:< URL`
-  values.
+  `moddn` records (`changetype: add` is a plain record), `attr:< URL`
+  values, and a record whose DN an earlier record has ("repeats line N").
 - The import creates one entry at a time. An entry that already exists is
   skipped, never changed. A failure does not stop the run, but the entries
   below a failed one are not imported. "Stop after this entry" ends it after
