@@ -16,7 +16,7 @@ export default function setup(): void {
   mkdirSync(TMP, { recursive: true })
   writeFileSync(join(TMP, 'e2e.ldif'), fixtureLDIF())
   compose('down', '-v')
-  compose('up', '-d', '--wait')
+  compose('up', '-d', '--build', '--wait')
   // up --wait already waited for Samba's healthcheck (an LDAPS bind). The bind is probed again,
   // retried for up to 30 s, so that ldapadd, which runs once per LDIF, finds Samba answering.
   for (let i = 0; ; i++) {

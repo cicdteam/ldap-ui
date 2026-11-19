@@ -4,21 +4,16 @@
 name: ldaplens-demo
 services:
   openldap:
-    image: bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed
+    build: ./openldap
     ports:
       - "127.0.0.1:1389:1389" # for local UI development, see README
-    environment:
-      LDAP_ADMIN_USERNAME: admin
-      LDAP_ADMIN_PASSWORD: adminpassword
-      LDAP_ROOT: dc=example,dc=org
-      LDAP_CUSTOM_LDIF_DIR: /ldifs
     volumes:
       # The file, not the directory: the image loads every .ldif in /ldifs.
       - ./demo-ldif/demo.ldif:/ldifs/demo.ldif:ro
     healthcheck:
-      # The image loads the LDIF into a temporary slapd, stops it, then execs
-      # the final slapd as PID 1: only that one counts as ready.
-      test: ["CMD-SHELL", "grep -qx slapd /proc/1/comm && ldapsearch -x -H ldap://localhost:1389 -b ou=people,dc=example,dc=org -s base dn >/dev/null"]
+      # The image loads the LDIF before slapd listens: the first answer means
+      # the data is there.
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:1389 -b ou=people,dc=example,dc=org -s base dn >/dev/null"]
       interval: 1s
       timeout: 5s
       retries: 90
