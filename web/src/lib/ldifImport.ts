@@ -1,6 +1,9 @@
 import { base64ToBytes } from './binary'
+import { isUnder, joinDN, normDN, sameDN, splitDN } from './dn'
+import { isSecret } from './edit'
 import { bytesToBase64, isAttrDescription } from './ldif'
-import type { Attribute, Entry, Value } from './types'
+import { baseName, type SchemaIndex } from './schema'
+import type { Attribute, Entry, Info, Value } from './types'
 
 /** The most records one import takes. */
 export const MAX_IMPORT_RECORDS = 5000
@@ -113,4 +116,125 @@ export function parseLDIF(text: string): LdifRecord[] {
     }
   }
   return records
+}
+
+/** Longest common suffix of the DNs, by RDN, in the first DN's spelling; '' when none. */
+export function commonBase(dns: string[]): string {
+  const rdns = splitDN(dns[0] ?? '')
+  for (let i = 0; i < rdns.length; i++) {
+    const base = joinDN(rdns.slice(i))
+    if (dns.every((dn) => isUnder(dn, base))) return base
+  }
+  return ''
+}
+
+/** "Becomes" default: here if given; else from itself when it lies under a naming context (or baseDN); else the first naming context, else baseDN. */
+export function defaultTarget(
+  from: string,
+  info: Pick<Info, 'namingContexts' | 'baseDN'>,
+  here?: string,
+): string {
+  if (here) return here
+  const bases = [...(info.namingContexts ?? []), info.baseDN].filter(Boolean)
+  if (bases.some((b) => isUnder(from, b))) return from
+  return bases[0] ?? ''
+}
+
+/** dn with its from suffix replaced by to; dn unchanged when not under from or from equals to. */
+export function rebase(dn: string, from: string, to: string): string {
+  if (!isUnder(dn, from) || sameDN(from, to)) return dn
+  const rdns = splitDN(dn)
+  return joinDN([...rdns.slice(0, rdns.length - splitDN(from).length), ...splitDN(to)])
+}
+
+export interface PlanItem {
+  /** After the swap. */
+  dn: string
+  line: number
+  /** After the swap and the filters; its dn equals PlanItem.dn. */
+  entry: Entry
+  unsupported?: string
+  warnings: string[]
+}
+
+export interface ImportPlan {
+  /** Creation order: DN depth, stable; unsupported items included. */
+  items: PlanItem[]
+  /** Server-managed attribute names, first spelling, sorted. */
+  leftOut: string[]
+  /** Secret values dropped. */
+  passwords: number
+}
+
+/**
+ * Swaps from for to in every DN and in DN-valued text values under from, leaves out secret and
+ * server-managed attributes, merges attribute spellings that differ only in case (a server refuses
+ * an add that gives a type twice) and orders parents first. Warnings need a schema and read nothing
+ * from the server.
+ */
+export function planImport(
+  records: LdifRecord[],
+  from: string,
+  to: string,
+  schema: SchemaIndex,
+): ImportPlan {
+  const inFile = new Set(records.map((r) => normDN(r.entry.dn)))
+  const leftOut = new Map<string, string>()
+  let passwords = 0
+  const items = records.map(({ line, entry, unsupported }): PlanItem => {
+    const dn = rebase(entry.dn, from, to)
+    const warnings: string[] = []
+    const merged = new Map<string, Attribute>()
+    const seen = new Set<string>()
+    for (const a of entry.attributes ?? []) {
+      const key = a.name.toLowerCase()
+      if (isSecret(a.name, schema)) {
+        passwords += a.values?.length ?? 0
+        continue
+      }
+      if (schema.attr(a.name)?.noUserModification || schema.isOperational(a.name)) {
+        if (!leftOut.has(key)) leftOut.set(key, a.name)
+        continue
+      }
+      let m = merged.get(key)
+      if (!m) {
+        merged.set(key, (m = { name: a.name, values: [] }))
+        if (!schema.attr(a.name)) warnings.push(`attribute ${a.name} not in schema`)
+      }
+      const isDN = schema.isDN(a.name)
+      for (const v of a.values ?? []) {
+        // Base64 values are binary, never a DN to swap.
+        const swap = isDN && !v.base64 && isUnder(v.text, from)
+        const out = swap ? { text: rebase(v.text, from, to) } : v
+        const id = `${key}\n${out.base64 ? 'b' : 't'}${out.text}`
+        if (seen.has(id)) continue
+        seen.add(id)
+        m.values?.push(out)
+        if (swap && !inFile.has(normDN(v.text)))
+          warnings.push(`${a.name} outside the import: ${out.text}`)
+      }
+    }
+    const attributes = [...merged.values()]
+    const classes =
+      attributes.find((a) => baseName(a.name) === 'objectclass')?.values?.map((v) => v.text) ?? []
+    const have = new Set(attributes.map((a) => schema.key(a.name)))
+    for (const k of schema.allowed(classes).must)
+      if (!have.has(k))
+        warnings.push(`missing ${schema.attr(k)?.names?.[0] ?? k}, required by its object classes`)
+    return {
+      dn,
+      line,
+      entry: { dn, attributes },
+      unsupported,
+      warnings: schema.available ? warnings : [],
+    }
+  })
+  items.sort((a, b) => splitDN(a.dn).length - splitDN(b.dn).length)
+  return {
+    items,
+    leftOut: [...leftOut.values()].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }),
+    ),
+    passwords,
+  }
 }

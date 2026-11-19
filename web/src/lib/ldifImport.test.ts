@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { LdifSyntaxError, parseLDIF } from './ldifImport'
+import {
+  commonBase,
+  defaultTarget,
+  LdifSyntaxError,
+  parseLDIF,
+  planImport,
+  rebase,
+} from './ldifImport'
+import { SchemaIndex } from './schema'
+import { directorySchema } from './schema.fixture'
+
+const idx = new SchemaIndex(directorySchema)
 
 const clean = `version: 1
 # Export of dc=corp,dc=com
@@ -119,5 +130,224 @@ cn: c
     expect(err).toBeInstanceOf(LdifSyntaxError)
     expect((err as LdifSyntaxError).line).toBe(line)
     expect((err as LdifSyntaxError).message).toMatch(new RegExp(`^Line ${line}: `))
+  })
+})
+
+describe('commonBase', () => {
+  it('is the longest common suffix, in the first DN spelling', () => {
+    expect(commonBase(['uid=a,ou=Staff,dc=corp,dc=com', 'ou=Staff,dc=corp,dc=com'])).toBe(
+      'ou=Staff,dc=corp,dc=com',
+    )
+    expect(commonBase(['uid=a,DC=Corp, DC=com', 'uid=b,dc=corp,dc=com'])).toBe('DC=Corp,DC=com')
+  })
+
+  it('is empty for two different trees or no DNs', () => {
+    expect(commonBase(['dc=corp,dc=com', 'dc=example,dc=org'])).toBe('')
+    expect(commonBase([])).toBe('')
+  })
+})
+
+describe('defaultTarget', () => {
+  const info = { namingContexts: ['dc=example,dc=org'], baseDN: 'dc=example,dc=org' }
+
+  it.each([
+    ['a base outside the directory', 'dc=corp,dc=com', undefined, 'dc=example,dc=org'],
+    [
+      'a base inside a naming context',
+      'ou=x,dc=example,dc=org',
+      undefined,
+      'ou=x,dc=example,dc=org',
+    ],
+    ['here', 'dc=corp,dc=com', 'ou=People,dc=example,dc=org', 'ou=People,dc=example,dc=org'],
+  ])('picks the target for %s', (_, from, here, want) => {
+    expect(defaultTarget(from, info, here)).toBe(want)
+  })
+
+  it('falls back to baseDN without naming contexts', () => {
+    expect(defaultTarget('dc=corp,dc=com', { baseDN: 'dc=example,dc=org' })).toBe(
+      'dc=example,dc=org',
+    )
+  })
+})
+
+describe('rebase', () => {
+  it('swaps the suffix whatever its case and spacing', () => {
+    expect(rebase('uid=a,DC=Corp, DC=com', 'dc=corp,dc=com', 'dc=example,dc=org')).toBe(
+      'uid=a,dc=example,dc=org',
+    )
+  })
+
+  it('keeps a DN outside from, and any DN when from equals to', () => {
+    expect(rebase('uid=a,dc=other,dc=net', 'dc=corp,dc=com', 'dc=example,dc=org')).toBe(
+      'uid=a,dc=other,dc=net',
+    )
+    expect(rebase('uid=a, dc=corp,dc=com', 'dc=corp,dc=com', 'DC=Corp,DC=com')).toBe(
+      'uid=a, dc=corp,dc=com',
+    )
+  })
+})
+
+const corp = `dn: uid=mkovacs,ou=Staff,dc=corp,dc=com
+objectClass: inetOrgPerson
+uid: mkovacs
+cn: Marta Kovacs
+sn: Kovacs
+userPassword: {SSHA}x2Gm9q0r
+userPassword: {SSHA}aT5eB3lW
+entryUUID: 6f1c0e44-2b1e-103f-9a51-cb1d4b6f2a10
+
+dn: ou=Staff,dc=corp,dc=com
+objectClass: organizationalUnit
+ou: Staff
+createTimestamp: 20250311094512Z
+entryuuid: 7a2d1f55-2b1e-103f-9a51-cb1d4b6f2a10
+
+dn: cn=Ops,ou=Staff,DC=Corp,DC=com
+objectClass: groupOfNames
+cn: Ops
+member: uid=mkovacs,ou=Staff,dc=corp,dc=com
+member: uid=cfo,ou=Board,dc=other,dc=net
+
+dn: uid=old,ou=Staff,dc=corp,dc=com
+changetype: delete
+`
+
+const warned = `dn: uid=jlee,ou=Staff,dc=corp,dc=com
+objectClass: inetOrgPerson
+cn: Jin Lee
+sshPublicKey: ssh-ed25519 AAAA
+
+dn: cn=Finance,ou=Staff,dc=corp,dc=com
+objectClass: groupOfNames
+cn: Finance
+member: uid=jlee,ou=Staff,dc=corp,dc=com
+member: uid=gone,ou=Staff,dc=corp,dc=com
+member: uid=gone,ou=Staff,DC=Corp,DC=com
+`
+
+describe('planImport', () => {
+  it('swaps the base, leaves out server-managed and secret attributes and puts parents first', () => {
+    const at = (dn: string) => `${dn},ou=Staff,dc=example,dc=org`
+    expect(planImport(parseLDIF(corp), 'dc=corp,dc=com', 'dc=example,dc=org', idx)).toEqual({
+      items: [
+        {
+          dn: 'ou=Staff,dc=example,dc=org',
+          line: 10,
+          entry: {
+            dn: 'ou=Staff,dc=example,dc=org',
+            attributes: [
+              { name: 'objectClass', values: [{ text: 'organizationalUnit' }] },
+              { name: 'ou', values: [{ text: 'Staff' }] },
+            ],
+          },
+          warnings: [],
+        },
+        {
+          dn: at('uid=mkovacs'),
+          line: 1,
+          entry: {
+            dn: at('uid=mkovacs'),
+            attributes: [
+              { name: 'objectClass', values: [{ text: 'inetOrgPerson' }] },
+              { name: 'uid', values: [{ text: 'mkovacs' }] },
+              { name: 'cn', values: [{ text: 'Marta Kovacs' }] },
+              { name: 'sn', values: [{ text: 'Kovacs' }] },
+            ],
+          },
+          warnings: [],
+        },
+        {
+          dn: at('cn=Ops'),
+          line: 16,
+          entry: {
+            dn: at('cn=Ops'),
+            attributes: [
+              { name: 'objectClass', values: [{ text: 'groupOfNames' }] },
+              { name: 'cn', values: [{ text: 'Ops' }] },
+              {
+                name: 'member',
+                values: [{ text: at('uid=mkovacs') }, { text: 'uid=cfo,ou=Board,dc=other,dc=net' }],
+              },
+            ],
+          },
+          warnings: [],
+        },
+        {
+          dn: at('uid=old'),
+          line: 22,
+          entry: { dn: at('uid=old'), attributes: [] },
+          unsupported: 'changetype: delete',
+          warnings: [],
+        },
+      ],
+      leftOut: ['createTimestamp', 'entryUUID'],
+      passwords: 2,
+    })
+  })
+
+  it('warns of a missing MUST, an attribute not in the schema and a member not in the file', () => {
+    const [jlee, finance] = planImport(
+      parseLDIF(warned),
+      'dc=corp,dc=com',
+      'dc=example,dc=org',
+      idx,
+    ).items
+    expect(jlee.warnings).toStrictEqual([
+      'attribute sshPublicKey not in schema',
+      'missing sn, required by its object classes',
+    ])
+    expect(finance.warnings).toStrictEqual([
+      'member outside the import: uid=gone,ou=Staff,dc=example,dc=org',
+    ])
+    expect(finance.entry.attributes?.at(-1)?.values).toStrictEqual([
+      { text: 'uid=jlee,ou=Staff,dc=example,dc=org' },
+      { text: 'uid=gone,ou=Staff,dc=example,dc=org' },
+    ])
+  })
+
+  it('gives no warnings without a schema', () => {
+    const plan = planImport(
+      parseLDIF(warned),
+      'dc=corp,dc=com',
+      'dc=example,dc=org',
+      new SchemaIndex(undefined),
+    )
+    expect(plan.items.flatMap((i) => i.warnings)).toStrictEqual([])
+  })
+
+  it('merges attribute spellings that differ only in case and drops repeated values', () => {
+    const ldif = `dn: cn=x,dc=corp,dc=com
+objectClass: top
+objectclass: device
+objectClass: device
+CN: x
+cn: x
+cn: X
+cn;lang-de: x
+description:: /9j/4AAQ
+Description: /9j/4AAQ
+`
+    expect(planImport(parseLDIF(ldif), '', '', idx).items[0].entry.attributes).toStrictEqual([
+      { name: 'objectClass', values: [{ text: 'top' }, { text: 'device' }] },
+      { name: 'CN', values: [{ text: 'x' }, { text: 'X' }] },
+      { name: 'cn;lang-de', values: [{ text: 'x' }] },
+      { name: 'description', values: [{ text: '/9j/4AAQ', base64: true }, { text: '/9j/4AAQ' }] },
+    ])
+  })
+
+  it('plans an entry whose attributes are all left out', () => {
+    const ldif = 'dn: cn=x,dc=corp,dc=com\nuserPassword: s\nentryUUID: u\n'
+    expect(planImport(parseLDIF(ldif), 'dc=corp,dc=com', 'dc=example,dc=org', idx)).toEqual({
+      items: [
+        {
+          dn: 'cn=x,dc=example,dc=org',
+          line: 1,
+          entry: { dn: 'cn=x,dc=example,dc=org', attributes: [] },
+          warnings: [],
+        },
+      ],
+      leftOut: ['entryUUID'],
+      passwords: 1,
+    })
   })
 })
