@@ -93,6 +93,45 @@ func TestParseArgsSecureCookies(t *testing.T) {
 	}
 }
 
+func TestParseArgsNotice(t *testing.T) {
+	// Multibyte runes show that the limit counts characters, not bytes.
+	full := strings.Repeat("é", 300)
+	tests := []struct {
+		name    string
+		args    []string
+		env     string
+		want    string
+		wantErr bool
+	}{
+		{name: "default", want: ""},
+		{name: "flag", args: []string{"--notice", "Public demo"}, want: "Public demo"},
+		{name: "env", env: "Public demo", want: "Public demo"},
+		{name: "flag wins over env", args: []string{"--notice", "from flag"}, env: "from env", want: "from flag"},
+		{name: "trimmed", args: []string{"--notice", " \t Public demo \n "}, want: "Public demo"},
+		{name: "only spaces", env: "   ", want: ""},
+		{name: "300 characters", args: []string{"--notice", " " + full + " "}, want: full},
+		{name: "301 characters", env: full + "é", wantErr: true},
+	}
+	for _, tc := range tests {
+		getenv := func(k string) string {
+			if k == "LDAPLENS_NOTICE" {
+				return tc.env
+			}
+			return ""
+		}
+		got, err := parseArgs(tc.args, getenv, io.Discard)
+		if tc.wantErr {
+			if err == nil || !strings.Contains(err.Error(), "--notice") || !strings.Contains(err.Error(), "300") {
+				t.Errorf("%s: parseArgs(%q) error = %v, want one naming --notice and 300", tc.name, tc.args, err)
+			}
+			continue
+		}
+		if err != nil || got.notice != tc.want {
+			t.Errorf("%s: parseArgs(%q) notice = %q, %v, want %q, nil", tc.name, tc.args, got.notice, err, tc.want)
+		}
+	}
+}
+
 func TestParseArgsSessionIdle(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cicdteam/ldaplens/internal/api"
 	"github.com/cicdteam/ldaplens/internal/ldapx"
@@ -66,6 +67,7 @@ type config struct {
 	sessionIdle   time.Duration
 	sessionMaxAge time.Duration
 	secureCookies bool
+	notice        string
 	showVersion   bool
 
 	trustedProxies []netip.Prefix
@@ -158,6 +160,7 @@ func parseArgs(args []string, getenv func(string) string, usage io.Writer) (conf
 	fs.StringVar(&proxies, "trusted-proxies", env("LDAPLENS_TRUSTED_PROXIES", ""),
 		"CIDRs or IPs of reverse proxies whose X-Forwarded-For is trusted for the client address, comma-separated (env LDAPLENS_TRUSTED_PROXIES)")
 	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure on every request; TLS and X-Forwarded-Proto: https do so without it (env LDAPLENS_SECURE_COOKIES)")
+	fs.StringVar(&c.notice, "notice", env("LDAPLENS_NOTICE", ""), "plain-text message shown above the header on every page, at most 300 characters (env LDAPLENS_NOTICE)")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -229,6 +232,10 @@ func parseArgs(args []string, getenv func(string) string, usage io.Writer) (conf
 	c.basePath = strings.TrimRight(c.basePath, "/")
 	if c.basePath != "" && path.Clean(c.basePath) != c.basePath {
 		return config{}, fmt.Errorf("--base-path %q: want a path without . or .. segments", c.basePath)
+	}
+	c.notice = strings.TrimSpace(c.notice)
+	if n := utf8.RuneCountInString(c.notice); n > 300 {
+		return config{}, fmt.Errorf("--notice: %d characters, want at most 300", n)
 	}
 	// The token is a secret, so the error does not echo it.
 	if c.authToken != "" && !authTokenPattern.MatchString(c.authToken) {
@@ -410,7 +417,7 @@ func runTo(args []string, stdout io.Writer) error {
 		Catalog: catalog, Dial: dial, Sessions: sessions, Shared: shared,
 		AllowedHosts: cfg.allowedHosts, AuthToken: cfg.authToken, BasePath: cfg.basePath,
 		SecureCookies: cfg.secureCookies, TrustedProxies: cfg.trustedProxies,
-		Server: cfg.mode == modeServer, UI: web.Dist(), Logger: logger,
+		Notice: cfg.notice, Server: cfg.mode == modeServer, UI: web.Dist(), Logger: logger,
 	}))
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.listen)
 	if err != nil {

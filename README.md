@@ -586,6 +586,7 @@ know at its next save.
 | `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | both | `8h` |
 | `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | both | `false`; TLS and `X-Forwarded-Proto: https` make cookies Secure without it (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
 | `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | both | none; comma-separated CIDRs or IPs of reverse proxies whose `X-Forwarded-For` is trusted for the client address (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
+| `--notice` | `LDAPLENS_NOTICE` | both | none; a plain-text message shown above the header on every page, trimmed, at most 300 characters (a longer one is a startup error) |
 | `--version` | | both | prints `ldaplens <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
@@ -823,6 +824,9 @@ service.
   garbage collector work harder near the limit, which makes an OOM kill
   less likely, but it does not prevent one when live memory exceeds the
   limit. An OOM kill ends the sessions on that pod.
+- **A notice** for everyone, such as
+  `--notice "Public demo: changes are reset every 15 minutes."`, shows as a
+  strip above the header on every page, the sign-in page included.
 
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
