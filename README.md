@@ -262,7 +262,8 @@ docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{
   limit, or one past ldaplens's cap of 64 MiB of attribute values, shows
   what arrived and is marked truncated ("The search stopped early"). One
   server message (an entry) over 64 MiB fails the request instead. Recent and saved
-  searches are kept per connection in the browser. A filter can test a
+  searches are kept per connection in the browser; the same popover lists
+  Examples (people, groups, OUs, or disabled accounts on Active Directory). A filter can test a
   password or secret attribute for presence (`(userPassword=*)`) but not
   match on its values: equality, substring, ordering, approximate and
   extensible matches on one, and extensible matches without an attribute
@@ -366,7 +367,8 @@ on non-Latin keyboard layouts.
 - **Review** (⌘S / Ctrl+S, Review on the pending changes bar, or the command
   palette) names the profile and the server the batch goes to and shows it
   as LDIF to read or copy; **Apply to** and the profile's name (Apply to
-  demo) writes it. A read-only profile (`readOnly: true`) has no Edit, and
+  demo) writes it. Discard all asks first, like Discard on the bar. A
+  read-only profile (`readOnly: true`) has no Edit, and
   the server refuses its writes.
 - If an entry changed since you read it, the apply stops at that entry:
   "Reload entry" marks the staged changes that no longer fit as stale,

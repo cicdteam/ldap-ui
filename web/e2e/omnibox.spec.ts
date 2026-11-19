@@ -1,5 +1,5 @@
 import { BASE, e2eDN } from './fixture'
-import { blur, connect, exact, palette, queryBar, results } from './helpers'
+import { blur, connect, exact, palette, paletteItem, queryBar, results } from './helpers'
 import { expect, test } from './test'
 
 test('plain text runs a name search', async ({ page }) => {
@@ -107,6 +107,10 @@ test('Recent and saved searches: save the current search, run it again', async (
   const saved = popover.getByRole('button', { name: /^Does\s*doe\s*sub/ })
   await expect(saved).toBeVisible()
   await page.keyboard.press('Escape')
+  // The palette, too, shows the saved search by the name typed.
+  await palette(page, 'Does')
+  await expect(paletteItem(page, 'Does')).toHaveText(/^Does\s*doe$/)
+  await page.keyboard.press('Escape')
 
   await page.getByRole('button', exact('Close the list')).click()
   await expect(results(page)).toHaveCount(0)
@@ -116,6 +120,19 @@ test('Recent and saved searches: save the current search, run it again', async (
   await expect(results(page).getByRole('row', { name: /Jane Doe/ })).toBeVisible()
   await expect(page).toHaveURL(/filter=%28%7C%28cn%3D\*doe\*%29/)
   await expect(queryBar(page)).toHaveText('doe')
+})
+
+test('Examples in the searches popover run a ready filter', async ({ page }) => {
+  await connect(page, 'demo')
+  await page.getByRole('button', exact('Recent and saved searches')).click()
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: /^Groups/ })
+    .click()
+  await expect(queryBar(page)).toHaveText(
+    '(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))',
+  )
+  await expect(results(page).getByRole('row', { name: /^devs/ })).toBeVisible()
 })
 
 test('palette Run and Format, editor Shift+Alt+F, invalid filter notice', async ({ page }) => {

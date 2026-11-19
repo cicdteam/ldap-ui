@@ -22,6 +22,8 @@ export const NAME_ATTRS = ['displayName', 'cn']
  */
 export function withColumns(entries: Entry[], columns: string[]): Entry[] {
   const picked = new Set(columns.map((c) => c.toLowerCase()))
+  // `*` asked for every user attribute, the name ones included.
+  if (picked.has('*')) return entries
   const extra = new Set(NAME_ATTRS.map((a) => a.toLowerCase()).filter((a) => !picked.has(a)))
   return entries.map((e) => ({
     ...e,

@@ -38,6 +38,7 @@ test('rename and delete wait while the entry or one below it has staged changes'
   await page.keyboard.press('Escape')
 
   // Undo history does not survive the reload above; discarding in Review frees the actions.
+  page.once('dialog', (d) => void d.accept())
   await (await review(page)).getByRole('button', { name: 'Discard all' }).click()
   await page.keyboard.press('Escape')
   await page.getByRole('button', actions).click()

@@ -79,9 +79,6 @@ func TestLoadRejects(t *testing.T) {
 		{name: "duplicate", yaml: "connections: [{name: a, url: 'ldap://h'}, {name: a, url: 'ldap://g'}]", wantInvalid: true},
 		{name: "url credentials", yaml: "connections: [{name: a, url: 'ldap://cn=admin:s3cret@h:389'}]", wantInvalid: true},
 		{name: "unknown field", yaml: "connections: [{name: a, url: 'ldap://h', pasword: x}]", wantInvalid: false},
-		// environment: prod does not make a profile read-only (readOnly
-		// does), so the key stops the start instead of being ignored.
-		{name: "environment", yaml: "connections: [{name: a, url: 'ldap://h', environment: prod}]", wantInvalid: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

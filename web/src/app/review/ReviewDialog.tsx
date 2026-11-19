@@ -15,7 +15,7 @@ import { COPY_LDIF_HINT } from '../../lib/ldif'
 import { LdifView } from '../../ui/LdifView'
 import { Dialog } from '../../ui/Dialog'
 import { Spinner } from '../../ui/Spinner'
-import { applyKey, useBatch, useBatchError } from '../batch'
+import { applyKey, discardAll, useBatch, useBatchError } from '../batch'
 import { useWorkspace } from '../context'
 import { entryKey } from '../queries'
 
@@ -114,7 +114,7 @@ function Review({ applying, close }: { applying: boolean; close: () => void }) {
       {apply.isError && <ErrorBanner error={apply.error} />}
       <div className="flex items-center gap-1">
         <CopyButton text={toLDIF(batch)} label="Copy all LDIF" />
-        <Button variant="ghost" disabled={applying} onClick={() => batches.clear(conn)}>
+        <Button variant="ghost" disabled={applying} onClick={() => discardAll(conn)}>
           Discard all
         </Button>
         <span className="ml-auto">{(loading || applying) && <Spinner />}</span>

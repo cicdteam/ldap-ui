@@ -2,7 +2,7 @@ import * as Popover from '@radix-ui/react-popover'
 import { ChevronDown, Crosshair, History, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { format, fromGroup, parse, serialize, toGroup, type Group } from '../../lib/filter'
-import { defaultColumns } from '../../lib/nav'
+import { defaultColumns, exampleSearches } from '../../lib/nav'
 import { classifyQuery, nameQuery } from '../../lib/query'
 import { keys, pushHistory, type SavedSearch, type SearchState } from '../../lib/storage'
 import type { Scope } from '../../lib/types'
@@ -26,7 +26,7 @@ interface Draft {
 }
 
 // A name search shows the name typed, not its filter.
-const queryText = (s: SearchState) => nameQuery(s.filter) ?? s.filter
+export const queryText = (s: SearchState) => nameQuery(s.filter) ?? s.filter
 
 function toDraft(s: SearchState | null, fallbackColumns: string[]): Draft {
   return {
@@ -404,6 +404,19 @@ export function Omnibox() {
               <Popover.Close asChild key={i}>
                 <button type="button" className={menuItem} onClick={() => pick(s)}>
                   <SearchLine s={s} />
+                </button>
+              </Popover.Close>
+            ))}
+            <p className={heading}>Examples</p>
+            {exampleSearches(ws.info).map(([label, filter]) => (
+              <Popover.Close asChild key={label}>
+                <button
+                  type="button"
+                  className={menuItem}
+                  onClick={() => pick({ base: '', scope: 'sub', filter, attrs: columns })}
+                >
+                  <span className="block font-medium">{label}</span>
+                  <span className="block truncate font-mono text-xs">{filter}</span>
                 </button>
               </Popover.Close>
             ))}
