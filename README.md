@@ -1343,7 +1343,7 @@ fixtures, not secrets; the CA key was discarded).
 UI development with hot reload:
 
 ```sh
-docker compose -f deploy/docker-compose.yml up -d openldap
+docker compose -f deploy/docker-compose.yml up -d --build openldap
 DEMO_LDAP_PASSWORD=adminpassword go run ./cmd/ldaplens --config deploy/connections.dev.yaml
 cd web && npm ci && npm run dev   # http://localhost:5173, /api is proxied to :8080
 ```

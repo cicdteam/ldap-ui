@@ -9,7 +9,6 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/google/go-cmp v0.7.0
 	github.com/testcontainers/testcontainers-go v0.45.0
-	github.com/testcontainers/testcontainers-go/modules/openldap v0.45.0
 	go.yaml.in/yaml/v3 v3.0.6
 )
 

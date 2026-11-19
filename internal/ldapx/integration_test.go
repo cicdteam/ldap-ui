@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"os"
 	"slices"
 	"strings"
@@ -32,19 +33,18 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/testcontainers/testcontainers-go"
 	tclog "github.com/testcontainers/testcontainers-go/log"
-	"github.com/testcontainers/testcontainers-go/modules/openldap"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/cicdteam/ldaplens/internal/profile"
 	"github.com/cicdteam/ldaplens/internal/schema"
 )
 
 const (
-	openLDAPImage = "bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed"
-	testBase      = "dc=example,dc=org"
-	testPeople    = "ou=people," + testBase
-	testGroups    = "ou=groups," + testBase
-	testUsers     = 2000
-	testBigGroup  = testUsers
+	testBase     = "dc=example,dc=org"
+	testPeople   = "ou=people," + testBase
+	testGroups   = "ou=groups," + testBase
+	testUsers    = 2000
+	testBigGroup = testUsers
 	// testSpecialDN has an escaped comma, a slash and non-ASCII text.
 	testSpecialDN = `cn=Smith\, John/Jr Ünal,` + "ou=people," + testBase
 )
@@ -89,22 +89,38 @@ func runWithServers(m *testing.M) int {
 // container for termination even when it fails later, and an error carries
 // the tail of the container log.
 func startOpenLDAP(ctx context.Context) (_ testcontainers.Container, err error) {
-	// The seed owns the whole tree: since 2.6.10 the image's default tree has
-	// an ou=groups of its own.
-	ctr, err := openldap.Run(ctx, openLDAPImage,
-		testcontainers.WithEnv(map[string]string{"LDAP_SKIP_DEFAULT_TREE": "yes"}))
+	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			// Kept under one name: the next run reuses the build instead of
+			// installing slapd again.
+			FromDockerfile: testcontainers.FromDockerfile{
+				Context: "../../deploy/openldap", Repo: "ldaplens-openldap", Tag: "test", KeepImage: true,
+			},
+			ExposedPorts: []string{"1389/tcp"},
+			Files: []testcontainers.ContainerFile{
+				{Reader: strings.NewReader(seedLDIF()), ContainerFilePath: "/ldifs/seed.ldif", FileMode: 0o644},
+			},
+			// slapd listens only once the seed is loaded. Generous for a slow
+			// CI runner.
+			WaitingFor: wait.ForListeningPort("1389/tcp").WithStartupTimeout(2 * time.Minute),
+		},
+		Started: true,
+	})
 	if ctr != nil {
 		defer func() { err = withLogTail(ctx, ctr, err) }()
 	}
 	if err != nil {
 		return ctr, fmt.Errorf("start openldap: %w", err)
 	}
-	if testURL, err = ctr.ConnectionString(ctx); err != nil {
-		return ctr, fmt.Errorf("openldap url: %w", err)
+	host, err := ctr.Host(ctx)
+	if err != nil {
+		return ctr, fmt.Errorf("openldap host: %w", err)
 	}
-	if err := ctr.LoadLdif(ctx, []byte(seedLDIF())); err != nil {
-		return ctr, fmt.Errorf("seed openldap: %w", err)
+	port, err := ctr.MappedPort(ctx, "1389/tcp")
+	if err != nil {
+		return ctr, fmt.Errorf("openldap port: %w", err)
 	}
+	testURL = "ldap://" + net.JoinHostPort(host, port.Port())
 	return ctr, nil
 }
 

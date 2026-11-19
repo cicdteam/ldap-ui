@@ -18,13 +18,15 @@ updates:
       - dependency-name: typescript
         update-types: [version-update:semver-major, version-update:semver-minor]
   - package-ecosystem: docker
-    directory: /deploy
+    directories: [/deploy, /deploy/openldap]
     schedule: {interval: weekly}
   - package-ecosystem: docker-compose
     directories: [/deploy, /deploy/e2e]
     schedule: {interval: weekly}
-    # One PR for both files. internal/ldapx/integration_test.go pins the same
-    # openldap image and Dependabot does not see it: bump it in the same PR.
+    # One PR for both files. The integration tests build the same
+    # deploy/openldap Dockerfile, so nothing else pins an OpenLDAP image.
+    # internal/ldapx/ad_integration_test.go pins the same smblds image (adImage)
+    # and Dependabot does not see it: bump it in the same PR.
     groups:
       compose: {patterns: ["*"]}
   - package-ecosystem: github-actions

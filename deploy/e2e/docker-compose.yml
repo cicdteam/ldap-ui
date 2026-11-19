@@ -1,24 +1,19 @@
 # OpenLDAP and Samba AD for the Playwright e2e run (make e2e). The data is
-# recreated on every run: global setup runs `down -v` then `up --wait`, then
-# seeds Samba.
+# recreated on every run: global setup runs `down -v` then `up --build --wait`,
+# then seeds Samba.
 name: ldaplens-e2e
 services:
   openldap:
-    image: bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed
+    build: ../openldap
     ports:
       - "127.0.0.1:1390:1389"
-    environment:
-      LDAP_ADMIN_USERNAME: admin
-      LDAP_ADMIN_PASSWORD: adminpassword
-      LDAP_ROOT: dc=example,dc=org
-      LDAP_CUSTOM_LDIF_DIR: /ldifs
     volumes:
       - ../demo-ldif/demo.ldif:/ldifs/00-demo.ldif:ro
       - ../../web/e2e/.tmp/e2e.ldif:/ldifs/10-e2e.ldif:ro
     healthcheck:
-      # The image loads the LDIFs into a temporary slapd, stops it, then execs
-      # the final slapd as PID 1: only that one counts as ready.
-      test: ["CMD-SHELL", "grep -qx slapd /proc/1/comm && ldapsearch -x -H ldap://localhost:1389 -b cn=huge,ou=groups,dc=example,dc=org -s base dn >/dev/null"]
+      # The image loads the LDIFs before slapd listens: the first answer means
+      # the data is there.
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:1389 -b cn=huge,ou=groups,dc=example,dc=org -s base dn >/dev/null"]
       interval: 1s
       timeout: 5s
       retries: 90
