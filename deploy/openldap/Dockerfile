@@ -9,8 +9,10 @@ RUN apt-get update \
 COPY slapd.conf /etc/ldap/slapd.conf
 USER openldap
 EXPOSE 1389
-# Loads every /ldifs/*.ldif before slapd listens, so a bad LDIF stops the
-# container. No "already loaded" check: the containers are recreated, never
-# restarted. -d none keeps slapd in the foreground, logging its errors but not
-# every request (the healthcheck runs every second).
-CMD ["sh", "-ec", "for f in /ldifs/*.ldif; do [ -e \"$f\" ] && slapadd -f /etc/ldap/slapd.conf -l \"$f\"; done; exec slapd -d none -f /etc/ldap/slapd.conf -h ldap://:1389/"]
+# slapd sizes its connection table from the open files limit: 1048576 (Docker
+# Desktop) costs about 690 MiB idle, and an unlimited one can fail the start.
+# Every start empties the database and loads every /ldifs/*.ldif before slapd
+# listens, so a restart resets the data and a bad LDIF stops the container.
+# -d none keeps slapd in the foreground, logging its errors but not every
+# request (the healthcheck runs every second).
+CMD ["sh", "-ec", "ulimit -n 1024; rm -f /var/lib/ldap/*.mdb; for f in /ldifs/*.ldif; do [ -e \"$f\" ] && slapadd -f /etc/ldap/slapd.conf -l \"$f\"; done; exec slapd -d none -f /etc/ldap/slapd.conf -h ldap://:1389/"]
