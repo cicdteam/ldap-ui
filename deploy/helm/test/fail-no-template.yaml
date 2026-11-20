@@ -1,0 +1,4 @@
+# expect: connections[0] (anonymous): set bindDNTemplate
+connections:
+  - name: anonymous
+    url: ldaps://ldap.corp.example:636

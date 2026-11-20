@@ -7,15 +7,17 @@ GOFUMPT_MIN := 0.7.0
 GOIMPORTS_VERSION := 0.52.0
 GOLANGCI_LINT_MIN := 2.15.0
 GOVULNCHECK_MIN := 1.9.0
+HELM_MIN := 4.3.2
+KUBECONFORM_MIN := 0.8.0
 # Dependabot does not see GO_IMAGE: bump it with the Dockerfile's golang line.
 GO_IMAGE := golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf
 IMAGE ?= ldaplens:dev
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # VERSION is exported so recipes quote it as "$$VERSION": the shell never parses a tag name.
-export GOFUMPT_MIN GOIMPORTS_VERSION GOLANGCI_LINT_MIN GOVULNCHECK_MIN GO_IMAGE VERSION
+export GOFUMPT_MIN GOIMPORTS_VERSION GOLANGCI_LINT_MIN GOVULNCHECK_MIN HELM_MIN KUBECONFORM_MIN GO_IMAGE VERSION
 
-.PHONY: help fmt vet lint vuln test test-integration build image image-multiarch check web web-check e2e demo-start demo-stop
+.PHONY: help fmt vet lint vuln test test-integration build image image-multiarch check web web-check chart-check e2e demo-start demo-stop
 
 .DEFAULT_GOAL := help
 
@@ -54,6 +56,9 @@ web: ## Build the web UI
 web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit of production deps
 	cd web && npm ci --ignore-scripts && npm run check && npm audit --omit=dev --audit-level=high
 
+chart-check: ## Lint the Helm chart, validate its renders with kubeconform, check its refusals
+	scripts/chart-check.sh
+
 e2e: ## Run the Playwright e2e tests against OpenLDAP and Samba AD in Docker
 	cd web && npm ci --ignore-scripts && npm run e2e
 
@@ -73,7 +78,7 @@ image-multiarch: ## Build and check the image for amd64 and arm64 (IMAGE-amd64, 
 	  deploy/image-check.sh "$(IMAGE)-$$a" $$p "$$VERSION"; \
 	done
 
-check: fmt vet lint vuln test web-check ## Run every check: fmt vet lint vuln test web-check
+check: fmt vet lint vuln test web-check chart-check ## Run every check: fmt vet lint vuln test web-check chart-check
 
 demo-start: ## Start the demo: OpenLDAP and Samba AD with sample data, and ldaplens (DEMO_PORT=8080)
 	$(DEMO_COMPOSE) up -d --build --wait

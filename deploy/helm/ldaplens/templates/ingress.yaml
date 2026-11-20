@@ -1,0 +1,34 @@
+{{- if .Values.ingress.enabled -}}
+{{- if not .Values.trustedProxies -}}
+{{- fail "ingress.enabled needs trustedProxies: set it to the CIDR the ingress controller's pods run in, or every sign-in counts as one client and the login limit locks everyone out" -}}
+{{- end -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ldaplens.fullname" . }}
+  labels:
+    {{- include "ldaplens.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.host | quote }}
+      http:
+        paths:
+          # No rewrite-target: ldaplens serves under basePath itself.
+          - path: {{ .Values.basePath | default "/" }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ldaplens.fullname" . }}
+                port: {name: http}
+{{- end }}

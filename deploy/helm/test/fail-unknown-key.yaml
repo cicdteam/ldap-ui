@@ -1,0 +1,3 @@
+# expect: additional properties 'extraEnv' not allowed
+extraEnv:
+  - {name: LDAPLENS_AUTH_TOKEN, value: not-in-the-chart}

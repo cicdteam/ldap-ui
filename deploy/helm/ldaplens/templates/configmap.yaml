@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ldaplens.fullname" . }}
+  labels:
+    {{- include "ldaplens.labels" . | nindent 4 }}
+data:
+  connections.yaml: |
+    {{- include "ldaplens.connections" . | nindent 4 }}
+  {{- range $name, $pem := .Values.caCerts }}
+  {{ $name }}: |
+    {{- $pem | nindent 4 }}
+  {{- end }}
