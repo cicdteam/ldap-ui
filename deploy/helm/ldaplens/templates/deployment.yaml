@@ -1,0 +1,113 @@
+{{- $notice := trim .Values.notice -}}
+{{- $runes := len (splitList "" $notice) -}}
+{{- if gt $runes 300 -}}
+{{- fail (printf "notice is %d characters: shorten it to at most 300" $runes) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ldaplens.fullname" . }}
+  labels:
+    {{- include "ldaplens.labels" . | nindent 4 }}
+spec:
+  # A new pod is ready before an old one stops. Per-user sessions end with
+  # their pod.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "ldaplens.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ldaplens.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # connections.yaml is read at startup: a change rolls the pods.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # ldaplens waits up to 25 s for running requests after SIGTERM.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: ldaplens
+          image: {{ include "ldaplens.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [server, --config=/etc/ldaplens/config/connections.yaml]
+          env:
+            - {name: LDAPLENS_ALLOWED_HOSTS, value: {{ required "host is required: set it to the host name users open, such as ldaplens.corp.example" .Values.host | quote }}}
+            {{- with .Values.basePath }}
+            - {name: LDAPLENS_BASE_PATH, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.trustedProxies }}
+            - {name: LDAPLENS_TRUSTED_PROXIES, value: {{ join "," . | quote }}}
+            {{- end }}
+            {{- with $notice }}
+            - {name: LDAPLENS_NOTICE, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.session.idle }}
+            - {name: LDAPLENS_SESSION_IDLE, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.session.maxAge }}
+            - {name: LDAPLENS_SESSION_MAX_AGE, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.goMemLimit }}
+            - {name: GOMEMLIMIT, value: {{ . | quote }}}
+            {{- end }}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: {{ .Values.basePath }}/readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: {{ .Values.basePath }}/healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # A directory, not subPath: a subPath file never sees an update.
+            - {name: config, mountPath: /etc/ldaplens/config, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "ldaplens.fullname" . }}}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

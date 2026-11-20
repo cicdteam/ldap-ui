@@ -1,0 +1,41 @@
+# OpenLDAP for scripts/chart-kind.sh: the deploy/openldap image, which the
+# script builds and loads into kind, seeded like deploy/docker-compose.yml
+# with deploy/demo-ldif/demo.ldif from the ConfigMap openldap-ldif, which the
+# script creates from that file. Its admin password is fixed: tests only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openldap
+spec:
+  selector:
+    matchLabels: {app: openldap}
+  template:
+    metadata:
+      labels: {app: openldap}
+    spec:
+      containers:
+        - name: openldap
+          image: ldaplens-openldap:kind
+          imagePullPolicy: Never
+          ports:
+            - {name: ldap, containerPort: 1389}
+          # The image loads every /ldifs/*.ldif before slapd listens: the
+          # first answer means the data is there.
+          readinessProbe:
+            exec:
+              command: [ldapsearch, -x, -H, "ldap://localhost:1389", -b, "ou=people,dc=example,dc=org", -s, base, dn]
+            periodSeconds: 1
+          volumeMounts:
+            - {name: ldif, mountPath: /ldifs, readOnly: true}
+      volumes:
+        - name: ldif
+          configMap: {name: openldap-ldif}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openldap
+spec:
+  selector: {app: openldap}
+  ports:
+    - {name: ldap, port: 1389, targetPort: ldap}

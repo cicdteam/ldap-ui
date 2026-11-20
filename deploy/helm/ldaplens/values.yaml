@@ -1,0 +1,111 @@
+# ldaplens in server mode with per-user profiles only: everyone signs in with
+# their own uid and password, and the chart holds no password or token.
+
+image:
+  repository: ghcr.io/cicdteam/ldaplens
+  # Empty means the chart's appVersion.
+  tag: ""
+  # sha256:..., which wins over the tag. Pin by digest in production.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Per-user sessions live in the pod that holds them, so a browser stays on one
+# pod through the Ingress affinity cookie (see ingress.annotations).
+replicaCount: 2
+
+# Required: the host name users open. ldaplens answers 403 to any other Host,
+# except localhost (kubectl port-forward). Also the Ingress host.
+host: ""
+
+# A URL prefix such as /ldap, kept by the proxy (no rewrite-target). The
+# probes and the Ingress path follow it.
+basePath: ""
+
+# CIDRs or IPs of the proxies in front of ldaplens, such as the pod network
+# the ingress controller runs in (it differs between clusters), so that their
+# X-Forwarded-For names the client. Empty, every sign-in through a proxy comes
+# from the proxy's address, and twenty wrong passwords in a minute from anyone
+# refuse everyone for the rest of it. Required with ingress.enabled.
+trustedProxies: []
+
+# Plain text shown above the header on every page, at most 300 characters.
+notice: ""
+
+session:
+  # Close LDAP connections after this much inactivity. Empty means 30m.
+  idle: ""
+  # Close each LDAP connection this long after it was connected. Empty means 8h.
+  maxAge: ""
+
+# Profiles in the connections.yaml shape. Each needs bindDNTemplate; bindDN,
+# password, passwordFile and passwordEnv are refused. caFile names a key of
+# caCerts. For example:
+#   - name: people
+#     url: ldaps://ldap.corp.example:636
+#     baseDN: dc=corp,dc=example
+#     bindDNTemplate: uid={user},ou=people,dc=corp,dc=example
+#     caFile: corp-ca.pem
+connections: []
+
+# CA certificates by file name, for the profiles' caFile. For example:
+#   corp-ca.pem: |
+#     -----BEGIN CERTIFICATE-----
+#     ...
+#     -----END CERTIFICATE-----
+caCerts: {}
+
+# About 80% of the memory limit: Go does not read the limit.
+goMemLimit: 400MiB
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 512Mi}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# A node drain or another voluntary eviction leaves this many pods running.
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Only these peers reach ldaplens: the ingress controller (ingress-nginx
+# here, adjust the labels to yours). The kubelet's probes come from the node,
+# which a NetworkPolicy does not block.
+networkPolicy:
+  enabled: true
+  from:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+      podSelector:
+        matchLabels: {app.kubernetes.io/name: ingress-nginx}
+
+service:
+  port: 80
+  # Traefik as the ingress controller sets its affinity cookie here:
+  #   traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  # For ingress-nginx. Traefik sets no body size limit or backend timeout by
+  # default and needs none of them.
+  annotations:
+    # Apply, New child and Clone send up to 8 MiB; the default is 1m.
+    nginx.ingress.kubernetes.io/proxy-body-size: 8m
+    # An Apply may run 4 minutes; the default is 60 seconds.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    # Keeps each browser on the pod that holds its connections; persistent:
+    # a scale-up, as in a rollout, moves nobody.
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/affinity-mode: persistent
+  # For example:
+  #   - hosts: [ldaplens.corp.example]
+  #     secretName: ldaplens-tls
+  tls: []

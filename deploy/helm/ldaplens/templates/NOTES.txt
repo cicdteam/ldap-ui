@@ -1,0 +1,21 @@
+ldaplens {{ .Chart.AppVersion }} runs in server mode as {{ include "ldaplens.fullname" . }} in {{ .Release.Namespace }}.
+{{- if .Values.ingress.enabled }}
+
+Open {{ ternary "https" "http" (not (empty .Values.ingress.tls)) }}://{{ .Values.host }}{{ .Values.basePath }}/
+{{- else }}
+
+Route {{ .Values.host }}{{ .Values.basePath }} to the Service {{ include "ldaplens.fullname" . }}, port http,
+keeping the path and the Host header. To try it without a proxy:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ldaplens.fullname" . }} 8080:{{ .Values.service.port }}
+
+and open http://localhost:8080{{ .Values.basePath }}/
+{{- end }}
+{{- if not .Values.trustedProxies }}
+
+WARNING: trustedProxies is empty. Behind a proxy, every sign-in then comes
+from the proxy's address: wrong passwords from everyone add up to one count,
+and twenty in a minute refuse everyone for the rest of it. Set trustedProxies
+to the proxy's addresses, such as the pod network the ingress controller
+runs in.
+{{- end }}

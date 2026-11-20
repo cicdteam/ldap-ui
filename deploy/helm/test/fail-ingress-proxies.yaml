@@ -1,0 +1,3 @@
+# expect: ingress.enabled needs trustedProxies
+ingress:
+  enabled: true

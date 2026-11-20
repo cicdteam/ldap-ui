@@ -43,16 +43,21 @@ type server struct {
 	trustedProxies []netip.Prefix
 	// serverMode is Options.Server.
 	serverMode bool
+	// notice is Options.Notice.
+	notice string
 }
 
 // mode tells the UI the mode, so that it hides what server mode does not
-// offer.
+// offer, and the notice, if any.
 func (s *server) mode(w http.ResponseWriter, _ *http.Request) {
-	mode := "local"
+	resp := map[string]string{"mode": "local"}
 	if s.serverMode {
-		mode = "server"
+		resp["mode"] = "server"
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
+	if s.notice != "" {
+		resp["notice"] = s.notice
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // profileView is a profile as the UI sees it.

@@ -1,0 +1,5 @@
+# expect: connections[0] (people-reader): remove bindDN
+connections:
+  - name: people-reader
+    url: ldaps://ldap.corp.example:636
+    bindDN: cn=ldaplens-reader,ou=services,dc=corp,dc=example

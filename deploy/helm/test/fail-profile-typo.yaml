@@ -1,0 +1,6 @@
+# expect: additional properties 'baseDn' not allowed
+connections:
+  - name: people
+    url: ldaps://ldap.corp.example:636
+    baseDn: dc=corp,dc=example
+    bindDNTemplate: uid={user},ou=people,dc=corp,dc=example

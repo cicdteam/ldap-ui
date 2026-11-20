@@ -10,6 +10,7 @@ import { ErrorBanner } from '../../ui/Banner'
 import { Button } from '../../ui/Button'
 import { PrefsToggles } from '../../ui/PrefsToggles'
 import { Spinner } from '../../ui/Spinner'
+import { useServer } from '../queries'
 import { ConnectDialog } from './ConnectDialog'
 import { ProfileForm } from './ProfileForm'
 
@@ -18,7 +19,7 @@ export function ConnectPage() {
   const navigate = useNavigate()
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api.profiles() })
   // Server mode saves no profiles: no new ones, no edits, no yaml marks.
-  const mode = useQuery({ queryKey: ['server'], queryFn: () => api.server(), staleTime: Infinity })
+  const mode = useServer()
   const local = mode.data?.mode === 'local'
   const [editing, setEditing] = useState<Profile | 'new' | null>(null)
   const target = params.get('connect')

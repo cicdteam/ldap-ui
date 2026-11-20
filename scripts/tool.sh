@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs a Go tool from PATH when it meets the minimum version exported by the
+# Runs a tool from PATH when it meets the minimum version exported by the
 # Makefile, otherwise runs that minimum version in Docker.
 # Usage: scripts/tool.sh TOOL [ARGS...]
 set -eu
@@ -21,6 +21,8 @@ gofumpt) min=$GOFUMPT_MIN pkg=mvdan.cc/gofumpt ;;
 goimports) min=$GOIMPORTS_VERSION pkg=golang.org/x/tools/cmd/goimports ;;
 govulncheck) min=$GOVULNCHECK_MIN pkg=golang.org/x/vuln/cmd/govulncheck ;;
 golangci-lint) min=$GOLANGCI_LINT_MIN pkg= ;;
+helm) min=$HELM_MIN pkg= ;;
+kubeconform) min=$KUBECONFORM_MIN pkg= ;;
 *)
 	echo "tool.sh: unknown tool $tool" >&2
 	exit 2
@@ -33,6 +35,8 @@ local_version() {
 	golangci-lint) golangci-lint --version 2>/dev/null | semver ;;
 	govulncheck) govulncheck -version 2>/dev/null | grep Scanner | semver ;;
 	goimports) go version -m "$(command -v goimports)" 2>/dev/null | xtools_version ;;
+	helm) helm version --short 2>/dev/null | semver ;;
+	kubeconform) kubeconform -v 2>/dev/null | semver ;;
 	esac
 }
 
@@ -45,12 +49,18 @@ if command -v "$tool" >/dev/null 2>&1; then
 fi
 
 run_docker() {
-	exec docker run --rm --user "$(id -u):$(id -g)" \
+	# -i: kubeconform and helm -f - read stdin. TOOL_DOCKER_ARGS adds docker
+	# run options, split on spaces: scripts/chart-kind.sh puts helm on the
+	# kind network with the cluster's kubeconfig.
+	# shellcheck disable=SC2086
+	exec docker run --rm -i --user "$(id -u):$(id -g)" ${TOOL_DOCKER_ARGS:-} \
 		-e HOME=/tmp -e GOPATH=/tmp/go -e GOCACHE=/tmp/cache -e GOLANGCI_LINT_CACHE=/tmp/lintcache \
 		-v "$PWD":/src -w /src "$@"
 }
 
-if [ "$tool" = golangci-lint ]; then
-	run_docker "golangci/golangci-lint:v$min" golangci-lint "$@"
-fi
+case $tool in
+golangci-lint) run_docker "golangci/golangci-lint:v$min" golangci-lint "$@" ;;
+helm) run_docker "alpine/helm:$min" "$@" ;;
+kubeconform) run_docker "ghcr.io/yannh/kubeconform:v$min" "$@" ;;
+esac
 run_docker "$GO_IMAGE" go run "$pkg@v$min" "$@"

@@ -58,8 +58,9 @@ the whole instance, not a per-person login: who you are, in the logs and in
 the directory, comes from the bind.
 
 **Server mode shows only what it takes to connect.** The UI learns the mode
-from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`). In server
-mode:
+from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`), which
+also carries `notice` when `--notice` is set and leaves it out when it is
+empty. In server mode:
 
 - the profile list (`GET /api/profiles`) gives each profile's `name`,
   `color`, `readOnly`, `connected`, `userLogin` and `needsPassword` only,
@@ -167,8 +168,9 @@ gh attestation verify "oci://ghcr.io/cicdteam/ldaplens@$digest" \
   docker run --rm -p 127.0.0.1:8080:8080 -v ldaplens:/data "ghcr.io/cicdteam/ldaplens@$digest" local
 ```
 
-In Kubernetes manifests, pin the same `ghcr.io/cicdteam/ldaplens@sha256:...`
-in place of the tag. The SBOM (SPDX) is attached to the image:
+In Kubernetes, set the chart's `image.digest` to the same `sha256:...`, and
+verify the chart itself as in [Verify the chart](#verify-the-chart). The SBOM
+(SPDX) is attached to the image:
 
 ```sh
 docker buildx imagetools inspect "ghcr.io/cicdteam/ldaplens@$digest" --format '{{json .SBOM}}'
@@ -586,6 +588,7 @@ know at its next save.
 | `--session-max-age` | `LDAPLENS_SESSION_MAX_AGE` | both | `8h` |
 | `--secure-cookies` | `LDAPLENS_SECURE_COOKIES` | both | `false`; TLS and `X-Forwarded-Proto: https` make cookies Secure without it (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
 | `--trusted-proxies` | `LDAPLENS_TRUSTED_PROXIES` | both | none; comma-separated CIDRs or IPs of reverse proxies whose `X-Forwarded-For` is trusted for the client address (see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
+| `--notice` | `LDAPLENS_NOTICE` | both | none; a plain-text message shown above the header on every page once the access token is accepted (markup shows as typed, a newline breaks the line), trimmed, at most 300 characters (a longer one is a startup error) |
 | `--version` | | both | prints `ldaplens <version>` and exits |
 
 A flag beats its variable, and an empty variable counts as unset
@@ -761,7 +764,7 @@ password, and both the directory and ldaplens log their DN.
 ## Running for a team
 
 For a team, run `ldaplens server`, for example in Kubernetes (see
-[Kubernetes](#kubernetes) for a manifest). It serves only the profiles in
+[Kubernetes](#kubernetes) for the Helm chart). It serves only the profiles in
 `connections.yaml`, keeps nothing on disk and runs as several replicas
 behind one ingress. Server mode is built and tested for the OpenLDAP
 family: OpenLDAP and directories like it, such as 389 Directory Server.
@@ -778,11 +781,12 @@ service.
   other hosts and ports it reaches, or change a profile so that the next
   person's password goes to a server of their choosing.
 - **A shared profile**, one that binds with a configured password
-  (`passwordFile` from a Secret, or `passwordEnv`) or anonymously, serves
-  anyone who reaches ldaplens, so server mode then needs a token, from a
-  Secret through `LDAPLENS_AUTH_TOKEN_FILE` (see [Two modes](#two-modes)).
-  Server mode never makes one. The token file is read at startup: restart
-  after rotating it.
+  (`passwordFile` or `passwordEnv`) or anonymously, serves anyone who
+  reaches ldaplens, so server mode then needs a token, through
+  `LDAPLENS_AUTH_TOKEN_FILE` (see [Two modes](#two-modes)). Server mode
+  never makes one. The token file is read at startup: restart after
+  rotating it. Run a shared profile with Docker or systemd: the Helm chart
+  runs per-user profiles only.
 - **Two replicas**, a rolling update that starts a new pod before it stops an
   old one (`maxSurge: 1`, `maxUnavailable: 0`) and a PodDisruptionBudget with
   `minAvailable: 1` keep the UI up through a rollout or a node drain. Each
@@ -823,6 +827,10 @@ service.
   garbage collector work harder near the limit, which makes an OOM kill
   less likely, but it does not prevent one when live memory exceeds the
   limit. An OOM kill ends the sessions on that pod.
+- **A notice** for everyone, such as
+  `--notice "Public demo: changes are reset every 15 minutes."`, shows as a
+  strip above the header on every page, the sign-in page included (with an
+  access token, from the first page after the login link).
 
 What is read at startup and what at every connect, the probes and the
 shutdown drain are described under [Flags](#flags), who did what under [Logs
@@ -997,7 +1005,8 @@ http:
 For a sub-path, match `PathPrefix(`/ldap`)` without a `StripPrefix`
 middleware and run ldaplens with `--base-path /ldap`.
 
-ingress-nginx, for the Service in [Kubernetes](#kubernetes):
+ingress-nginx, for the Service of the chart in [Kubernetes](#kubernetes),
+which makes this Ingress with `ingress.enabled: true`:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -1032,205 +1041,89 @@ spec:
 
 Traefik as the ingress controller sets no body size limit or backend timeout
 by default, so its Ingress needs no annotations. Its affinity cookie is set
-on the Service in [Kubernetes](#kubernetes) instead: add this annotation to
-that Service's `metadata`:
+on the Service instead: with the chart in [Kubernetes](#kubernetes), set
+`ingress.className: traefik`, `networkPolicy.from` to Traefik's pods, and
+this in `values.yaml`:
 
 ```yaml
-annotations:
-  traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+service:
+  annotations:
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
 ```
 
 A Traefik IngressRoute takes `sticky: {cookie: {}}` on its service.
 
 ### Kubernetes
 
-The manifest below runs `ldaplens server` in two replicas under the
-`restricted` Pod Security Standard (`runAsNonRoot`, `readOnlyRootFilesystem`,
-all capabilities dropped, `seccompProfile: RuntimeDefault`), with
-`connections.yaml` and the directory's CA in a ConfigMap, the shared
-profile's password and the token in a Secret, and a NetworkPolicy that lets
-in only the ingress controller (ingress-nginx here: adjust the labels to
-yours). Server mode writes nothing, so there is no volume. `args` start with
-`server`, because arguments replace the image's default. The Ingress, with
-its affinity cookie, is under [Behind a reverse
-proxy](#behind-a-reverse-proxy). Pin the image by digest in production
-(see [Verify the image](#verify-the-image)).
-ingress-nginx logs the query string by default, so a login link
-(`/?token=...`) lands in its access log: log the path only with its
-`log-format-upstream` (`$uri` in place of `$request`), or have an
-authenticating proxy send the token as an `Authorization: Bearer` header.
+The Helm chart `oci://ghcr.io/cicdteam/charts/ldaplens` runs `ldaplens
+server` in two replicas under the `restricted` Pod Security Standard, with a
+NetworkPolicy that lets in only the ingress controller. It runs per-user
+profiles only and holds no Secret, password or token; run a shared profile
+with Docker or systemd. [Its README](deploy/helm/ldaplens/README.md), also
+shown by `helm show readme`, lists every value, what the chart refuses and
+how to set it up for another ingress controller.
+
+Create the namespace and label it for `restricted`:
+
+```sh
+kubectl create namespace ldaplens
+kubectl label namespace ldaplens \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/enforce-version=latest
+```
+
+A `values.yaml` for one per-user profile over LDAPS, behind ingress-nginx:
 
 ```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ldaplens
-  labels:
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/enforce-version: latest
----
-# Only the shared profile needs this Secret: without one, drop it, its
-# volume and mount, and LDAPLENS_AUTH_TOKEN_FILE. The placeholders fail
-# closed: ldaplens does not start until auth-token holds a real token.
-# Better, create it with
-#   kubectl -n ldaplens create secret generic ldaplens \
-#     --from-literal=auth-token="$(openssl rand -hex 32)" \
-#     --from-file=people-reader=./people-reader.password
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ldaplens
-  namespace: ldaplens
-type: Opaque
-stringData:
-  auth-token: "<openssl rand -hex 32>"
-  people-reader: "<bind password of cn=ldaplens-reader>"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ldaplens-connections
-  namespace: ldaplens
-data:
-  connections.yaml: |
-    connections:
-      # Everyone signs in as themselves: no token, no stored password.
-      - name: people
-        url: ldaps://ldap.corp.example:636
-        baseDN: dc=corp,dc=example
-        bindDNTemplate: uid={user},ou=people,dc=corp,dc=example
-        caFile: /etc/ldaplens/config/corp-ca.pem
-      # Shared: binds with the password from the Secret, so ldaplens needs
-      # the token.
-      - name: people-reader
-        url: ldaps://ldap.corp.example:636
-        baseDN: dc=corp,dc=example
-        bindDN: cn=ldaplens-reader,ou=services,dc=corp,dc=example
-        # Read at every dial: a rotated Secret is used without a restart.
-        passwordFile: /etc/ldaplens/secrets/people-reader
-        caFile: /etc/ldaplens/config/corp-ca.pem
-        readOnly: true
+# The host name users open; ldaplens answers 403 to any other Host.
+host: ldaplens.corp.example
+# The pod network, where the ingress controller runs, so that its
+# X-Forwarded-For names the client; it differs between clusters: use yours.
+trustedProxies: [10.244.0.0/16]
+connections:
+  # Everyone signs in as themselves: no token, no stored password.
+  - name: people
+    url: ldaps://ldap.corp.example:636
+    baseDN: dc=corp,dc=example
+    bindDNTemplate: uid={user},ou=people,dc=corp,dc=example
+    caFile: corp-ca.pem # a key of caCerts
+caCerts:
   corp-ca.pem: |
     -----BEGIN CERTIFICATE-----
     (the directory's CA certificate)
     -----END CERTIFICATE-----
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ldaplens
-  namespace: ldaplens
-spec:
-  # A new pod is ready before an old one stops. Per-user and typed-password
-  # sessions end with their pod; shared profiles work on any replica.
-  replicas: 2
-  strategy:
-    type: RollingUpdate
-    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
-  revisionHistoryLimit: 3
-  selector:
-    matchLabels: {app.kubernetes.io/name: ldaplens}
-  template:
-    metadata:
-      labels: {app.kubernetes.io/name: ldaplens}
-      annotations:
-        # connections.yaml and the token are read at startup: bump this (or
-        # use a Kustomize configMapGenerator or a Helm checksum) to roll out
-        # a change.
-        ldaplens/config-revision: "1"
-    spec:
-      automountServiceAccountToken: false
-      enableServiceLinks: false
-      # ldaplens waits up to 25 s for running requests after SIGTERM.
-      terminationGracePeriodSeconds: 30
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        # Lets the app's group read the Secret's files, which are 0440 below.
-        fsGroup: 65532
-        seccompProfile: {type: RuntimeDefault}
-      containers:
-        - name: ldaplens
-          image: ghcr.io/cicdteam/ldaplens:<version>
-          args: [server, --config=/etc/ldaplens/config/connections.yaml]
-          env:
-            # Only for a shared profile.
-            - {name: LDAPLENS_AUTH_TOKEN_FILE, value: /etc/ldaplens/secrets/auth-token}
-            # The host name users open; ldaplens answers 403 to any other Host.
-            - {name: LDAPLENS_ALLOWED_HOSTS, value: ldaplens.corp.example}
-            # The pod network, where the ingress controller runs, so that its
-            # X-Forwarded-For names the client; it differs between clusters:
-            # use yours. The NetworkPolicy below keeps other pods out.
-            - {name: LDAPLENS_TRUSTED_PROXIES, value: 10.244.0.0/16}
-            # About 80% of the memory limit: Go does not read the limit.
-            - {name: GOMEMLIMIT, value: 400MiB}
-          ports:
-            - {name: http, containerPort: 8080}
-          readinessProbe:
-            httpGet: {path: /readyz, port: http}
-            periodSeconds: 10
-          livenessProbe:
-            httpGet: {path: /healthz, port: http}
-            periodSeconds: 20
-            failureThreshold: 3
-          resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {memory: 512Mi}
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: {drop: [ALL]}
-          volumeMounts:
-            # Directories, not subPath: a subPath file never sees an update.
-            - {name: config, mountPath: /etc/ldaplens/config, readOnly: true}
-            - {name: secrets, mountPath: /etc/ldaplens/secrets, readOnly: true}
-      volumes:
-        - name: config
-          configMap: {name: ldaplens-connections}
-        - name: secrets
-          secret: {secretName: ldaplens, defaultMode: 0440}
----
-# A node drain or another voluntary eviction leaves one pod running.
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: ldaplens
-  namespace: ldaplens
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels: {app.kubernetes.io/name: ldaplens}
----
-# Only the ingress controller reaches ldaplens. The kubelet's probes come from
-# the node, which a NetworkPolicy does not block.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: ldaplens
-  namespace: ldaplens
-spec:
-  podSelector:
-    matchLabels: {app.kubernetes.io/name: ldaplens}
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
-          podSelector:
-            matchLabels: {app.kubernetes.io/name: ingress-nginx}
-      ports:
-        - {protocol: TCP, port: http}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ldaplens
-  namespace: ldaplens
-spec:
-  selector: {app.kubernetes.io/name: ldaplens}
-  ports:
-    - {name: http, port: 80, targetPort: http}
+# The Ingress, with the affinity cookie, body size and read timeout of
+# ingress-nginx set (see Behind a reverse proxy).
+ingress:
+  enabled: true
+  tls:
+    - hosts: [ldaplens.corp.example]
+      secretName: ldaplens-tls
+```
+
+Install it:
+
+```sh
+helm install ldaplens oci://ghcr.io/cicdteam/charts/ldaplens --version 0.1.0 -n ldaplens -f values.yaml
+```
+
+ingress-nginx logs the query string by default, and it holds DNs and search
+filters: log the path only with its `log-format-upstream` (`$uri` in place
+of `$request`).
+
+#### Verify the chart
+
+Like the image, each published chart carries a signed build provenance.
+`helm show chart` prints the chart's digest; check with the [GitHub
+CLI](https://cli.github.com) that it came from this repository's workflow,
+and install that digest:
+
+```sh
+digest=$(helm show chart oci://ghcr.io/cicdteam/charts/ldaplens --version 0.1.0 2>&1 >/dev/null | sed -n 's/^Digest: //p')
+gh attestation verify "oci://ghcr.io/cicdteam/charts/ldaplens@$digest" \
+  --repo cicdteam/ldaplens \
+  --signer-workflow cicdteam/ldaplens/.github/workflows/ci.yml &&
+  helm install ldaplens "oci://ghcr.io/cicdteam/charts/ldaplens@$digest" -n ldaplens -f values.yaml
 ```
 
 ### systemd

@@ -1,0 +1,6 @@
+# expect: caFile corp-ca.pem is not a key of caCerts
+connections:
+  - name: people
+    url: ldaps://ldap.corp.example:636
+    bindDNTemplate: uid={user},ou=people,dc=corp,dc=example
+    caFile: corp-ca.pem
