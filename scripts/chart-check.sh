@@ -2,8 +2,8 @@
 # Checks the Helm chart without a cluster: lint, render the values sets in
 # deploy/helm/test and validate them with kubeconform, render each
 # fail-*.yaml, which must fail with the message on its first line
-# ("# expect: ..."), and check what the renders hold. Every test values file
-# goes over minimal.yaml.
+# ("# expect: ..."), check what the renders hold, and check that the chart's
+# README lists every value. Every test values file goes over minimal.yaml.
 # Run it from the repository root with make chart-check, which exports the
 # tool minimums for scripts/tool.sh.
 set -euo pipefail
@@ -77,6 +77,15 @@ notes >"$out/notes-minimal"
 notes -f "$tests/full.yaml" >"$out/notes-full"
 has "$out/notes-minimal" 'trustedProxies is empty'
 ! grep -qF 'trustedProxies is empty' "$out/notes-full" || die "full.yaml: NOTES warns about trustedProxies"
+
+# The README's values table names every top-level value and every key of
+# the maps below. helm show readme loads the chart as helm package does, so
+# a README left out by .helmignore fails here too.
+helm show readme "$chart" >"$out/readme"
+while read -r k; do
+	grep -qF "| \`$k\` |" "$out/readme" || grep -qF "| \`$k." "$out/readme" || die "README.md: no $k in the values table"
+done < <(awk '/^[A-Za-z]/ { top = $1; sub(/:.*/, "", top); print top; next }
+	/^  [A-Za-z]/ && top ~ /^(image|ingress|networkPolicy|pdb|service|session)$/ { k = $1; sub(/:.*/, "", k); print top "." k }' "$chart/values.yaml")
 
 # A release tag must match the Chart.yaml: vX.Y.Z its appVersion,
 # chart-vX.Y.Z its version. Either prints the chart version to publish.

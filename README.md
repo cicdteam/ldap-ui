@@ -1056,18 +1056,12 @@ A Traefik IngressRoute takes `sticky: {cookie: {}}` on its service.
 ### Kubernetes
 
 The Helm chart `oci://ghcr.io/cicdteam/charts/ldaplens` runs `ldaplens
-server` in two replicas under the `restricted` Pod Security Standard
-(`runAsNonRoot`, `readOnlyRootFilesystem`, all capabilities dropped,
-`seccompProfile: RuntimeDefault`), with `connections.yaml` and the
-directory's CA in a ConfigMap, a PodDisruptionBudget, and a NetworkPolicy
-that lets in only the ingress controller (ingress-nginx by default: set
-`networkPolicy.from` for yours). Server mode writes nothing, so there is no
-volume.
-
-The chart runs per-user profiles only: each profile needs `bindDNTemplate`,
-and `bindDN`, `password`, `passwordFile` and `passwordEnv` fail the install.
-A shared profile needs a stored password and the token, and the chart holds
-neither; run one with Docker or systemd.
+server` in two replicas under the `restricted` Pod Security Standard, with a
+NetworkPolicy that lets in only the ingress controller. It runs per-user
+profiles only and holds no Secret, password or token; run a shared profile
+with Docker or systemd. [Its README](deploy/helm/ldaplens/README.md), also
+shown by `helm show readme`, lists every value, what the chart refuses and
+how to set it up for another ingress controller.
 
 Create the namespace and label it for `restricted`:
 
@@ -1113,15 +1107,9 @@ Install it:
 helm install ldaplens oci://ghcr.io/cicdteam/charts/ldaplens --version 0.1.0 -n ldaplens -f values.yaml
 ```
 
-`helm upgrade` with the same arguments applies a change, and a change to
-`connections` or `caCerts` rolls the pods, since `connections.yaml` is read
-at startup. `helm show values` lists every value with its comment, and `helm
-template` prints the manifests as plain YAML, for those who apply them
-another way. Pin the image by digest in production: set `image.digest` to
-the `sha256:...` from [Verify the image](#verify-the-image); it wins over the
-tag. ingress-nginx logs the query string by default, and it holds DNs and
-search filters: log the path only with its `log-format-upstream` (`$uri` in
-place of `$request`).
+ingress-nginx logs the query string by default, and it holds DNs and search
+filters: log the path only with its `log-format-upstream` (`$uri` in place
+of `$request`).
 
 #### Verify the chart
 
