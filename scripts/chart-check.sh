@@ -62,6 +62,10 @@ has "$out/pass/basepath.yaml" '{path: /ldap/healthz, port: http}'
 has "$out/pass/basepath.yaml" '{name: LDAPLENS_BASE_PATH, value: "/ldap"}'
 grep -qx ' *- path: /ldap' "$out/pass/basepath.yaml" || die "basepath.yaml: want the Ingress path /ldap"
 
+has "$out/pass/full.yaml" 'caFile: /etc/ldaplens/config/corp-ca.pem'
+has "$out/pass/full.yaml" '{name: LDAPLENS_ALLOWED_HOSTS, value: "ldaplens.corp.example"}'
+has "$out/pass/full.yaml" '{name: LDAPLENS_TRUSTED_PROXIES, value: "10.244.0.0/16,192.0.2.10"}'
+
 digest=$(sed -n 's/^ *digest: //p' "$tests/digest.yaml")
 has "$out/pass/digest.yaml" "image: \"ghcr.io/cicdteam/ldaplens@$digest\""
 app=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' "$chart/Chart.yaml")

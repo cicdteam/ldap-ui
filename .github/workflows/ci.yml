@@ -230,7 +230,8 @@ jobs:
         id: chart
         run: |
           helm package deploy/helm/ldaplens -d "$RUNNER_TEMP"
-          pushed=$(helm push "$RUNNER_TEMP/ldaplens-$CHART.tgz" oci://ghcr.io/cicdteam/charts)
+          # Both streams: Helm has printed the Digest: line to stderr.
+          pushed=$(helm push "$RUNNER_TEMP/ldaplens-$CHART.tgz" oci://ghcr.io/cicdteam/charts 2>&1) || { echo "$pushed"; exit 1; }
           echo "$pushed"
           digest=$(sed -n 's/^Digest: //p' <<<"$pushed")
           echo "digest=${digest:?no Digest in the helm push output}" >>"$GITHUB_OUTPUT"

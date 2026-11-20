@@ -58,8 +58,9 @@ the whole instance, not a per-person login: who you are, in the logs and in
 the directory, comes from the bind.
 
 **Server mode shows only what it takes to connect.** The UI learns the mode
-from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`). In server
-mode:
+from `GET /api/server` (`{"mode":"server"}` or `{"mode":"local"}`), which
+also carries `notice` when `--notice` is set and leaves it out when it is
+empty. In server mode:
 
 - the profile list (`GET /api/profiles`) gives each profile's `name`,
   `color`, `readOnly`, `connected`, `userLogin` and `needsPassword` only,
@@ -780,11 +781,12 @@ service.
   other hosts and ports it reaches, or change a profile so that the next
   person's password goes to a server of their choosing.
 - **A shared profile**, one that binds with a configured password
-  (`passwordFile` from a Secret, or `passwordEnv`) or anonymously, serves
-  anyone who reaches ldaplens, so server mode then needs a token, from a
-  Secret through `LDAPLENS_AUTH_TOKEN_FILE` (see [Two modes](#two-modes)).
-  Server mode never makes one. The token file is read at startup: restart
-  after rotating it.
+  (`passwordFile` or `passwordEnv`) or anonymously, serves anyone who
+  reaches ldaplens, so server mode then needs a token, through
+  `LDAPLENS_AUTH_TOKEN_FILE` (see [Two modes](#two-modes)). Server mode
+  never makes one. The token file is read at startup: restart after
+  rotating it. Run a shared profile with Docker or systemd: the Helm chart
+  runs per-user profiles only.
 - **Two replicas**, a rolling update that starts a new pod before it stops an
   old one (`maxSurge: 1`, `maxUnavailable: 0`) and a PodDisruptionBudget with
   `minAvailable: 1` keep the UI up through a rollout or a node drain. Each
