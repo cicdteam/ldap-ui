@@ -173,27 +173,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # A re-run finds its chart in ghcr, skips the push and attests that
-      # chart again. Only a clear "not there" leads to a push. Another chart
-      # under that version (bump version in Chart.yaml) or any other lookup
-      # error stops the job before anything is pushed.
+      # chart again, once its content matches this commit's file by file.
+      # Only a clear "not there" leads to a push. Other content under that
+      # version (bump version in Chart.yaml) or any other lookup error stops
+      # the job before anything is pushed.
       - name: Look for the chart in ghcr
         id: ghcr
         run: |
           found=yes
-          published=$(helm show chart oci://ghcr.io/cicdteam/charts/ldaplens --version "$CHART" 2>"$RUNNER_TEMP/show.log") || found=no
-          cat "$RUNNER_TEMP/show.log"
+          helm pull oci://ghcr.io/cicdteam/charts/ldaplens --version "$CHART" --untar -d "$RUNNER_TEMP/ghcr" >"$RUNNER_TEMP/pull.log" 2>&1 || found=no
+          cat "$RUNNER_TEMP/pull.log"
           if [ "$found" = no ]; then
             # ghcr answers 403 denied, not 404, for a package that does not
             # exist yet. A token that cannot read the chart cannot overwrite it.
-            grep -qE ': not found$|response status code 403: denied: requested access to the resource is denied$' "$RUNNER_TEMP/show.log" ||
+            grep -qE '^Error: .*(: not found|response status code 403: denied: requested access to the resource is denied)$' "$RUNNER_TEMP/pull.log" ||
               { echo "::error::cannot tell whether chart $CHART is in ghcr"; exit 1; }
             echo "chart $CHART is not in ghcr, pushing it"
             exit 0
           fi
-          [ "$published" = "$(helm show chart deploy/helm/ldaplens)" ] || { echo "::error::chart $CHART is in ghcr with another Chart.yaml: bump version"; exit 1; }
-          digest=$(sed -n 's/^Digest: //p' "$RUNNER_TEMP/show.log")
-          echo "chart $CHART is in ghcr already, skipping its push"
-          echo "digest=${digest:?no Digest in the helm show chart output}" >>"$GITHUB_OUTPUT"
+          helm package deploy/helm/ldaplens -d "$RUNNER_TEMP/local"
+          tar -xzf "$RUNNER_TEMP/local/ldaplens-$CHART.tgz" -C "$RUNNER_TEMP/local"
+          diff -r "$RUNNER_TEMP/ghcr/ldaplens" "$RUNNER_TEMP/local/ldaplens" ||
+            { echo "::error::chart $CHART is in ghcr with other content than this commit: bump version in Chart.yaml"; exit 1; }
+          digest=$(sed -n 's/^Digest: //p' "$RUNNER_TEMP/pull.log")
+          echo "chart $CHART is in ghcr already with this content, skipping its push"
+          echo "digest=${digest:?no Digest in the helm pull output}" >>"$GITHUB_OUTPUT"
         env:
           CHART: ${{ steps.tag.outputs.chart }}
       - if: startsWith(github.ref, 'refs/tags/v')
