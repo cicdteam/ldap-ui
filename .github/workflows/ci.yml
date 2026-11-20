@@ -172,17 +172,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # A re-run finds its chart in ghcr and skips the push. Another chart
-      # under that version fails, before anything is pushed: bump version in
-      # Chart.yaml.
+      # A re-run finds its chart in ghcr, skips the push and attests that
+      # chart again. Only a clear "not there" leads to a push. Another chart
+      # under that version (bump version in Chart.yaml) or any other lookup
+      # error stops the job before anything is pushed.
       - name: Look for the chart in ghcr
         id: ghcr
         run: |
-          if published=$(helm show chart oci://ghcr.io/cicdteam/charts/ldaplens --version "$CHART"); then
-            [ "$published" = "$(helm show chart deploy/helm/ldaplens)" ] || { echo "::error::chart $CHART is in ghcr with another Chart.yaml: bump version"; exit 1; }
-            echo "chart $CHART is in ghcr already, skipping its push"
-            echo "skip=true" >>"$GITHUB_OUTPUT"
+          found=yes
+          published=$(helm show chart oci://ghcr.io/cicdteam/charts/ldaplens --version "$CHART" 2>"$RUNNER_TEMP/show.log") || found=no
+          cat "$RUNNER_TEMP/show.log"
+          if [ "$found" = no ]; then
+            # ghcr answers 403 denied, not 404, for a package that does not
+            # exist yet. A token that cannot read the chart cannot overwrite it.
+            grep -qE ': not found$|response status code 403: denied: requested access to the resource is denied$' "$RUNNER_TEMP/show.log" ||
+              { echo "::error::cannot tell whether chart $CHART is in ghcr"; exit 1; }
+            echo "chart $CHART is not in ghcr, pushing it"
+            exit 0
           fi
+          [ "$published" = "$(helm show chart deploy/helm/ldaplens)" ] || { echo "::error::chart $CHART is in ghcr with another Chart.yaml: bump version"; exit 1; }
+          digest=$(sed -n 's/^Digest: //p' "$RUNNER_TEMP/show.log")
+          echo "chart $CHART is in ghcr already, skipping its push"
+          echo "digest=${digest:?no Digest in the helm show chart output}" >>"$GITHUB_OUTPUT"
         env:
           CHART: ${{ steps.tag.outputs.chart }}
       - if: startsWith(github.ref, 'refs/tags/v')
@@ -210,7 +221,7 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - if: steps.ghcr.outputs.skip != 'true'
+      - if: steps.ghcr.outputs.digest == ''
         name: Push the chart
         id: chart
         run: |
@@ -221,11 +232,12 @@ jobs:
           echo "digest=${digest:?no Digest in the helm push output}" >>"$GITHUB_OUTPUT"
         env:
           CHART: ${{ steps.tag.outputs.chart }}
-      - if: steps.ghcr.outputs.skip != 'true'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      # Runs on a re-run too, so a chart whose attestation failed gets one.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cicdteam/charts/ldaplens
-          subject-digest: ${{ steps.chart.outputs.digest }}
+          # The pushed chart, or the same chart found in ghcr.
+          subject-digest: ${{ steps.chart.outputs.digest || steps.ghcr.outputs.digest }}
           push-to-registry: true
 
   # Runs the image check on the pushed image itself, pulled by digest without a
