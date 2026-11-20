@@ -82,9 +82,8 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "from": {
-          "description": "NetworkPolicy peers. Empty would let everyone in: turn the policy off instead.",
+          "description": "NetworkPolicy peers. Empty would let everyone in, so the templates refuse it: turn the policy off instead.",
           "type": "array",
-          "minItems": 1,
           "items": {"type": "object"}
         }
       }

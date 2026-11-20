@@ -38,6 +38,9 @@ every profile signs users in with bindDNTemplate.
 {{- if not .Values.connections -}}
 {{- fail "connections is empty: add a profile with bindDNTemplate, such as uid={user},ou=people,dc=corp,dc=example" -}}
 {{- end -}}
+{{- if hasKey .Values.caCerts "connections.yaml" -}}
+{{- fail "caCerts.connections.yaml would replace the generated profile file: give the CA certificate another name, such as corp-ca.pem" -}}
+{{- end -}}
 {{- $out := list -}}
 {{- range $i, $p := .Values.connections -}}
 {{- $at := printf "connections[%d] (%s)" $i $p.name -}}

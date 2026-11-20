@@ -1,0 +1,3 @@
+# expect: networkPolicy.from is empty
+networkPolicy:
+  from: null

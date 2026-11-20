@@ -1,4 +1,7 @@
 {{- if .Values.networkPolicy.enabled -}}
+{{- if not .Values.networkPolicy.from -}}
+{{- fail "networkPolicy.from is empty, which would let every source in: list the ingress controller's pods as peers, or set networkPolicy.enabled to false" -}}
+{{- end -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -1,0 +1,8 @@
+# expect: caCerts.connections.yaml would replace the generated profile file
+caCerts:
+  connections.yaml: |
+    connections:
+      - name: shared
+        url: ldaps://ldap.corp.example:636
+        bindDN: cn=reader,dc=corp,dc=example
+        password: secret
