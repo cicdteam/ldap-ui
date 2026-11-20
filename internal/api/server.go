@@ -74,8 +74,8 @@ type Options struct {
 	// X-Forwarded-For is trusted for the client address, which logs carry
 	// and the failed-login limit counts per.
 	TrustedProxies []netip.Prefix
-	// Notice is an operator message the UI shows on every page; empty shows
-	// none.
+	// Notice is an operator message the UI shows on every page that can
+	// reach the API, so not before the access token; empty shows none.
 	Notice string
 	// Server is set in server mode, which keeps no data on disk.
 	Server bool

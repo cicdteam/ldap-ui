@@ -160,7 +160,7 @@ func parseArgs(args []string, getenv func(string) string, usage io.Writer) (conf
 	fs.StringVar(&proxies, "trusted-proxies", env("LDAPLENS_TRUSTED_PROXIES", ""),
 		"CIDRs or IPs of reverse proxies whose X-Forwarded-For is trusted for the client address, comma-separated (env LDAPLENS_TRUSTED_PROXIES)")
 	fs.BoolVar(&c.secureCookies, "secure-cookies", secure, "mark cookies Secure on every request; TLS and X-Forwarded-Proto: https do so without it (env LDAPLENS_SECURE_COOKIES)")
-	fs.StringVar(&c.notice, "notice", env("LDAPLENS_NOTICE", ""), "plain-text message shown above the header on every page, at most 300 characters (env LDAPLENS_NOTICE)")
+	fs.StringVar(&c.notice, "notice", env("LDAPLENS_NOTICE", ""), "plain-text message shown above the header on every page once the access token is accepted, at most 300 characters (env LDAPLENS_NOTICE)")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err

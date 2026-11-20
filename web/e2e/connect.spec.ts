@@ -58,3 +58,10 @@ test('the connections page scrolls on its own when it is taller than the window'
   // The last row, not a named one: the list grows with every profile in connections.yaml.
   await expect(page.locator('main li').last()).toBeInViewport()
 })
+
+test('no notice without --notice', async ({ page }) => {
+  await page.goto('./')
+  // Only once the mode is known: the notice comes in the same answer.
+  await expect(page.getByRole('button', { name: 'New connection' })).toBeVisible()
+  await expect(page.getByRole('note', { name: 'Notice' })).toHaveCount(0)
+})

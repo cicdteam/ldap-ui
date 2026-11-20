@@ -18,6 +18,11 @@ export function afterWrite(qc: QueryClient, conn: string, gone?: string): void {
   for (const k of ['children', 'search']) void qc.invalidateQueries({ queryKey: ['c', conn, k] })
 }
 
+/** GET /api/server, read once: the mode and the notice do not change while the server runs. */
+export function useServer() {
+  return useQuery({ queryKey: ['server'], queryFn: () => api.server(), staleTime: Infinity })
+}
+
 export function useEntry(conn: string, dn: string) {
   return useQuery({
     queryKey: entryKey(conn, dn),

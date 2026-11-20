@@ -12,6 +12,11 @@ test('server mode shows no saving and no trust', async ({ page }) => {
   await page.goto('./')
   expect((await mode).ok()).toBe(true)
   await expect(profileButton(page, 'people')).toBeVisible()
+  // The operator's notice (playwright.config.ts) is text: the markup shows as typed and the
+  // newline breaks the line.
+  const notice = page.getByRole('note', { name: 'Notice' })
+  const text = 'Public demo <b>x</b>\nsecond'
+  await expect(notice).toHaveJSProperty('innerText', text)
   // Nothing about where a profile binds before a sign-in.
   await expect(page.getByText('127.0.0.1')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'New connection' })).toHaveCount(0)
@@ -63,5 +68,11 @@ test('server mode shows no saving and no trust', async ({ page }) => {
   ).toBeVisible()
   await expect(page.getByRole('contentinfo', { name: 'Connection status' })).toContainText(
     'ldap://127.0.0.1:1390',
+  )
+  // Still there, above the header, and the page still fits the window.
+  await expect(notice).toHaveJSProperty('innerText', text)
+  expect((await notice.boundingBox())!.y).toBe(0)
+  expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(
+    page.viewportSize()!.height,
   )
 })
