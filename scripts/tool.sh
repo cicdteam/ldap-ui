@@ -49,8 +49,11 @@ if command -v "$tool" >/dev/null 2>&1; then
 fi
 
 run_docker() {
-	# -i: kubeconform and helm -f - read stdin.
-	exec docker run --rm -i --user "$(id -u):$(id -g)" \
+	# -i: kubeconform and helm -f - read stdin. TOOL_DOCKER_ARGS adds docker
+	# run options, split on spaces: scripts/chart-kind.sh puts helm on the
+	# kind network with the cluster's kubeconfig.
+	# shellcheck disable=SC2086
+	exec docker run --rm -i --user "$(id -u):$(id -g)" ${TOOL_DOCKER_ARGS:-} \
 		-e HOME=/tmp -e GOPATH=/tmp/go -e GOCACHE=/tmp/cache -e GOLANGCI_LINT_CACHE=/tmp/lintcache \
 		-v "$PWD":/src -w /src "$@"
 }

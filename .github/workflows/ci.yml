@@ -72,6 +72,29 @@ jobs:
             web/e2e/.tmp/server-mode.log
           retention-days: 7
 
+  # Installs the Helm chart in kind and signs in through it. kubectl comes
+  # with the runner image.
+  chart:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Dependabot does not see this pin: bump the version and the checksum
+      # together.
+      - name: Install kind
+        run: |
+          mkdir "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/kind" "https://github.com/kubernetes-sigs/kind/releases/download/v$KIND_VERSION/kind-linux-amd64"
+          echo "$KIND_SHA256  $RUNNER_TEMP/bin/kind" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/kind"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+        env:
+          KIND_VERSION: 0.30.0
+          KIND_SHA256: 517ab7fc89ddeed5fa65abf71530d90648d9638ef0c4cde22c2c11f8097b8889
+      - run: make chart-kind
+
   # Each architecture is built and run natively, so no emulation is needed.
   image:
     strategy:

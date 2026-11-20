@@ -17,7 +17,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # VERSION is exported so recipes quote it as "$$VERSION": the shell never parses a tag name.
 export GOFUMPT_MIN GOIMPORTS_VERSION GOLANGCI_LINT_MIN GOVULNCHECK_MIN HELM_MIN KUBECONFORM_MIN GO_IMAGE VERSION
 
-.PHONY: help fmt vet lint vuln test test-integration build image image-multiarch check web web-check chart-check e2e demo-start demo-stop
+.PHONY: help fmt vet lint vuln test test-integration build image image-multiarch check web web-check chart-check chart-kind e2e demo-start demo-stop
 
 .DEFAULT_GOAL := help
 
@@ -58,6 +58,9 @@ web-check: ## Type-check, lint, format-check and unit-test the web UI; npm audit
 
 chart-check: ## Lint the Helm chart, validate its renders with kubeconform, check its refusals
 	scripts/chart-check.sh
+
+chart-kind: ## Install the Helm chart in a kind cluster and sign in through it (needs Docker, kind, kubectl)
+	scripts/chart-kind.sh
 
 e2e: ## Run the Playwright e2e tests against OpenLDAP and Samba AD in Docker
 	cd web && npm ci --ignore-scripts && npm run e2e

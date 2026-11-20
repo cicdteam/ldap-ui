@@ -1,0 +1,14 @@
+# For scripts/chart-kind.sh: the ldaplens image it builds and loads into
+# kind, and a per-user profile on the OpenLDAP of kind-openldap.yaml. It
+# stands alone, unlike the render test files over minimal.yaml.
+image:
+  repository: ldaplens
+  tag: kind
+  pullPolicy: Never
+# The script reaches ldaplens through kubectl port-forward on localhost.
+host: localhost
+connections:
+  - name: demo
+    url: ldap://openldap:1389
+    baseDN: dc=example,dc=org
+    bindDNTemplate: uid={user},ou=people,dc=example,dc=org
