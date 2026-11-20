@@ -74,4 +74,15 @@ notes -f "$tests/full.yaml" >"$out/notes-full"
 has "$out/notes-minimal" 'trustedProxies is empty'
 ! grep -qF 'trustedProxies is empty' "$out/notes-full" || die "full.yaml: NOTES warns about trustedProxies"
 
+# A release tag must match the Chart.yaml: vX.Y.Z its appVersion,
+# chart-vX.Y.Z its version. Either prints the chart version to publish.
+printf 'apiVersion: v2\nname: ldaplens\nversion: 0.2.0\nappVersion: "1.5.0"\n' >"$out/Chart.yaml"
+release() { scripts/chart-version-check.sh "$1" "$out/Chart.yaml" 2>/dev/null; }
+for tag in v1.5.0 chart-v0.2.0; do
+	[ "$(release "$tag")" = 0.2.0 ] || die "chart-version-check: $tag should pass with 0.2.0"
+done
+for tag in v1.4.0 v0.2.0 chart-v0.1.0 chart-v1.5.0 1.5.0 0.2.0 main; do
+	! release "$tag" >/dev/null || die "chart-version-check: $tag should fail"
+done
+
 echo "chart-check: ok"
